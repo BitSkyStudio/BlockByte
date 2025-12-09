@@ -1,0 +1,3 @@
+[workspace]
+resolver = "3"
+members = ["block_byte_client", "block_byte_common", "block_byte_server"]
