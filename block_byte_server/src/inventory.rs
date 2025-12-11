@@ -1,8 +1,16 @@
+use std::path::Path;
+
+use serde::Deserialize;
 use smallvec::SmallVec;
 
-use crate::registry::Key;
-
-pub struct ItemData {}
+use crate::{
+    registry::{Key, RegistryConfigLoadable},
+    world::BlockKey,
+};
+#[derive(Deserialize)]
+pub struct ItemData {
+    block: BlockKey,
+}
 pub type ItemKey = Key<ItemData>;
 
 #[derive(Clone)]
@@ -17,7 +25,7 @@ impl ItemStack {
         ItemComponent: ItemComponentQuery<T>,
     {
         for component in &self.components {
-            if let Some(value) = ItemComponentQuery::<T>::get_component(component) {
+            if let Some(value) = component.get_component() {
                 return Some(value);
             }
         }
@@ -28,7 +36,7 @@ impl ItemStack {
         ItemComponent: ItemComponentQuery<T>,
     {
         for component in &mut self.components {
-            if let Some(value) = ItemComponentQuery::<T>::get_component_mut(component) {
+            if let Some(value) = component.get_component_mut() {
                 return Some(value);
             }
         }
@@ -49,7 +57,6 @@ impl ItemStack {
             *current = component;
             return current;
         }
-
         self.components
             .push(<ItemComponent as ItemComponentQuery<T>>::create_component(
                 component,

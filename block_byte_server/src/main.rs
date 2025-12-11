@@ -1,22 +1,36 @@
+use std::{path::Path, sync::OnceLock};
+
 use crate::{
     inventory::{ItemData, ItemDurability, ItemKey, ItemStack},
-    registry::{Key, Registry, RegistryProvider},
+    registry::{Key, Registry, RegistryProvider, RegistryStorage},
+    world::BlockData,
 };
 
 mod inventory;
 mod registry;
 mod world;
 
+static SERVER: OnceLock<Server> = OnceLock::new();
+pub fn server() -> &'static Server {
+    SERVER.get().unwrap()
+}
+
 fn main() {
-    println!("Hello, world!");
+    let server = Server {
+        registries: registry::load_registries(&Path::new("assets")),
+    };
+    SERVER.set(server).ok().unwrap();
 }
 
 pub struct Server {
-    item_registry: Registry<ItemData>,
+    registries: RegistryStorage,
 }
 
-impl RegistryProvider<ItemData> for Server {
-    fn get_registry(&self) -> &Registry<ItemData> {
-        &self.item_registry
+impl Server {
+    fn data<T>(&self, key: Key<T>) -> &T
+    where
+        RegistryStorage: RegistryProvider<T>,
+    {
+        self.registries.get_registry().by_key(key)
     }
 }
