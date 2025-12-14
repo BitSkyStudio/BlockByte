@@ -1,11 +1,12 @@
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_integer::{Integer, Roots};
+use serde::{Deserialize, Serialize};
 
 pub const CHUNK_SIZE_BITS: u8 = 5;
 pub const CHUNK_SIZE: u8 = 32;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Vec3<T: Copy> {
     pub x: T,
     pub y: T,

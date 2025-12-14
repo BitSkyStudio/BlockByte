@@ -5,3 +5,11 @@ edition = "2024"
 
 [dependencies]
 num-integer = "0.1.46"
+serde = {version="1.0.228", features=["derive"]}
+palettevec = {version="0.4.0", features=["serde"]}
+walkdir = "2.5.0"
+ron = "0.12.0"
+
+[features]
+client = []
+server = []

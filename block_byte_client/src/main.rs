@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use block_byte_common::registry::load_registries;
+
 fn main() {
-    println!("Hello, world!");
+    load_registries(&Path::new("assets"));
 }

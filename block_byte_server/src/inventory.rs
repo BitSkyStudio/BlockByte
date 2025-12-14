@@ -1,17 +1,10 @@
 use std::path::Path;
 
+use block_byte_common::registry::ItemKey;
 use serde::Deserialize;
 use smallvec::SmallVec;
 
-use crate::{
-    registry::{Key, RegistryConfigLoadable},
-    world::BlockKey,
-};
-#[derive(Deserialize)]
-pub struct ItemData {
-    block: BlockKey,
-}
-pub type ItemKey = Key<ItemData>;
+use crate::registry::{Key, RegistryConfigLoadable};
 
 #[derive(Clone)]
 pub struct ItemStack {

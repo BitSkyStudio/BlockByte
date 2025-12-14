@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
+use palettevec::PaletteVec;
+use palettevec::index_buffer::AlignedIndexBuffer;
+use palettevec::palette::HybridPalette;
 use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -25,55 +28,7 @@ impl<T> Hash for Key<T> {
         self.0.hash(state);
     }
 }
-impl<T> Serialize for Key<T>
-where
-    LoadRegistryStorage: LoadRegistryProvider<T>,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let id = LOAD_REGISTRIES
-            .get()
-            .unwrap()
-            .get_load_registry()
-            .id_of(*self);
-        serializer.serialize_str(id)
-    }
-}
-impl<'de, T> Deserialize<'de> for Key<T>
-where
-    LoadRegistryStorage: LoadRegistryProvider<T>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_str(KeyVisitor::<T>(PhantomData))
-    }
-}
-struct KeyVisitor<T>(PhantomData<T>);
-impl<'de, T> Visitor<'de> for KeyVisitor<T>
-where
-    LoadRegistryStorage: LoadRegistryProvider<T>,
-{
-    type Value = Key<T>;
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("valid string key")
-    }
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        let id = LOAD_REGISTRIES
-            .get()
-            .unwrap()
-            .get_load_registry()
-            .key(v)
-            .unwrap();
-        Ok(id)
-    }
-}
+
 pub struct LoadRegistry<T, D> {
     id_map: HashMap<String, Key<T>>,
     data_list: Vec<D>,
@@ -130,9 +85,6 @@ impl<T> Registry<T> {
         &self.data_list[key.0.get() - 1]
     }
 }
-
-static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
-
 macro_rules! create_registries{
     ($($type:ty,$id:ident);*) => {
         #[allow(non_snake_case)]
@@ -165,7 +117,7 @@ macro_rules! create_registries{
         pub trait RegistryConfigLoadable{
             fn registry_load_from_config(config: &Path) -> Self;
         }
-        pub fn load_registries(asset_path: &Path) -> RegistryStorage {
+        pub fn load_registries(asset_path: &Path) {
             let mut load_registry = LoadRegistryStorage {
                 $($id: LoadRegistry::new(),)*
             };
@@ -189,20 +141,84 @@ macro_rules! create_registries{
                 }
             })*
             LOAD_REGISTRIES.set(load_registry.clone()).ok().unwrap();
-            RegistryStorage {
+            let registries = RegistryStorage {
                 $($id: load_registry.$id.load(|data| {
                     <$type as RegistryConfigLoadable>::registry_load_from_config(
                         &data,
                     )
                 }),)*
-            }
+            };
+            REGISTRIES.set(registries).ok().unwrap();
         }
     }
 }
-create_registries!(crate::world::BlockData, block; crate::inventory::ItemData, item);
+impl<T> Serialize for Key<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let id = LOAD_REGISTRIES
+            .get()
+            .unwrap()
+            .get_load_registry()
+            .id_of(*self);
+        serializer.serialize_str(id)
+    }
+}
+impl<'de, T> Deserialize<'de> for Key<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(KeyVisitor::<T>(PhantomData))
+    }
+}
+struct KeyVisitor<T>(PhantomData<T>);
+impl<'de, T> Visitor<'de> for KeyVisitor<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+{
+    type Value = Key<T>;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("valid string key")
+    }
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        let id = LOAD_REGISTRIES
+            .get()
+            .unwrap()
+            .get_load_registry()
+            .key(v)
+            .unwrap();
+        Ok(id)
+    }
+}
+static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
+pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
+
+create_registries!(BlockData, block; ItemData, item);
 
 impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
     fn registry_load_from_config(config: &Path) -> Self {
         ron::from_str(std::fs::read_to_string(config).unwrap().as_str()).unwrap()
     }
 }
+
+#[derive(Deserialize)]
+pub struct ItemData {
+    block: BlockKey,
+}
+pub type ItemKey = Key<ItemData>;
+
+#[derive(Deserialize)]
+pub struct BlockData {}
+pub type BlockKey = Key<BlockData>;
+pub type BlockPalette = PaletteVec<BlockKey, HybridPalette<16, BlockKey>, AlignedIndexBuffer>;

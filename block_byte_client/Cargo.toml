@@ -4,3 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+block_byte_common = {path = "../block_byte_common", features=["client"]}
