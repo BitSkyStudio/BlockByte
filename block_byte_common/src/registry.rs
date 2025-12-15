@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
+use image::DynamicImage;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
@@ -11,6 +12,11 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
+impl<T> Key<T> {
+    pub fn numeric_id(self) -> usize {
+        self.0.get() - 1
+    }
+}
 impl<T> Clone for Key<T> {
     fn clone(&self) -> Self {
         Self(self.0, PhantomData)
@@ -65,14 +71,7 @@ impl<T, D> LoadRegistry<T, D> {
         self.id_map.get(id).cloned()
     }
     pub fn id_of(&self, key: Key<T>) -> &str {
-        self.id_list[key.0.get() - 1].as_str()
-    }
-    pub fn load(&self, loader: impl Fn(&D) -> T) -> Registry<T> {
-        Registry {
-            id_map: self.id_map.clone(),
-            data_list: self.data_list.iter().map(|data| loader(data)).collect(),
-            id_list: self.id_list.clone(),
-        }
+        self.id_list[key.numeric_id()].as_str()
     }
 }
 pub struct Registry<T> {
@@ -81,8 +80,14 @@ pub struct Registry<T> {
     id_list: Vec<String>,
 }
 impl<T> Registry<T> {
+    pub fn key(&self, id: &str) -> Option<Key<T>> {
+        self.id_map.get(id).cloned()
+    }
     pub fn by_key(&self, key: Key<T>) -> &T {
-        &self.data_list[key.0.get() - 1]
+        &self.data_list[key.numeric_id()]
+    }
+    pub fn data_entries(&self) -> impl Iterator<Item = &T> {
+        self.data_list.iter()
     }
 }
 macro_rules! create_registries{
@@ -114,8 +119,8 @@ macro_rules! create_registries{
                 }
             }
         )*
-        pub trait RegistryConfigLoadable{
-            fn registry_load_from_config(config: &Path) -> Self;
+        pub trait RegistryConfigLoadable: Sized{
+            fn registry_load_from_config(config: &Path) -> anyhow::Result<Self>;
         }
         pub fn load_registries(asset_path: &Path) {
             let mut load_registry = LoadRegistryStorage {
@@ -141,13 +146,32 @@ macro_rules! create_registries{
                 }
             })*
             LOAD_REGISTRIES.set(load_registry.clone()).ok().unwrap();
+            let mut encountered_error = false;
             let registries = RegistryStorage {
-                $($id: load_registry.$id.load(|data| {
-                    <$type as RegistryConfigLoadable>::registry_load_from_config(
-                        &data,
-                    )
-                }),)*
+                $($id: {
+                    let load_registry = &load_registry.$id;
+                    let mut data_list = Vec::with_capacity(load_registry.data_list.len());
+                    for (i, data) in load_registry.data_list.iter().enumerate(){
+                        match <$type as RegistryConfigLoadable>::registry_load_from_config(&data,){
+                            Ok(data) => {data_list.push(data);},
+                            Err(error) => {
+                                eprintln!("error loading {} {} - {}", stringify!($id), load_registry.id_list[i], error);
+                                encountered_error = true;
+                            }
+                        }
+                    }
+                    Registry {
+                        id_map: load_registry.id_map.clone(),
+                        data_list,
+                        id_list: load_registry.id_list.clone(),
+                    }
+
+                },)*
             };
+            if encountered_error{
+                eprintln!("Error encountered while loading registries, exiting");
+                std::process::exit(0);
+            }
             REGISTRIES.set(registries).ok().unwrap();
         }
     }
@@ -204,11 +228,25 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture);
+
+pub fn data<T>(key: Key<T>) -> &'static T
+where
+    RegistryStorage: RegistryProvider<T>,
+{
+    REGISTRIES.get().unwrap().get_registry().by_key(key)
+}
+pub fn key_of_id<T>(id: &str) -> Option<Key<T>>
+where
+    RegistryStorage: RegistryProvider<T>,
+{
+    REGISTRIES.get().unwrap().get_registry().key(id)
+}
 
 impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
-    fn registry_load_from_config(config: &Path) -> Self {
-        ron::from_str(std::fs::read_to_string(config).unwrap().as_str()).unwrap()
+    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+        ron::from_str::<T>(std::fs::read_to_string(config).unwrap().as_str())
+            .map_err(|error| anyhow::anyhow!("{}", error))
     }
 }
 
@@ -222,3 +260,17 @@ pub type ItemKey = Key<ItemData>;
 pub struct BlockData {}
 pub type BlockKey = Key<BlockData>;
 pub type BlockPalette = PaletteVec<BlockKey, HybridPalette<16, BlockKey>, AlignedIndexBuffer>;
+
+pub struct TextureData {
+    #[cfg(feature = "client")]
+    pub texture: DynamicImage,
+}
+pub type TextureKey = Key<TextureData>;
+impl RegistryConfigLoadable for TextureData {
+    fn registry_load_from_config(config: &Path) -> anyhow::Result<TextureData> {
+        Ok(Self {
+            #[cfg(feature = "client")]
+            texture: image::open(config)?,
+        })
+    }
+}

@@ -5,3 +5,11 @@ edition = "2024"
 
 [dependencies]
 block_byte_common = {path = "../block_byte_common", features=["client"]}
+wgpu = "27.0.1"
+pollster = "0.3"
+bytemuck = { version = "1.13.1", features = ["derive"] }
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+cgmath = "0.18"
+texture_packer = { version = "0.25.0" }
+bincode = {version="2.0.1", features=["serde"]}
+websocket = "0.27.1"

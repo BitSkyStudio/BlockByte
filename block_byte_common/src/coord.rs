@@ -213,6 +213,14 @@ impl<T: Copy + Ord> AABB<T> {
             && point.z >= self.min.z
             && point.z <= self.max.z
     }
+    pub fn intersects(self, other: Self) -> bool {
+        self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+            && self.min.z <= other.max.z
+            && self.max.z >= other.min.z
+    }
 }
 impl<T: Copy + Ord + AABBWalkable> IntoIterator for AABB<T> {
     type Item = Vec3<T>;

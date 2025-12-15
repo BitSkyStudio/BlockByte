@@ -6,7 +6,7 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::ChunkPos,
+    coord::{AABB, ChunkPos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{self, load_registries},
 };
@@ -37,11 +37,28 @@ fn main() {
     let tps = 40;
     loop {
         while let Ok(user) = incoming_users.try_recv() {
-            server.users.insert(User {
+            let user = server.users.insert(User {
                 message_sender: Mutex::new(user.message_sender),
                 message_receiver: user.message_receiver,
                 view_position: ChunkPos { x: 0, y: 0, z: 0 },
             });
+            for chunk_position in
+                User::loading_area_for_view_position(ChunkPos { x: 0, y: 0, z: 0 })
+            {
+                let chunk = server
+                    .chunks
+                    .entry(chunk_position)
+                    .or_insert_with(|| Chunk::generate(chunk_position));
+                chunk.viewers.insert(user);
+                server
+                    .users
+                    .get(user)
+                    .unwrap()
+                    .send_message(&NetworkMessageS2C::LoadChunk {
+                        position: chunk_position,
+                        blocks: chunk.blocks.read().clone(),
+                    });
+            }
         }
 
         let sleep_time = (tick_count as i64 * (1000 / tps))
@@ -58,13 +75,6 @@ fn main() {
 pub struct Server {
     pub chunks: HashMap<ChunkPos, Chunk>,
     pub users: SlotMap<UserIndex, User>,
-}
-
-fn data<T>(key: Key<T>) -> &'static T
-where
-    RegistryStorage: RegistryProvider<T>,
-{
-    REGISTRIES.get().unwrap().get_registry().by_key(key)
 }
 
 pub fn network_server() -> std::sync::mpsc::Receiver<UserLoginInfo> {
@@ -138,6 +148,22 @@ impl User {
             .lock()
             .send_message(&OwnedMessage::Binary(message))
             .unwrap();
+    }
+    pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
+        let distance = 5;
+        let world_height = 8;
+        AABB {
+            min: ChunkPos {
+                x: view_position.x - distance,
+                y: 0,
+                z: view_position.z - distance,
+            },
+            max: ChunkPos {
+                x: view_position.x + distance,
+                y: world_height,
+                z: view_position.z + distance,
+            },
+        }
     }
 }
 
