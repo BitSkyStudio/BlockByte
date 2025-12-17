@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
     sync::OnceLock,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use block_byte_common::{
@@ -12,9 +13,10 @@ use block_byte_common::{
 };
 use palettevec::PaletteVec;
 use parking_lot::Mutex;
+use renet::{ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
+use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
-use websocket::OwnedMessage;
 
 use crate::{
     inventory::{ItemDurability, ItemStack},
@@ -27,39 +29,91 @@ mod world;
 
 fn main() {
     load_registries(&Path::new("assets"));
+    let mut network_server = RenetServer::new(ConnectionConfig::default());
+    const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
+    let network_socket: UdpSocket = UdpSocket::bind(SERVER_ADDR).unwrap();
+    let network_server_config = ServerConfig {
+        current_time: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap(),
+        max_clients: 64,
+        protocol_id: 0,
+        public_addresses: vec![SERVER_ADDR],
+        authentication: ServerAuthentication::Unsecure,
+    };
+    let mut network_transport =
+        NetcodeServerTransport::new(network_server_config, network_socket).unwrap();
+
     let mut server = Server {
         chunks: HashMap::new(),
         users: SlotMap::with_key(),
+        message_queue: Mutex::new(Vec::new()),
     };
-    let incoming_users = network_server();
     let start_time = Instant::now();
     let mut tick_count: u32 = 0;
     let tps = 40;
+    let mut net_users = HashMap::new();
     loop {
-        while let Ok(user) = incoming_users.try_recv() {
-            let user = server.users.insert(User {
-                message_sender: Mutex::new(user.message_sender),
-                message_receiver: user.message_receiver,
-                view_position: ChunkPos { x: 0, y: 0, z: 0 },
-            });
-            for chunk_position in
-                User::loading_area_for_view_position(ChunkPos { x: 0, y: 0, z: 0 })
-            {
-                let chunk = server
-                    .chunks
-                    .entry(chunk_position)
-                    .or_insert_with(|| Chunk::generate(chunk_position));
-                chunk.viewers.insert(user);
-                server
-                    .users
-                    .get(user)
-                    .unwrap()
-                    .send_message(&NetworkMessageS2C::LoadChunk {
-                        position: chunk_position,
-                        blocks: chunk.blocks.read().clone(),
+        {
+            let delta_time = Duration::from_millis(1000 / tps as u64); //probably make it smarter
+            network_server.update(delta_time);
+            network_transport
+                .update(delta_time, &mut network_server)
+                .unwrap();
+        }
+        while let Some(event) = network_server.get_event() {
+            match event {
+                ServerEvent::ClientConnected { client_id } => {
+                    println!("Client {client_id} connected");
+                    let user = server.users.insert(User {
+                        client_id,
+                        view_position: ChunkPos { x: 0, y: 0, z: 0 },
                     });
+                    net_users.insert(client_id, user);
+                    for chunk_position in
+                        User::loading_area_for_view_position(ChunkPos { x: 0, y: 0, z: 0 })
+                    {
+                        let message = {
+                            let chunk = server
+                                .chunks
+                                .entry(chunk_position)
+                                .or_insert_with(|| Chunk::generate(chunk_position));
+                            chunk.viewers.insert(user);
+                            NetworkMessageS2C::LoadChunk {
+                                position: chunk_position,
+                                blocks: chunk.blocks.read().clone(),
+                            }
+                        };
+                        server.send_message(user, message);
+                    }
+                }
+                ServerEvent::ClientDisconnected { client_id, reason } => {
+                    println!("Client {client_id} disconnected: {reason}");
+                    let user = net_users.remove(&client_id).unwrap();
+                    let view_position = server.users.get(user).unwrap().view_position;
+                    for chunk_position in User::loading_area_for_view_position(view_position) {
+                        let chunk = server.chunks.get_mut(&chunk_position).unwrap();
+                        chunk.viewers.remove(&user);
+                    }
+                    server.users.remove(user);
+                }
             }
         }
+        for user in server.users.values() {
+            while let Some(message) =
+                network_server.receive_message(user.client_id, DefaultChannel::ReliableOrdered)
+            {
+                let (message, _): (NetworkMessageC2S, _) =
+                    bincode::serde::decode_from_slice(&message, bincode::config::standard())
+                        .unwrap();
+            }
+        }
+
+        for (user, message) in server.message_queue.lock().drain(..) {
+            network_server.send_message(user, DefaultChannel::ReliableOrdered, message);
+        }
+
+        network_transport.send_packets(&mut network_server);
 
         let sleep_time = (tick_count as i64 * (1000 / tps))
             - Instant::now().duration_since(start_time).as_millis() as i64;
@@ -73,85 +127,45 @@ fn main() {
 }
 
 pub struct Server {
-    pub chunks: HashMap<ChunkPos, Chunk>,
-    pub users: SlotMap<UserIndex, User>,
+    chunks: HashMap<ChunkPos, Chunk>,
+    users: SlotMap<UserIndex, User>,
+    message_queue: Mutex<Vec<(ClientId, renet::Bytes)>>,
 }
-
-pub fn network_server() -> std::sync::mpsc::Receiver<UserLoginInfo> {
-    let server = websocket::server::sync::Server::bind("127.0.0.1:2794").unwrap();
-
-    let (user_tx, user_rx) = std::sync::mpsc::channel();
-
-    std::thread::spawn(move || {
-        for request in server.filter_map(Result::ok) {
-            // Spawn a new thread for each connection.
-            let user_tx = user_tx.clone();
-            std::thread::spawn(move || {
-                let mut client = request.use_protocol("rust-websocket").accept().unwrap();
-
-                let ip = client.peer_addr().unwrap();
-
-                println!("Connection from {}", ip);
-
-                let message = OwnedMessage::Text("Hello".to_string());
-                client.send_message(&message).unwrap();
-
-                let (mut receiver, mut sender) = client.split().unwrap();
-
-                let (message_tx, message_rx) = std::sync::mpsc::channel();
-                user_tx
-                    .send(UserLoginInfo {
-                        message_sender: sender,
-                        message_receiver: message_rx,
-                    })
-                    .unwrap();
-
-                for message in receiver.incoming_messages() {
-                    let message = message.unwrap();
-
-                    match message {
-                        OwnedMessage::Close(_) => {
-                            /*
-                            let message = OwnedMessage::Close(None);
-                            sender.send_message(&message).unwrap();
-                            */
-                            println!("Client {} disconnected", ip);
-                            return;
-                        }
-                        OwnedMessage::Binary(data) => {
-                            let (message, _) = bincode::serde::decode_from_slice(
-                                &data,
-                                bincode::config::standard(),
-                            )
-                            .unwrap();
-                            message_tx.send(message).unwrap();
-                        }
-                        _ => {}
-                    }
-                }
-            });
+impl Server {
+    pub fn get_chunk(&self, position: ChunkPos) -> Option<&Chunk> {
+        self.chunks.get(&position)
+    }
+    pub fn get_user(&self, user: UserIndex) -> Option<&User> {
+        self.users.get(user)
+    }
+    pub fn send_message(&self, user: UserIndex, message: NetworkMessageS2C) {
+        self.send_message_multiple(std::iter::once(user), message);
+    }
+    pub fn send_message_multiple(
+        &self,
+        users: impl Iterator<Item = UserIndex>,
+        message: NetworkMessageS2C,
+    ) {
+        let message = bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap();
+        let message: renet::Bytes = message.into();
+        let mut message_queue = self.message_queue.lock();
+        for user in users {
+            if let Some(user) = self.users.get(user) {
+                message_queue.push((user.client_id, message.clone()));
+            }
         }
-    });
-    user_rx
+    }
 }
 
 new_key_type! {pub struct UserIndex;}
 pub struct User {
-    message_sender: Mutex<websocket::sender::Writer<std::net::TcpStream>>,
-    message_receiver: std::sync::mpsc::Receiver<NetworkMessageC2S>,
+    client_id: ClientId,
     view_position: ChunkPos,
 }
 impl User {
-    pub fn send_message(&self, message: &NetworkMessageS2C) {
-        let message = bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap();
-        self.message_sender
-            .lock()
-            .send_message(&OwnedMessage::Binary(message))
-            .unwrap();
-    }
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
-        let distance = 5;
-        let world_height = 8;
+        let distance = 2;
+        let world_height = 3;
         AABB {
             min: ChunkPos {
                 x: view_position.x - distance,
@@ -165,9 +179,4 @@ impl User {
             },
         }
     }
-}
-
-pub struct UserLoginInfo {
-    message_sender: websocket::sender::Writer<std::net::TcpStream>,
-    message_receiver: std::sync::mpsc::Receiver<NetworkMessageC2S>,
 }

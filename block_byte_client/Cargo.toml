@@ -12,5 +12,6 @@ image = { version = "0.24", default-features = false, features = ["png", "jpeg"]
 cgmath = "0.18"
 texture_packer = { version = "0.25.0" }
 bincode = {version="2.0.1", features=["serde"]}
-websocket = "0.27.1"
+renet = "1.2.0"
+renet_netcode = "1.2.0"
 winit = "0.30.12"

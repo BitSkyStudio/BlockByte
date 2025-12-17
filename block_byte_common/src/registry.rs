@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
-use image::DynamicImage;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
@@ -275,7 +274,7 @@ pub type BlockPalette = PaletteVec<BlockKey, HybridPalette<16, BlockKey>, Aligne
 
 pub struct TextureData {
     #[cfg(feature = "client")]
-    pub texture: DynamicImage,
+    pub texture: image::DynamicImage,
 }
 pub type TextureKey = Key<TextureData>;
 impl RegistryConfigLoadable for TextureData {

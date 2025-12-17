@@ -1,12 +1,22 @@
 mod render;
 
-use std::{collections::HashSet, ops::ControlFlow, path::Path, sync::OnceLock, time::Instant};
+use std::{
+    collections::HashSet,
+    net::{SocketAddr, UdpSocket},
+    ops::ControlFlow,
+    path::Path,
+    sync::OnceLock,
+    time::{Duration, Instant, SystemTime},
+};
 
 use block_byte_common::{
     coord::Pos,
+    net::NetworkMessageS2C,
     registry::{self, Registry, TextureData, TextureKey, load_registries},
 };
 use image::RgbaImage;
+use renet::{ConnectionConfig, DefaultChannel, RenetClient};
+use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, Event, WindowEvent},
@@ -23,6 +33,21 @@ fn main() {
     let (atlas, image) = TextureAtlas::pack(registry::REGISTRIES.get().unwrap().get_registry());
     TEXTURE_ATLAS.set(atlas).map_err(|_| ()).unwrap();
 
+    let mut client = RenetClient::new(ConnectionConfig::default());
+    let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let current_time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let authentication = ClientAuthentication::Unsecure {
+        server_addr,
+        client_id: current_time.as_millis() as u64,
+        user_data: None,
+        protocol_id: 0,
+    };
+
+    let mut transport = NetcodeClientTransport::new(current_time, authentication, socket).unwrap();
+
     let event_loop = EventLoop::new().unwrap();
     event_loop
         .run_app(&mut App {
@@ -30,6 +55,8 @@ fn main() {
             render_state: None,
             texture_image: Some(image),
             world: World::default(),
+            network_client: client,
+            network_transport: transport,
         })
         .unwrap();
 }
@@ -39,6 +66,8 @@ struct App {
     render_state: Option<RenderState>,
     world: World,
     camera: ClientPlayer,
+    network_client: RenetClient,
+    network_transport: NetcodeClientTransport,
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -73,9 +102,12 @@ impl ApplicationHandler for App {
                 // this event rather than in AboutToWait, since rendering in here allows
                 // the program to gracefully handle redraws requested by the OS.
 
-                let window = self.render_state.as_ref().unwrap().window();
+                self.render_state
+                    .as_ref()
+                    .unwrap()
+                    .window()
+                    .pre_present_notify();
                 // Notify that you're about to draw.
-                window.pre_present_notify();
 
                 // Draw.
                 let render_state = self.render_state.as_mut().unwrap();
@@ -90,8 +122,44 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // For contiguous redraw loop you can request a redraw from here.
-                // window.request_redraw();
+                self.render_state
+                    .as_ref()
+                    .unwrap()
+                    .window()
+                    .request_redraw();
+
+                let delta_time = Duration::from_millis(16); //todo
+                self.network_client.update(delta_time);
+                self.network_transport
+                    .update(delta_time, &mut self.network_client)
+                    .unwrap();
+
+                if self.network_client.is_connected() {
+                    while let Some(message) = self
+                        .network_client
+                        .receive_message(DefaultChannel::ReliableOrdered)
+                    {
+                        let (message, _): (NetworkMessageS2C, _) =
+                            bincode::serde::decode_from_slice(
+                                &message,
+                                bincode::config::standard(),
+                            )
+                            .unwrap();
+                        match message {
+                            NetworkMessageS2C::LoadChunk { position, blocks } => {
+                                println!("load chunk {:?}", position);
+                            }
+                            NetworkMessageS2C::UnloadChunk { position } => todo!(),
+                        }
+                    }
+                } else if self.network_client.is_disconnected() {
+                    println!("disconnected");
+                    event_loop.exit();
+                    return;
+                }
+                self.network_transport
+                    .send_packets(&mut self.network_client)
+                    .unwrap();
             }
             _ => (),
         }

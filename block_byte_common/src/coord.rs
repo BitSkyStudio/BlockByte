@@ -251,24 +251,26 @@ impl<T: Copy + AABBWalkable> Iterator for AABBIterator<T> {
             return None;
         }
         let previous_head = self.head;
-        if self.head.x.aabb_walk(self.bb.min.x, self.bb.max.x) {
-            if self.head.x.aabb_walk(self.bb.min.x, self.bb.max.x) {
-                self.head.x.aabb_walk(self.bb.min.x, self.bb.max.x);
+        if self.head.x.aabb_walk(self.bb.min.x, self.bb.max.x, true) {
+            if self.head.y.aabb_walk(self.bb.min.y, self.bb.max.y, true) {
+                self.head.z.aabb_walk(self.bb.min.z, self.bb.max.z, false);
             }
         }
         Some(previous_head)
     }
 }
 trait AABBWalkable: Ord {
-    fn aabb_walk(&mut self, min: Self, max: Self) -> bool;
+    fn aabb_walk(&mut self, min: Self, max: Self, reset: bool) -> bool;
 }
 macro_rules! implement_aabb_walkable {
     ($type:tt) => {
         impl AABBWalkable for $type {
-            fn aabb_walk(&mut self, min: Self, max: Self) -> bool {
+            fn aabb_walk(&mut self, min: Self, max: Self, reset: bool) -> bool {
                 *self += 1;
                 if *self > max {
-                    *self = min;
+                    if reset{
+                        *self = min;
+                    }
                     return true;
                 } else {
                     return false;
