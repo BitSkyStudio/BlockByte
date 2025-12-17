@@ -11,6 +11,8 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::coord::FaceMap;
+
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
 impl<T> Key<T> {
     pub fn numeric_id(self) -> usize {
@@ -257,7 +259,17 @@ pub struct ItemData {
 pub type ItemKey = Key<ItemData>;
 
 #[derive(Deserialize)]
-pub struct BlockData {}
+pub struct BlockData {
+    #[cfg(feature = "client")]
+    pub render_data: BlockRenderData,
+}
+#[derive(Deserialize)]
+#[cfg(feature = "client")]
+pub enum BlockRenderData {
+    Air,
+    Full { faces: FaceMap<TextureKey> },
+}
+
 pub type BlockKey = Key<BlockData>;
 pub type BlockPalette = PaletteVec<BlockKey, HybridPalette<16, BlockKey>, AlignedIndexBuffer>;
 

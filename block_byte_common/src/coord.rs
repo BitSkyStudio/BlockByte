@@ -1,4 +1,7 @@
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::{
+    fmt::Debug,
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+};
 
 use num_integer::{Integer, Roots};
 use serde::{Deserialize, Serialize};
@@ -11,6 +14,11 @@ pub struct Vec3<T: Copy> {
     pub x: T,
     pub y: T,
     pub z: T,
+}
+impl<T: Debug + Copy> Debug for Vec3<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{:?},{:?},{:?}]", self.x, self.y, self.z)
+    }
 }
 impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Vec3<T> {
     pub fn length_squared(self) -> T {
@@ -273,3 +281,90 @@ macro_rules! implement_aabb_walkable {
     }
 }
 implement_aabb_walkable!(i32, i16);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Face {
+    Front,
+    Back,
+    Up,
+    Down,
+    Left,
+    Right,
+}
+impl Face {
+    pub fn all() -> &'static [Face; 6] {
+        &[
+            Face::Front,
+            Face::Back,
+            Face::Up,
+            Face::Down,
+            Face::Left,
+            Face::Right,
+        ]
+    }
+    pub fn horizontal() -> &'static [Face; 4] {
+        &[Face::Front, Face::Back, Face::Left, Face::Right]
+    }
+    pub fn get_block_offset(&self) -> BlockPos {
+        match self {
+            Self::Front => BlockPos { x: 0, y: 0, z: -1 },
+            Self::Back => BlockPos { x: 0, y: 0, z: 1 },
+            Self::Left => BlockPos { x: -1, y: 0, z: 0 },
+            Self::Right => BlockPos { x: 1, y: 0, z: 0 },
+            Self::Up => BlockPos { x: 0, y: 1, z: 0 },
+            Self::Down => BlockPos { x: 0, y: -1, z: 0 },
+        }
+    }
+    pub fn get_offset(&self) -> Pos {
+        self.get_block_offset().to_pos()
+    }
+    pub fn get_chunk_offset(&self) -> ChunkPos {
+        let block_offset = self.get_block_offset();
+        ChunkPos {
+            x: block_offset.x as i16,
+            y: block_offset.y as i16,
+            z: block_offset.z as i16,
+        }
+    }
+    pub fn opposite(&self) -> Self {
+        match self {
+            Self::Up => Self::Down,
+            Self::Down => Self::Up,
+            Self::Front => Self::Back,
+            Self::Back => Self::Front,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FaceMap<T> {
+    pub front: T,
+    pub back: T,
+    pub left: T,
+    pub right: T,
+    pub up: T,
+    pub down: T,
+}
+impl<T> FaceMap<T> {
+    pub fn by_face(&self, face: Face) -> &T {
+        match face {
+            Face::Front => &self.front,
+            Face::Back => &self.back,
+            Face::Left => &self.left,
+            Face::Right => &self.right,
+            Face::Up => &self.up,
+            Face::Down => &self.down,
+        }
+    }
+    pub fn by_face_mut(&mut self, face: Face) -> &mut T {
+        match face {
+            Face::Front => &mut self.front,
+            Face::Back => &mut self.back,
+            Face::Left => &mut self.left,
+            Face::Right => &mut self.right,
+            Face::Up => &mut self.up,
+            Face::Down => &mut self.down,
+        }
+    }
+}
