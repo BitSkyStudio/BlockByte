@@ -70,7 +70,7 @@ impl RenderState {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: surface_caps.present_modes[0],
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -202,7 +202,7 @@ impl RenderState {
     pub fn render(
         &mut self,
         camera: &ClientPlayer,
-        world: &mut World,
+        world: &mut ClientWorld,
     ) -> Result<(), wgpu::SurfaceError> {
         self.camera_uniform
             .load_view_proj_matrix(camera, self.size.width as f32 / self.size.height as f32);
@@ -255,13 +255,13 @@ impl RenderState {
             render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
 
-            /*world.tick(&self.device);
-            for chunk in &mut world.chunks {
-                if let Some(vertex_buffer) = chunk.1.get_vertices().0 {
-                    render_pass.set_vertex_buffer(0, vertex_buffer.0);
-                    render_pass.draw(0..vertex_buffer.1, 0..1);
+            world.tick(&self.device);
+            for (_, chunk) in &mut world.chunks {
+                if let Some((buffer, count)) = &chunk.buffer {
+                    render_pass.set_vertex_buffer(0, buffer.slice(..));
+                    render_pass.draw(0..*count, 0..1);
                 }
-            }*/
+            }
         }
 
         self.queue.submit(iter::once(encoder.finish()));
@@ -330,7 +330,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::{ClientPlayer, World};
+use crate::{ClientPlayer, ClientWorld};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,

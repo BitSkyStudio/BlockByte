@@ -1,7 +1,7 @@
 mod render;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::{SocketAddr, UdpSocket},
     ops::ControlFlow,
     path::Path,
@@ -10,28 +10,29 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::Pos,
+    coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos},
     net::NetworkMessageS2C,
-    registry::{self, Registry, TextureData, TextureKey, load_registries},
+    registry::{self, BlockPalette, Registry, TextureData, TextureKey, data, load_registries},
 };
 use image::RgbaImage;
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
+use wgpu::{Buffer, Device, util::DeviceExt};
 use winit::{
     application::ApplicationHandler,
-    event::{DeviceEvent, Event, WindowEvent},
+    event::{DeviceEvent, ElementState, Event, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::KeyCode,
     window::{Window, WindowAttributes, WindowId},
 };
 
-use crate::render::RenderState;
+use crate::render::{RenderState, Vertex};
 
 fn main() {
     load_registries(&Path::new("assets"));
     use block_byte_common::registry::RegistryProvider;
     let (atlas, image) = TextureAtlas::pack(registry::REGISTRIES.get().unwrap().get_registry());
-    TEXTURE_ATLAS.set(atlas).map_err(|_| ()).unwrap();
+    TEXTURE_ATLAS.set(atlas);
 
     let mut client = RenetClient::new(ConnectionConfig::default());
     let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
@@ -54,9 +55,11 @@ fn main() {
             camera: ClientPlayer::default(),
             render_state: None,
             texture_image: Some(image),
-            world: World::default(),
+            world: ClientWorld::default(),
             network_client: client,
             network_transport: transport,
+            keys: HashSet::new(),
+            last_update: Instant::now(),
         })
         .unwrap();
 }
@@ -64,10 +67,12 @@ fn main() {
 struct App {
     texture_image: Option<RgbaImage>,
     render_state: Option<RenderState>,
-    world: World,
+    world: ClientWorld,
     camera: ClientPlayer,
     network_client: RenetClient,
     network_transport: NetcodeClientTransport,
+    keys: HashSet<KeyCode>,
+    last_update: Instant,
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -85,7 +90,20 @@ impl ApplicationHandler for App {
             self.texture_image.take().unwrap(),
         )));
     }
-
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                self.camera
+                    .update_orientation(-delta.1 as f32, -delta.0 as f32);
+            }
+            _ => {}
+        }
+    }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
@@ -95,12 +113,37 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(new_size) => {
                 self.render_state.as_mut().unwrap().resize(new_size);
             }
+            WindowEvent::KeyboardInput {
+                device_id,
+                event,
+                is_synthetic,
+            } => match event.physical_key {
+                winit::keyboard::PhysicalKey::Code(key_code) => {
+                    if event.state == ElementState::Pressed {
+                        self.keys.insert(key_code);
+                    } else {
+                        self.keys.remove(&key_code);
+                    }
+                }
+                winit::keyboard::PhysicalKey::Unidentified(native_key_code) => {}
+            },
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {
+                //self.camera.update_orientation(position.y as f32, position.y as f32);
+            }
             WindowEvent::RedrawRequested => {
-                // Redraw the application.
+                let dt = self.last_update.elapsed().as_secs_f32();
+                self.last_update = Instant::now();
+                println!("{}", 1. / dt);
+                // Ref the application.
                 //
                 // It's preferable for applications that do not render continuously to render in
                 // this event rather than in AboutToWait, since rendering in here allows
                 // the program to gracefully handle redraws requested by the OS.
+
+                self.camera.update_position(&self.keys, dt, &self.world);
 
                 self.render_state
                     .as_ref()
@@ -127,13 +170,13 @@ impl ApplicationHandler for App {
                     .unwrap()
                     .window()
                     .request_redraw();
-
-                let delta_time = Duration::from_millis(16); //todo
-                self.network_client.update(delta_time);
-                self.network_transport
-                    .update(delta_time, &mut self.network_client)
-                    .unwrap();
-
+                {
+                    let delta_time_duration = Duration::from_secs_f32(dt);
+                    self.network_client.update(delta_time_duration);
+                    self.network_transport
+                        .update(delta_time_duration, &mut self.network_client)
+                        .unwrap();
+                }
                 if self.network_client.is_connected() {
                     while let Some(message) = self
                         .network_client
@@ -147,9 +190,24 @@ impl ApplicationHandler for App {
                             .unwrap();
                         match message {
                             NetworkMessageS2C::LoadChunk { position, blocks } => {
-                                println!("load chunk {:?}", position);
+                                self.world.chunks.insert(
+                                    position,
+                                    ClientChunk {
+                                        blocks,
+                                        buffer: None,
+                                        position,
+                                    },
+                                );
+                                self.world.modified_chunks.insert(position);
+                                for face in Face::all() {
+                                    self.world
+                                        .modified_chunks
+                                        .insert(position + face.get_chunk_offset());
+                                }
                             }
-                            NetworkMessageS2C::UnloadChunk { position } => todo!(),
+                            NetworkMessageS2C::UnloadChunk { position } => {
+                                self.world.chunks.remove(&position);
+                            }
                         }
                     }
                 } else if self.network_client.is_disconnected() {
@@ -222,7 +280,7 @@ pub struct TexCoords {
     pub u2: f32,
     pub v2: f32,
 }
-const TEXTURE_ATLAS: OnceLock<TextureAtlas> = OnceLock::new();
+static TEXTURE_ATLAS: OnceLock<TextureAtlas> = OnceLock::new();
 pub fn tex_coords(key: TextureKey) -> TexCoords {
     TEXTURE_ATLAS.get().unwrap()[key]
 }
@@ -274,7 +332,12 @@ impl ClientPlayer {
                 z: 0.,
             }
     }
-    pub fn update_position(&mut self, keys: &HashSet<KeyCode>, delta_time: f32, world: &World) {
+    pub fn update_position(
+        &mut self,
+        keys: &HashSet<KeyCode>,
+        delta_time: f32,
+        world: &ClientWorld,
+    ) {
         let mut forward = cgmath::Vector3::new(
             f32::to_radians(self.yaw_deg).sin(),
             0.,
@@ -340,5 +403,276 @@ impl ClientPlayer {
         cgmath::perspective(cgmath::Deg(90.), aspect, 0.05, 500.)
     }
 }
-#[derive(Default, Debug)]
-pub struct World {}
+#[derive(Default)]
+pub struct ClientWorld {
+    pub chunks: HashMap<ChunkPos, ClientChunk>,
+    pub modified_chunks: HashSet<ChunkPos>,
+}
+impl ClientWorld {
+    pub fn tick(&mut self, device: &Device) {
+        let max_chunk_meshes_per_frame = 10;
+        for chunk_position in self
+            .modified_chunks
+            .extract_if(|_| true)
+            .take(max_chunk_meshes_per_frame)
+        {
+            let [chunk, front, back, left, right, up, down] = self.chunks.get_disjoint_mut([
+                &chunk_position,
+                &(chunk_position + Face::Front.get_chunk_offset()),
+                &(chunk_position + Face::Back.get_chunk_offset()),
+                &(chunk_position + Face::Left.get_chunk_offset()),
+                &(chunk_position + Face::Right.get_chunk_offset()),
+                &(chunk_position + Face::Up.get_chunk_offset()),
+                &(chunk_position + Face::Down.get_chunk_offset()),
+            ]);
+            if let Some(chunk) = chunk {
+                chunk.rebuild_chunk_mesh(
+                    device,
+                    FaceMap {
+                        front: front.as_deref(),
+                        back: back.as_deref(),
+                        left: left.as_deref(),
+                        right: right.as_deref(),
+                        up: up.as_deref(),
+                        down: down.as_deref(),
+                    },
+                );
+            }
+        }
+    }
+}
+pub struct ClientChunk {
+    pub position: ChunkPos,
+    pub blocks: BlockPalette,
+    pub buffer: Option<(Buffer, u32)>,
+}
+impl ClientChunk {
+    pub fn rebuild_chunk_mesh(
+        &mut self,
+        device: &Device,
+        neighbor_chunks: FaceMap<Option<&ClientChunk>>,
+    ) {
+        let mut vertices: Vec<Vertex> = Vec::new();
+
+        for x in 0..CHUNK_SIZE {
+            for y in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
+                    let block = *self
+                        .blocks
+                        .get(ChunkOffset::new(x, y, z).0 as usize)
+                        .unwrap();
+                    let block_data = data(block);
+                    match &block_data.render_data {
+                        registry::BlockRenderData::Air => {}
+                        registry::BlockRenderData::Full { faces } => {
+                            let base_position = Pos {
+                                x: (self.position.x as f32 * CHUNK_SIZE as f32) + x as f32,
+                                y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32,
+                                z: (self.position.z as f32 * CHUNK_SIZE as f32) + z as f32,
+                            };
+                            for face in Face::all() {
+                                let neighbor_position = BlockPos {
+                                    x: x as i32,
+                                    y: y as i32,
+                                    z: z as i32,
+                                } + face.get_block_offset();
+                                let (neighbor_chunk, neighbor_offset) =
+                                    neighbor_position.to_chunk_pos_offset();
+                                let neighbor_chunk: Option<&ClientChunk> = match Face::all()
+                                    .iter()
+                                    .find(|f| f.get_chunk_offset() == neighbor_chunk)
+                                {
+                                    Some(face) => *neighbor_chunks.by_face(*face),
+                                    None => Some(self),
+                                };
+                                if let Some(neighbor_chunk) = neighbor_chunk {
+                                    let neighbor_block_data = data(
+                                        *neighbor_chunk
+                                            .blocks
+                                            .get(neighbor_offset.0 as usize)
+                                            .unwrap(),
+                                    );
+                                    match &neighbor_block_data.render_data {
+                                        registry::BlockRenderData::Air => {}
+                                        registry::BlockRenderData::Full { faces } => {
+                                            continue;
+                                        }
+                                    }
+                                }
+
+                                let texture = tex_coords(*faces.by_face(*face));
+                                Self::add_vertices(*face, texture, |position, coords| {
+                                    let vt_pos = base_position + position;
+                                    vertices.push(Vertex {
+                                        position: [vt_pos.x, vt_pos.y, vt_pos.z],
+                                        tex_coords: [coords.0, coords.1],
+                                    });
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if vertices.len() == 0 {
+            self.buffer = None;
+        } else {
+            self.buffer = Some((
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Chunk Vertex Buffer"),
+                    contents: bytemuck::cast_slice(vertices.as_slice()),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                }),
+                vertices.len() as u32,
+            ));
+        }
+    }
+    fn add_vertices(
+        face: Face,
+        coords: TexCoords,
+        mut vertex_consumer: impl FnMut(Pos, (f32, f32)),
+    ) {
+        let (first, second, third, fourth) = match face {
+            Face::Front => (
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 0.,
+                },
+            ),
+            Face::Back => (
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 1.,
+                },
+            ),
+            Face::Up => (
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 1.,
+                },
+            ),
+            Face::Down => (
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 1.,
+                },
+            ),
+            Face::Left => (
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 0.,
+                },
+            ),
+            Face::Right => (
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 1.,
+                },
+            ),
+        };
+        vertex_consumer(first, (coords.u1, coords.v1));
+        vertex_consumer(fourth, (coords.u1, coords.v2));
+        vertex_consumer(third, (coords.u2, coords.v2));
+
+        vertex_consumer(third, (coords.u2, coords.v2));
+        vertex_consumer(second, (coords.u2, coords.v1));
+        vertex_consumer(first, (coords.u1, coords.v1));
+    }
+}

@@ -21,22 +21,26 @@ pub struct Chunk {
 }
 impl Chunk {
     pub fn generate(position: ChunkPos) -> Chunk {
-        let mut blocks = BlockPalette::new();
+        let air = key_of_id("air").unwrap();
+        let grass = key_of_id("nature.grass").unwrap();
+
+        let mut blocks = BlockPalette::filled(
+            air,
+            CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize,
+        );
         for z in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
                 for x in 0..CHUNK_SIZE {
-                    let block_pos = position.to_block_pos() + ChunkOffset::new(x, y, z).xyz();
-                    blocks.push(
-                        key_of_id(if block_pos.y < 15 {
-                            "nature.grass"
-                        } else {
-                            "air"
-                        })
-                        .unwrap(),
-                    );
+                    let offset = ChunkOffset::new(x, y, z);
+                    let block_pos = position.to_block_pos() + offset.xyz();
+                    if block_pos.y < 45 + ((block_pos.x + block_pos.z).abs() as i32 % 10 - 5).abs()
+                    {
+                        blocks.set(offset.0 as usize, &grass);
+                    }
                 }
             }
         }
+        //blocks.set(ChunkOffset::new(16, 16, 16).0 as usize, &grass);
         Chunk {
             blocks: RwLock::new(blocks),
             viewers: HashSet::new(),
