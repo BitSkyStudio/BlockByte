@@ -1,4 +1,6 @@
 use std::cell::OnceCell;
+#[cfg(feature = "client")]
+use std::default;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
@@ -10,7 +12,9 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::FaceMap;
+#[cfg(feature = "client")]
+use crate::coord::AABB;
+use crate::coord::{FaceMap, Pos};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
 impl<T> Key<T> {
@@ -201,29 +205,29 @@ where
     where
         D: serde::Deserializer<'de>,
     {
+        struct KeyVisitor<T>(PhantomData<T>);
+        impl<'de, T> Visitor<'de> for KeyVisitor<T>
+        where
+            LoadRegistryStorage: LoadRegistryProvider<T>,
+        {
+            type Value = Key<T>;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("valid string key")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let id = LOAD_REGISTRIES
+                    .get()
+                    .unwrap()
+                    .get_load_registry()
+                    .key(v)
+                    .unwrap();
+                Ok(id)
+            }
+        }
         deserializer.deserialize_str(KeyVisitor::<T>(PhantomData))
-    }
-}
-struct KeyVisitor<T>(PhantomData<T>);
-impl<'de, T> Visitor<'de> for KeyVisitor<T>
-where
-    LoadRegistryStorage: LoadRegistryProvider<T>,
-{
-    type Value = Key<T>;
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("valid string key")
-    }
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        let id = LOAD_REGISTRIES
-            .get()
-            .unwrap()
-            .get_load_registry()
-            .key(v)
-            .unwrap();
-        Ok(id)
     }
 }
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
@@ -257,10 +261,27 @@ pub struct ItemData {
 }
 pub type ItemKey = Key<ItemData>;
 
+fn full_aabb() -> Vec<AABB<f32>> {
+    vec![AABB {
+        min: Pos {
+            x: 0.,
+            y: 0.,
+            z: 0.,
+        },
+        max: Pos {
+            x: 1.,
+            y: 1.,
+            z: 1.,
+        },
+    }]
+}
 #[derive(Deserialize)]
 pub struct BlockData {
     #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
+    #[serde(default = "full_aabb")]
+    #[cfg(feature = "client")]
+    pub selection: Vec<AABB<f32>>,
 }
 #[derive(Deserialize)]
 #[cfg(feature = "client")]

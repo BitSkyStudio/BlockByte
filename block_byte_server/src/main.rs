@@ -9,11 +9,11 @@ use std::{
 use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
-    registry::{self, load_registries},
+    registry::{self, BlockData, BlockKey, key_of_id, load_registries},
 };
 use palettevec::PaletteVec;
 use parking_lot::Mutex;
-use rayon::iter::IntoParallelIterator;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use renet::{ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use serde::Deserialize;
@@ -22,7 +22,7 @@ use slotmap::{SlotMap, new_key_type};
 use crate::{
     inventory::{ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
-    world::Chunk,
+    world::{BlockEvent, Chunk},
 };
 
 mod inventory;
@@ -107,6 +107,15 @@ fn main() {
                             *user.view_position.lock() = chunk_position;
                         }
                     }
+                    NetworkMessageC2S::AttackBlock { position } => {
+                        server.schedule_block_event(position, BlockEvent::Damage { damage: 1 });
+                    }
+                    NetworkMessageC2S::InteractBlock { position, face } => {
+                        server.place(
+                            position + face.get_block_offset(),
+                            key_of_id("nature.grass").unwrap(),
+                        );
+                    }
                 }
             }
         }
@@ -125,6 +134,10 @@ fn main() {
             }
         }
         chunk_viewing_manager.manage(&mut server);
+
+        server.chunks.par_iter().for_each(|(_, chunk)| {
+            chunk.tick(&server);
+        });
 
         for (user, message) in server.message_queue.lock().drain(..) {
             network_server.send_message(user, DefaultChannel::ReliableOrdered, message);
@@ -149,6 +162,31 @@ pub struct Server {
     message_queue: Mutex<Vec<(ClientId, renet::Bytes)>>,
 }
 impl Server {
+    pub fn place(&self, position: BlockPos, block: BlockKey) -> bool {
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        let chunk = match self.get_chunk(chunk) {
+            Some(chunk) => chunk,
+            None => {
+                return false;
+            }
+        };
+        let mut blocks = chunk.blocks.write();
+        if *blocks.get(offset.index()).unwrap() != key_of_id::<BlockData>("air").unwrap() {
+            return false;
+        }
+        blocks.set(offset.index(), &block);
+        self.send_message_multiple(
+            chunk.viewers.iter().cloned(),
+            NetworkMessageS2C::SetBlock { position, block },
+        );
+        true
+    }
+    pub fn schedule_block_event(&self, position: BlockPos, event: BlockEvent) {
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        if let Some(chunk) = self.get_chunk(chunk) {
+            chunk.block_events.lock().push((offset, event));
+        }
+    }
     pub fn get_chunk(&self, position: ChunkPos) -> Option<&Chunk> {
         self.chunks.get(&position)
     }

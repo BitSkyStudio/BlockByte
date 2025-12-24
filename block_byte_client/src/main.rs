@@ -10,7 +10,7 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos},
+    coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{self, BlockPalette, Registry, TextureData, TextureKey, data, load_registries},
 };
@@ -21,7 +21,7 @@ use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use wgpu::{Buffer, Device, util::DeviceExt};
 use winit::{
     application::ApplicationHandler,
-    event::{DeviceEvent, ElementState, Event, WindowEvent},
+    event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::KeyCode,
     window::{Window, WindowAttributes, WindowId},
@@ -136,11 +136,55 @@ impl ApplicationHandler for App {
                 }
                 winit::keyboard::PhysicalKey::Unidentified(native_key_code) => {}
             },
-            WindowEvent::CursorMoved {
+            WindowEvent::MouseInput {
                 device_id,
-                position,
+                state,
+                button,
             } => {
-                //self.camera.update_orientation(position.y as f32, position.y as f32);
+                if state == ElementState::Pressed {
+                    let ray = Ray {
+                        position: self.camera.get_eye(),
+                        direction: self.camera.make_front() * 10.,
+                    };
+                    let hit = ray.block_raycast(|block, _, face| {
+                        let (chunk, offset) = block.to_chunk_pos_offset();
+                        if data(
+                            *self
+                                .world
+                                .chunks
+                                .get(&chunk)?
+                                .blocks
+                                .get(offset.index())
+                                .unwrap(),
+                        )
+                        .selection
+                        .len()
+                            > 0
+                        {
+                            Some((block, face))
+                        } else {
+                            None
+                        }
+                    });
+                    match button {
+                        MouseButton::Left => {
+                            if let Some(hit) = hit {
+                                self.send_message(NetworkMessageC2S::AttackBlock {
+                                    position: hit.0,
+                                });
+                            }
+                        }
+                        MouseButton::Right => {
+                            if let Some(hit) = hit {
+                                self.send_message(NetworkMessageC2S::InteractBlock {
+                                    position: hit.0,
+                                    face: hit.1,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             WindowEvent::RedrawRequested => {
                 let dt = self.last_update.elapsed().as_secs_f32();
@@ -218,6 +262,37 @@ impl ApplicationHandler for App {
                             }
                             NetworkMessageS2C::UnloadChunk { position } => {
                                 self.world.chunks.remove(&position);
+                            }
+                            NetworkMessageS2C::SetBlock { position, block } => {
+                                let (chunk, offset) = position.to_chunk_pos_offset();
+                                self.world
+                                    .chunks
+                                    .get_mut(&chunk)
+                                    .unwrap()
+                                    .blocks
+                                    .set(offset.index(), &block);
+                                self.world.modified_chunks.insert(chunk);
+                                let offset_xyz = offset.xyz();
+                                for face in Face::all() {
+                                    let face_offset = face.get_block_offset();
+                                    fn o(x: i32) -> i32 {
+                                        if x == 0 {
+                                            return -1;
+                                        }
+                                        if x == CHUNK_SIZE as i32 - 1 {
+                                            return 1;
+                                        }
+                                        return 0;
+                                    }
+                                    if o(offset_xyz.x) == face_offset.x
+                                        || o(offset_xyz.y) == face_offset.y
+                                        || o(offset_xyz.z) == face_offset.z
+                                    {
+                                        self.world
+                                            .modified_chunks
+                                            .insert(chunk + face.get_chunk_offset());
+                                    }
+                                }
                             }
                         }
                     }
@@ -322,10 +397,10 @@ impl ClientPlayer {
         y: 1.0,
         z: 0.0,
     };
-    pub fn make_front(&self) -> cgmath::Vector3<f32> {
+    pub fn make_front(&self) -> Vec3<f32> {
         let pitch_rad = f32::to_radians(self.pitch_deg);
         let yaw_rad = f32::to_radians(self.yaw_deg);
-        cgmath::Vector3 {
+        Vec3 {
             x: yaw_rad.sin() * pitch_rad.cos(),
             y: pitch_rad.sin(),
             z: yaw_rad.cos() * pitch_rad.cos(),
@@ -401,7 +476,16 @@ impl ClientPlayer {
             y: eye.y as f32,
             z: eye.z as f32,
         };
-        cgmath::Matrix4::look_at_rh(eye, eye + self.make_front(), Self::UP)
+        let front = self.make_front();
+        cgmath::Matrix4::look_at_rh(
+            eye,
+            eye + cgmath::Vector3 {
+                x: front.x,
+                y: front.y,
+                z: front.z,
+            },
+            Self::UP,
+        )
     }
     pub fn create_default_view_matrix() -> cgmath::Matrix4<f32> {
         cgmath::Matrix4::look_at_rh(
@@ -470,10 +554,7 @@ impl ClientChunk {
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
                 for z in 0..CHUNK_SIZE {
-                    let block = *self
-                        .blocks
-                        .get(ChunkOffset::new(x, y, z).0 as usize)
-                        .unwrap();
+                    let block = *self.blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = data(block);
                     match &block_data.render_data {
                         registry::BlockRenderData::Air => {}
@@ -502,7 +583,7 @@ impl ClientChunk {
                                     let neighbor_block_data = data(
                                         *neighbor_chunk
                                             .blocks
-                                            .get(neighbor_offset.0 as usize)
+                                            .get(neighbor_offset.index())
                                             .unwrap(),
                                     );
                                     match &neighbor_block_data.render_data {
