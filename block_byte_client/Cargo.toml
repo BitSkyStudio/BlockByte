@@ -4,14 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-block_byte_common = {path = "../block_byte_common", features=["client"]}
+block_byte_common = { path = "../block_byte_common", features = ["client"] }
 wgpu = "27.0.1"
 pollster = "0.3"
 bytemuck = { version = "1.13.1", features = ["derive"] }
-image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.24", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
 cgmath = "0.18"
 texture_packer = { version = "0.25.0" }
-bincode = {version="2.0.1", features=["serde"]}
+bincode = { version = "2.0.1", features = ["serde"] }
 renet = "1.2.0"
 renet_netcode = "1.2.0"
 winit = "0.30.12"
+parking_lot = "0.12.5"
+rayon = "1.11.0"

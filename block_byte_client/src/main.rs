@@ -11,10 +11,11 @@ use std::{
 
 use block_byte_common::{
     coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos},
-    net::NetworkMessageS2C,
+    net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{self, BlockPalette, Registry, TextureData, TextureKey, data, load_registries},
 };
 use image::RgbaImage;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use wgpu::{Buffer, Device, util::DeviceExt};
@@ -73,6 +74,14 @@ struct App {
     network_transport: NetcodeClientTransport,
     keys: HashSet<KeyCode>,
     last_update: Instant,
+}
+impl App {
+    pub fn send_message(&mut self, message: NetworkMessageC2S) {
+        self.network_client.send_message(
+            DefaultChannel::ReliableOrdered,
+            bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap(),
+        );
+    }
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -136,14 +145,12 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 let dt = self.last_update.elapsed().as_secs_f32();
                 self.last_update = Instant::now();
-                println!("{}", 1. / dt);
+                //println!("{}", 1. / dt);
                 // Ref the application.
                 //
                 // It's preferable for applications that do not render continuously to render in
                 // this event rather than in AboutToWait, since rendering in here allows
                 // the program to gracefully handle redraws requested by the OS.
-
-                self.camera.update_position(&self.keys, dt, &self.world);
 
                 self.render_state
                     .as_ref()
@@ -178,6 +185,10 @@ impl ApplicationHandler for App {
                         .unwrap();
                 }
                 if self.network_client.is_connected() {
+                    self.camera.update_position(&self.keys, dt, &self.world);
+                    self.send_message(NetworkMessageC2S::PlayerPosition {
+                        position: self.camera.position,
+                    });
                     while let Some(message) = self
                         .network_client
                         .receive_message(DefaultChannel::ReliableOrdered)
@@ -410,34 +421,37 @@ pub struct ClientWorld {
 }
 impl ClientWorld {
     pub fn tick(&mut self, device: &Device) {
-        let max_chunk_meshes_per_frame = 10;
-        for chunk_position in self
+        let max_chunk_meshes_per_frame = 64;
+        for (position, mesh) in self
             .modified_chunks
             .extract_if(|_| true)
             .take(max_chunk_meshes_per_frame)
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .filter_map(|chunk_position| {
+                let chunk = self.chunks.get(&chunk_position);
+                let neighbors = FaceMap::init(|face| {
+                    self.chunks.get(&(chunk_position + face.get_chunk_offset()))
+                });
+                match chunk {
+                    Some(chunk) => Some((chunk_position, chunk.rebuild_chunk_mesh(neighbors))),
+                    None => None,
+                }
+            })
+            .collect::<Vec<_>>()
         {
-            let [chunk, front, back, left, right, up, down] = self.chunks.get_disjoint_mut([
-                &chunk_position,
-                &(chunk_position + Face::Front.get_chunk_offset()),
-                &(chunk_position + Face::Back.get_chunk_offset()),
-                &(chunk_position + Face::Left.get_chunk_offset()),
-                &(chunk_position + Face::Right.get_chunk_offset()),
-                &(chunk_position + Face::Up.get_chunk_offset()),
-                &(chunk_position + Face::Down.get_chunk_offset()),
-            ]);
-            if let Some(chunk) = chunk {
-                chunk.rebuild_chunk_mesh(
-                    device,
-                    FaceMap {
-                        front: front.as_deref(),
-                        back: back.as_deref(),
-                        left: left.as_deref(),
-                        right: right.as_deref(),
-                        up: up.as_deref(),
-                        down: down.as_deref(),
-                    },
-                );
-            }
+            self.chunks.get_mut(&position).unwrap().buffer = if mesh.vertices.len() == 0 {
+                None
+            } else {
+                Some((
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Chunk Vertex Buffer"),
+                        contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    }),
+                    mesh.vertices.len() as u32,
+                ))
+            };
         }
     }
 }
@@ -446,12 +460,11 @@ pub struct ClientChunk {
     pub blocks: BlockPalette,
     pub buffer: Option<(Buffer, u32)>,
 }
+pub struct ChunkMesh {
+    pub vertices: Vec<Vertex>,
+}
 impl ClientChunk {
-    pub fn rebuild_chunk_mesh(
-        &mut self,
-        device: &Device,
-        neighbor_chunks: FaceMap<Option<&ClientChunk>>,
-    ) {
+    pub fn rebuild_chunk_mesh(&self, neighbor_chunks: FaceMap<Option<&ClientChunk>>) -> ChunkMesh {
         let mut vertices: Vec<Vertex> = Vec::new();
 
         for x in 0..CHUNK_SIZE {
@@ -515,18 +528,7 @@ impl ClientChunk {
             }
         }
 
-        if vertices.len() == 0 {
-            self.buffer = None;
-        } else {
-            self.buffer = Some((
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Chunk Vertex Buffer"),
-                    contents: bytemuck::cast_slice(vertices.as_slice()),
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                }),
-                vertices.len() as u32,
-            ));
-        }
+        ChunkMesh { vertices }
     }
     fn add_vertices(
         face: Face,

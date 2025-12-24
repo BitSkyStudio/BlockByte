@@ -349,6 +349,16 @@ pub struct FaceMap<T> {
     pub down: T,
 }
 impl<T> FaceMap<T> {
+    pub fn init(mut initializer: impl FnMut(Face) -> T) -> FaceMap<T> {
+        FaceMap {
+            front: initializer(Face::Front),
+            back: initializer(Face::Back),
+            left: initializer(Face::Left),
+            right: initializer(Face::Right),
+            up: initializer(Face::Up),
+            down: initializer(Face::Down),
+        }
+    }
     pub fn by_face(&self, face: Face) -> &T {
         match face {
             Face::Front => &self.front,

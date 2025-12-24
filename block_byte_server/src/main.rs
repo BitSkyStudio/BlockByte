@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
     sync::OnceLock,
@@ -13,6 +13,7 @@ use block_byte_common::{
 };
 use palettevec::PaletteVec;
 use parking_lot::Mutex;
+use rayon::iter::IntoParallelIterator;
 use renet::{ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use serde::Deserialize;
@@ -61,53 +62,69 @@ fn main() {
                 .update(delta_time, &mut network_server)
                 .unwrap();
         }
+        let mut chunk_viewing_manager = ChunkViewingManager::new();
         while let Some(event) = network_server.get_event() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
                     println!("Client {client_id} connected");
                     let user = server.users.insert(User {
                         client_id,
-                        view_position: ChunkPos { x: 0, y: 0, z: 0 },
+                        view_position: Mutex::new(ChunkPos { x: 0, y: 0, z: 0 }),
                     });
                     net_users.insert(client_id, user);
                     for chunk_position in
                         User::loading_area_for_view_position(ChunkPos { x: 0, y: 0, z: 0 })
                     {
-                        let message = {
-                            let chunk = server
-                                .chunks
-                                .entry(chunk_position)
-                                .or_insert_with(|| Chunk::generate(chunk_position));
-                            chunk.viewers.insert(user);
-                            NetworkMessageS2C::LoadChunk {
-                                position: chunk_position,
-                                blocks: chunk.blocks.read().clone(),
-                            }
-                        };
-                        server.send_message(user, message);
+                        chunk_viewing_manager.add_viewer(chunk_position, user, &mut server);
                     }
                 }
                 ServerEvent::ClientDisconnected { client_id, reason } => {
                     println!("Client {client_id} disconnected: {reason}");
                     let user = net_users.remove(&client_id).unwrap();
-                    let view_position = server.users.get(user).unwrap().view_position;
+                    let view_position = *server.users.get(user).unwrap().view_position.lock();
                     for chunk_position in User::loading_area_for_view_position(view_position) {
-                        let chunk = server.chunks.get_mut(&chunk_position).unwrap();
-                        chunk.viewers.remove(&user);
+                        chunk_viewing_manager.remove_viewer(chunk_position, user, &mut server);
                     }
                     server.users.remove(user);
                 }
             }
         }
-        for user in server.users.values() {
+        let mut view_chunk_chunk_changed_users = HashMap::new();
+        for (user_id, user) in &server.users {
             while let Some(message) =
                 network_server.receive_message(user.client_id, DefaultChannel::ReliableOrdered)
             {
                 let (message, _): (NetworkMessageC2S, _) =
                     bincode::serde::decode_from_slice(&message, bincode::config::standard())
                         .unwrap();
+                match message {
+                    NetworkMessageC2S::PlayerPosition { position } => {
+                        let chunk_position = position.to_block_pos().to_chunk_pos();
+                        let view_position = *user.view_position.lock();
+                        if chunk_position != view_position {
+                            view_chunk_chunk_changed_users
+                                .insert(user_id, (view_position, chunk_position));
+                            *user.view_position.lock() = chunk_position;
+                        }
+                    }
+                }
             }
         }
+        for (user, (previous_position, new_position)) in view_chunk_chunk_changed_users {
+            let previous_loading = User::loading_area_for_view_position(previous_position);
+            let new_loading = User::loading_area_for_view_position(new_position);
+            for chunk_position in new_loading {
+                if !previous_loading.contains(chunk_position) {
+                    chunk_viewing_manager.add_viewer(chunk_position, user, &mut server);
+                }
+            }
+            for chunk_position in previous_loading {
+                if !new_loading.contains(chunk_position) {
+                    chunk_viewing_manager.remove_viewer(chunk_position, user, &mut server);
+                }
+            }
+        }
+        chunk_viewing_manager.manage(&mut server);
 
         for (user, message) in server.message_queue.lock().drain(..) {
             network_server.send_message(user, DefaultChannel::ReliableOrdered, message);
@@ -157,15 +174,73 @@ impl Server {
     }
 }
 
+pub struct ChunkViewingManager {
+    pub load: HashMap<ChunkPos, Vec<UserIndex>>,
+    pub unload: HashSet<ChunkPos>,
+}
+impl ChunkViewingManager {
+    pub fn new() -> Self {
+        ChunkViewingManager {
+            load: HashMap::new(),
+            unload: HashSet::new(),
+        }
+    }
+    pub fn add_viewer(&mut self, position: ChunkPos, user: UserIndex, server: &mut Server) {
+        if let Some(chunk) = server.chunks.get_mut(&position) {
+            if chunk.viewers.is_empty() {
+                self.unload.remove(&position);
+            }
+            chunk.viewers.insert(user);
+            let message = NetworkMessageS2C::LoadChunk {
+                position,
+                blocks: chunk.blocks.read().clone(),
+            };
+            server.send_message(user, message);
+        } else {
+            self.load.entry(position).or_default().push(user);
+        }
+    }
+    pub fn remove_viewer(&mut self, position: ChunkPos, user: UserIndex, server: &mut Server) {
+        let chunk = server.chunks.get_mut(&position).unwrap();
+        chunk.viewers.remove(&user);
+        if chunk.viewers.len() == 0 {
+            self.unload.insert(position);
+        }
+        server.send_message(user, NetworkMessageS2C::UnloadChunk { position });
+    }
+    pub fn manage(self, server: &mut Server) {
+        for position in self.unload {
+            server.chunks.remove(&position);
+        }
+        use rayon::iter::ParallelIterator;
+        for (position, users, mut chunk) in self
+            .load
+            .into_par_iter()
+            .map(|(position, users)| (position, users, Chunk::generate(position)))
+            .collect::<Vec<_>>()
+        {
+            chunk.viewers = users.iter().cloned().collect();
+            server.send_message_multiple(
+                users.iter().cloned(),
+                NetworkMessageS2C::LoadChunk {
+                    position,
+                    blocks: chunk.blocks.read().clone(),
+                },
+            );
+            server.chunks.insert(position, chunk);
+        }
+    }
+}
+
 new_key_type! {pub struct UserIndex;}
 pub struct User {
     client_id: ClientId,
-    view_position: ChunkPos,
+    view_position: Mutex<ChunkPos>,
 }
 impl User {
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
-        let distance = 2;
-        let world_height = 3;
+        let distance = 8;
+        let world_height = 8;
         AABB {
             min: ChunkPos {
                 x: view_position.x - distance,

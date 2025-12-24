@@ -256,7 +256,7 @@ impl RenderState {
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
 
             world.tick(&self.device);
-            for (_, chunk) in &mut world.chunks {
+            for (_, chunk) in &world.chunks {
                 if let Some((buffer, count)) = &chunk.buffer {
                     render_pass.set_vertex_buffer(0, buffer.slice(..));
                     render_pass.draw(0..*count, 0..1);
