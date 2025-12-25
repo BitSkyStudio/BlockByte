@@ -12,8 +12,6 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-#[cfg(feature = "client")]
-use crate::coord::AABB;
 use crate::coord::{FaceMap, Pos};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
@@ -235,17 +233,16 @@ pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
 create_registries!(BlockData, block; ItemData, item; TextureData, texture);
 
-pub fn data<T>(key: Key<T>) -> &'static T
+impl<T> Key<T>
 where
     RegistryStorage: RegistryProvider<T>,
 {
-    REGISTRIES.get().unwrap().get_registry().by_key(key)
-}
-pub fn key_of_id<T>(id: &str) -> Option<Key<T>>
-where
-    RegistryStorage: RegistryProvider<T>,
-{
-    REGISTRIES.get().unwrap().get_registry().key(id)
+    pub fn data(self) -> &'static T {
+        REGISTRIES.get().unwrap().get_registry().by_key(self)
+    }
+    pub fn id(id: &str) -> Option<Self> {
+        REGISTRIES.get().unwrap().get_registry().key(id)
+    }
 }
 
 impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
@@ -257,12 +254,13 @@ impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
 
 #[derive(Deserialize)]
 pub struct ItemData {
-    block: BlockKey,
+    place: Option<BlockKey>,
 }
 pub type ItemKey = Key<ItemData>;
 
-fn full_aabb() -> Vec<AABB<f32>> {
-    vec![AABB {
+#[cfg(feature = "client")]
+fn full_aabb() -> Vec<crate::coord::AABB<f32>> {
+    vec![crate::coord::AABB {
         min: Pos {
             x: 0.,
             y: 0.,
@@ -277,11 +275,13 @@ fn full_aabb() -> Vec<AABB<f32>> {
 }
 #[derive(Deserialize)]
 pub struct BlockData {
+    #[cfg(feature = "server")]
+    pub health: Option<f32>,
     #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
-    pub selection: Vec<AABB<f32>>,
+    pub selection: Vec<crate::coord::AABB<f32>>,
 }
 #[derive(Deserialize)]
 #[cfg(feature = "client")]

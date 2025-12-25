@@ -12,7 +12,7 @@ use std::{
 use block_byte_common::{
     coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
-    registry::{self, BlockPalette, Registry, TextureData, TextureKey, data, load_registries},
+    registry::{self, BlockPalette, Registry, TextureData, TextureKey, load_registries},
 };
 use image::RgbaImage;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -148,17 +148,16 @@ impl ApplicationHandler for App {
                     };
                     let hit = ray.block_raycast(|block, _, face| {
                         let (chunk, offset) = block.to_chunk_pos_offset();
-                        if data(
-                            *self
-                                .world
-                                .chunks
-                                .get(&chunk)?
-                                .blocks
-                                .get(offset.index())
-                                .unwrap(),
-                        )
-                        .selection
-                        .len()
+                        if self
+                            .world
+                            .chunks
+                            .get(&chunk)?
+                            .blocks
+                            .get(offset.index())
+                            .unwrap()
+                            .data()
+                            .selection
+                            .len()
                             > 0
                         {
                             Some((block, face))
@@ -367,8 +366,13 @@ pub struct TexCoords {
     pub v2: f32,
 }
 static TEXTURE_ATLAS: OnceLock<TextureAtlas> = OnceLock::new();
-pub fn tex_coords(key: TextureKey) -> TexCoords {
-    TEXTURE_ATLAS.get().unwrap()[key]
+trait TexCoordsExt {
+    fn tex_coords(self) -> TexCoords;
+}
+impl TexCoordsExt for TextureKey {
+    fn tex_coords(self) -> TexCoords {
+        TEXTURE_ATLAS.get().unwrap()[self]
+    }
 }
 #[derive(Debug)]
 pub struct ClientPlayer {
@@ -387,7 +391,7 @@ impl Default for ClientPlayer {
             },
             pitch_deg: 0.,
             yaw_deg: 0.,
-            speed: 1.,
+            speed: 10.,
         }
     }
 }
@@ -555,7 +559,7 @@ impl ClientChunk {
             for y in 0..CHUNK_SIZE {
                 for z in 0..CHUNK_SIZE {
                     let block = *self.blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
-                    let block_data = data(block);
+                    let block_data = block.data();
                     match &block_data.render_data {
                         registry::BlockRenderData::Air => {}
                         registry::BlockRenderData::Full { faces } => {
@@ -580,12 +584,11 @@ impl ClientChunk {
                                     None => Some(self),
                                 };
                                 if let Some(neighbor_chunk) = neighbor_chunk {
-                                    let neighbor_block_data = data(
-                                        *neighbor_chunk
-                                            .blocks
-                                            .get(neighbor_offset.index())
-                                            .unwrap(),
-                                    );
+                                    let neighbor_block_data = neighbor_chunk
+                                        .blocks
+                                        .get(neighbor_offset.index())
+                                        .unwrap()
+                                        .data();
                                     match &neighbor_block_data.render_data {
                                         registry::BlockRenderData::Air => {}
                                         registry::BlockRenderData::Full { faces } => {
@@ -594,7 +597,7 @@ impl ClientChunk {
                                     }
                                 }
 
-                                let texture = tex_coords(*faces.by_face(*face));
+                                let texture = faces.by_face(*face).tex_coords();
                                 Self::add_vertices(*face, texture, |position, coords| {
                                     let vt_pos = base_position + position;
                                     vertices.push(Vertex {

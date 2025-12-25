@@ -9,7 +9,7 @@ use std::{
 use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
-    registry::{self, BlockData, BlockKey, key_of_id, load_registries},
+    registry::{self, BlockData, BlockKey, load_registries},
 };
 use palettevec::PaletteVec;
 use parking_lot::Mutex;
@@ -22,7 +22,7 @@ use slotmap::{SlotMap, new_key_type};
 use crate::{
     inventory::{ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
-    world::{BlockEvent, Chunk},
+    world::{BlockEvent, Chunk, air_block},
 };
 
 mod inventory;
@@ -46,12 +46,12 @@ fn main() {
         NetcodeServerTransport::new(network_server_config, network_socket).unwrap();
 
     let mut server = Server {
+        ticks_passed: 0,
         chunks: HashMap::new(),
         users: SlotMap::with_key(),
         message_queue: Mutex::new(Vec::new()),
     };
     let start_time = Instant::now();
-    let mut tick_count: u32 = 0;
     let tps = 40;
     let mut net_users = HashMap::new();
     loop {
@@ -89,7 +89,8 @@ fn main() {
                 }
             }
         }
-        let mut view_chunk_chunk_changed_users = HashMap::new();
+        let mut view_chunk_chunk_changed_users: HashMap<UserIndex, (ChunkPos, ChunkPos)> =
+            HashMap::new();
         for (user_id, user) in &server.users {
             while let Some(message) =
                 network_server.receive_message(user.client_id, DefaultChannel::ReliableOrdered)
@@ -102,18 +103,22 @@ fn main() {
                         let chunk_position = position.to_block_pos().to_chunk_pos();
                         let view_position = *user.view_position.lock();
                         if chunk_position != view_position {
-                            view_chunk_chunk_changed_users
-                                .insert(user_id, (view_position, chunk_position));
+                            if let Some(entry) = view_chunk_chunk_changed_users.get_mut(&user_id) {
+                                entry.1 = chunk_position;
+                            } else {
+                                view_chunk_chunk_changed_users
+                                    .insert(user_id, (view_position, chunk_position));
+                            }
                             *user.view_position.lock() = chunk_position;
                         }
                     }
                     NetworkMessageC2S::AttackBlock { position } => {
-                        server.schedule_block_event(position, BlockEvent::Damage { damage: 1 });
+                        server.schedule_block_event(position, BlockEvent::Damage { damage: 1. });
                     }
                     NetworkMessageC2S::InteractBlock { position, face } => {
                         server.place(
                             position + face.get_block_offset(),
-                            key_of_id("nature.grass").unwrap(),
+                            Key::id("nature.grass").unwrap(),
                         );
                     }
                 }
@@ -145,18 +150,19 @@ fn main() {
 
         network_transport.send_packets(&mut network_server);
 
-        let sleep_time = (tick_count as i64 * (1000 / tps))
+        let sleep_time = (server.ticks_passed as i64 * (1000 / tps))
             - Instant::now().duration_since(start_time).as_millis() as i64;
         if sleep_time > 0 {
             std::thread::sleep(Duration::from_millis(sleep_time as u64));
         } else if sleep_time < 0 {
             println!("server is running {}ms behind", -sleep_time);
         }
-        tick_count += 1;
+        server.ticks_passed += 1;
     }
 }
 
 pub struct Server {
+    ticks_passed: u64,
     chunks: HashMap<ChunkPos, Chunk>,
     users: SlotMap<UserIndex, User>,
     message_queue: Mutex<Vec<(ClientId, renet::Bytes)>>,
@@ -171,7 +177,7 @@ impl Server {
             }
         };
         let mut blocks = chunk.blocks.write();
-        if *blocks.get(offset.index()).unwrap() != key_of_id::<BlockData>("air").unwrap() {
+        if *blocks.get(offset.index()).unwrap() != air_block() {
             return false;
         }
         blocks.set(offset.index(), &block);
