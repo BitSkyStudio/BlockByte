@@ -255,7 +255,7 @@ impl RenderState {
             render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
 
-            world.tick(&self.device);
+            world.tick_client(&self.device);
             for (_, chunk) in &world.chunks {
                 if let Some((buffer, count)) = &chunk.buffer {
                     render_pass.set_vertex_buffer(0, buffer.slice(..));

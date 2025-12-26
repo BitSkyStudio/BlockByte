@@ -293,6 +293,9 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
+                            NetworkMessageS2C::GameTick { ticks_passed, dt } => {
+                                self.world.tick_server(dt);
+                            }
                         }
                     }
                 } else if self.network_client.is_disconnected() {
@@ -508,7 +511,7 @@ pub struct ClientWorld {
     pub modified_chunks: HashSet<ChunkPos>,
 }
 impl ClientWorld {
-    pub fn tick(&mut self, device: &Device) {
+    pub fn tick_client(&mut self, device: &Device) {
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
             .modified_chunks
@@ -542,6 +545,7 @@ impl ClientWorld {
             };
         }
     }
+    pub fn tick_server(&mut self, dt: f32) {}
 }
 pub struct ClientChunk {
     pub position: ChunkPos,

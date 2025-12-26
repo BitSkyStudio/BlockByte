@@ -90,6 +90,16 @@ impl Chunk {
                 }
             }
         }
+        {
+            self.components
+                .damage
+                .write()
+                .components
+                .retain_mut(|(_, damage)| {
+                    damage.damage -= 1. / server.tps as f32;
+                    damage.damage > 0.
+                });
+        }
     }
 }
 pub enum BlockEvent {

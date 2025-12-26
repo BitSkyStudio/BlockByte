@@ -47,16 +47,16 @@ fn main() {
 
     let mut server = Server {
         ticks_passed: 0,
+        tps: 40,
         chunks: HashMap::new(),
         users: SlotMap::with_key(),
         message_queue: Mutex::new(Vec::new()),
     };
     let start_time = Instant::now();
-    let tps = 40;
     let mut net_users = HashMap::new();
     loop {
         {
-            let delta_time = Duration::from_millis(1000 / tps as u64); //probably make it smarter
+            let delta_time = Duration::from_millis(1000 / server.tps as u64); //probably make it smarter
             network_server.update(delta_time);
             network_transport
                 .update(delta_time, &mut network_server)
@@ -148,9 +148,21 @@ fn main() {
             network_server.send_message(user, DefaultChannel::ReliableOrdered, message);
         }
 
+        network_server.broadcast_message(
+            DefaultChannel::ReliableOrdered,
+            bincode::serde::encode_to_vec(
+                NetworkMessageS2C::GameTick {
+                    ticks_passed: server.ticks_passed,
+                    dt: 1. / server.tps as f32,
+                },
+                bincode::config::standard(),
+            )
+            .unwrap(),
+        );
+
         network_transport.send_packets(&mut network_server);
 
-        let sleep_time = (server.ticks_passed as i64 * (1000 / tps))
+        let sleep_time = (server.ticks_passed as i64 * (1000 / server.tps as i64))
             - Instant::now().duration_since(start_time).as_millis() as i64;
         if sleep_time > 0 {
             std::thread::sleep(Duration::from_millis(sleep_time as u64));
@@ -163,6 +175,7 @@ fn main() {
 
 pub struct Server {
     ticks_passed: u64,
+    tps: u64,
     chunks: HashMap<ChunkPos, Chunk>,
     users: SlotMap<UserIndex, User>,
     message_queue: Mutex<Vec<(ClientId, renet::Bytes)>>,

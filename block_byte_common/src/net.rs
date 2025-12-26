@@ -14,6 +14,10 @@ pub enum NetworkMessageC2S {
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {
+    GameTick {
+        ticks_passed: u64,
+        dt: f32,
+    },
     LoadChunk {
         position: ChunkPos,
         blocks: BlockPalette,
