@@ -217,6 +217,7 @@ dependencies = [
  "renet",
  "renet_netcode",
  "texture_packer",
+ "uuid",
  "wgpu",
  "winit",
 ]
@@ -231,6 +232,7 @@ dependencies = [
  "palettevec",
  "ron",
  "serde",
+ "uuid",
  "walkdir",
 ]
 
@@ -249,6 +251,7 @@ dependencies = [
  "serde",
  "slotmap",
  "smallvec",
+ "uuid",
 ]
 
 [[package]]
@@ -2156,6 +2159,18 @@ name = "unty"
 version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
+
+[[package]]
+name = "uuid"
+version = "1.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2e054861b4bd027cd373e18e8d8d8e6548085000e41290d95ce0c373a654b4a"
+dependencies = [
+ "getrandom 0.3.4",
+ "js-sys",
+ "serde_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "vcpkg"

@@ -176,6 +176,9 @@ impl Pos {
             z: self.z.floor() as i32,
         }
     }
+    pub fn to_chunk_pos(self) -> ChunkPos {
+        self.to_block_pos().to_chunk_pos()
+    }
 }
 impl BlockPos {
     pub fn to_chunk_pos(self) -> ChunkPos {

@@ -1,17 +1,19 @@
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::OnceLock,
+    sync::{OnceLock, atomic::AtomicBool},
 };
 
 use block_byte_common::{
-    coord::{CHUNK_SIZE, ChunkOffset, ChunkPos},
+    coord::{CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
-    registry::{BlockData, BlockKey, BlockPalette},
+    registry::{BlockData, BlockKey, BlockPalette, EntityKey},
 };
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
 use parking_lot::{Mutex, RwLock};
 use serde::Deserialize;
+use slotmap::new_key_type;
+use uuid::Uuid;
 
 use crate::{
     Server, UserIndex,
@@ -23,6 +25,7 @@ pub struct Chunk {
     pub viewers: HashSet<UserIndex>,
     pub block_events: Mutex<Vec<(ChunkOffset, BlockEvent)>>,
     pub components: ChunkBlockComponents,
+    pub entities: Vec<EntityIndex>,
 }
 impl Chunk {
     pub fn generate(position: ChunkPos) -> Chunk {
@@ -52,6 +55,7 @@ impl Chunk {
             viewers: HashSet::new(),
             block_events: Mutex::new(Vec::new()),
             components: ChunkBlockComponents::default(),
+            entities: Vec::new(),
         }
     }
     pub fn tick(&self, server: &Server) {
@@ -79,7 +83,7 @@ impl Chunk {
                             damage_component.remove(block);
                             self.blocks.write().set(block.index(), &air_block());
                             server.send_message_multiple(
-                                self.viewers.iter().cloned(),
+                                self.viewers.iter(),
                                 NetworkMessageS2C::SetBlock {
                                     position: self.position.to_block_pos() + block.xyz(),
                                     block: air_block(),
@@ -177,3 +181,41 @@ macro_rules! create_chunk_block_components{
 }
 
 create_chunk_block_components!(BlockDamage, damage);
+
+new_key_type! {pub struct EntityIndex;}
+pub struct Entity {
+    pub key: EntityKey,
+    pub uuid: Uuid,
+    pub position: Pos,
+    pub teleport: Mutex<Option<Pos>>,
+    pub removed: AtomicBool,
+}
+impl Entity {
+    pub fn new(key: EntityKey, position: Pos) -> Entity {
+        Entity {
+            key,
+            uuid: Uuid::new_v4(),
+            position,
+            teleport: Mutex::new(None),
+            removed: AtomicBool::new(false),
+        }
+    }
+}
+impl Entity {
+    pub fn create_add_message(&self) -> NetworkMessageS2C {
+        NetworkMessageS2C::AddEntity {
+            uuid: self.uuid,
+            key: self.key,
+            position: self.position,
+        }
+    }
+    pub fn create_move_message(&self) -> NetworkMessageS2C {
+        NetworkMessageS2C::MoveEntity {
+            uuid: self.uuid,
+            position: self.position,
+        }
+    }
+    pub fn create_remove_message(&self) -> NetworkMessageS2C {
+        NetworkMessageS2C::RemoveEntity { uuid: self.uuid }
+    }
+}

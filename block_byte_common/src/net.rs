@@ -1,9 +1,10 @@
 use palettevec::PaletteVec;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     coord::{BlockPos, ChunkPos, Face, Pos},
-    registry::{BlockKey, BlockPalette},
+    registry::{BlockKey, BlockPalette, EntityKey},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -28,5 +29,17 @@ pub enum NetworkMessageS2C {
     SetBlock {
         position: BlockPos,
         block: BlockKey,
+    },
+    AddEntity {
+        uuid: Uuid,
+        key: EntityKey,
+        position: Pos,
+    },
+    MoveEntity {
+        uuid: Uuid,
+        position: Pos,
+    },
+    RemoveEntity {
+        uuid: Uuid,
     },
 }

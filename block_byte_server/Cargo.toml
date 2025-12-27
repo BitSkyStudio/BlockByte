@@ -15,3 +15,4 @@ bincode = { version = "2.0.1", features = ["serde"] }
 renet = "1.2.0"
 renet_netcode = "1.2.0"
 rayon = "1.11.0"
+uuid = { version = "1.19.0", features = ["v4", "serde"] }

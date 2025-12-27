@@ -22,7 +22,7 @@ use slotmap::{SlotMap, new_key_type};
 use crate::{
     inventory::{ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
-    world::{BlockEvent, Chunk, air_block},
+    world::{BlockEvent, Chunk, Entity, EntityIndex, air_block},
 };
 
 mod inventory;
@@ -50,7 +50,9 @@ fn main() {
         tps: 40,
         chunks: HashMap::new(),
         users: SlotMap::with_key(),
-        message_queue: Mutex::new(Vec::new()),
+        message_queue: Default::default(),
+        entities: SlotMap::with_key(),
+        entity_add_queue: Mutex::new(Vec::new()),
     };
     let start_time = Instant::now();
     let mut net_users = HashMap::new();
@@ -138,13 +140,93 @@ fn main() {
                 }
             }
         }
-        chunk_viewing_manager.manage(&mut server);
 
         server.chunks.par_iter().for_each(|(_, chunk)| {
             chunk.tick(&server);
         });
 
-        for (user, message) in server.message_queue.lock().drain(..) {
+        for entity in server.entity_add_queue.get_mut().drain(..) {
+            let add_message = entity.create_add_message();
+            let chunk_position = entity.position.to_chunk_pos();
+            let entity_index = server.entities.insert(entity);
+            let mut chunk = server.chunks.get_mut(&chunk_position).unwrap();
+            chunk.entities.push(entity_index);
+            server
+                .message_queue
+                .send_message(chunk.viewers.iter(), add_message, &server.users);
+        }
+
+        server.entities.retain(|index, entity| {
+            if let Some(teleport) = entity.teleport.lock().take() {
+                //todo: check if chunk loaded, maybe should be done on calling site?
+                if server.chunks.contains_key(&teleport.to_chunk_pos()) {
+                    if entity.position.to_chunk_pos() != teleport.to_chunk_pos() {
+                        let [previous_chunk, new_chunk] = server
+                            .chunks
+                            .get_disjoint_mut([
+                                &entity.position.to_chunk_pos(),
+                                &teleport.to_chunk_pos(),
+                            ])
+                            .map(|v| v.unwrap());
+                        previous_chunk.entities.retain(|e| *e != index);
+                        new_chunk.entities.push(index);
+                        entity.position = teleport;
+                        server.message_queue.send_message(
+                            previous_chunk.viewers.difference(&new_chunk.viewers),
+                            entity.create_remove_message(),
+                            &server.users,
+                        );
+                        server.message_queue.send_message(
+                            new_chunk.viewers.difference(&previous_chunk.viewers),
+                            entity.create_add_message(),
+                            &server.users,
+                        );
+                        server.message_queue.send_message(
+                            new_chunk.viewers.intersection(&previous_chunk.viewers),
+                            entity.create_move_message(),
+                            &server.users,
+                        );
+                    } else {
+                        entity.position = teleport;
+                        server.message_queue.send_message(
+                            server
+                                .chunks
+                                .get(&teleport.to_chunk_pos())
+                                .unwrap()
+                                .viewers
+                                .iter(),
+                            entity.create_move_message(),
+                            &server.users,
+                        );
+                    }
+                } else {
+                    println!("invalid teleport");
+                }
+            }
+            if !server.chunks.contains_key(&entity.position.to_chunk_pos()) {
+                return true;
+            }
+            if !entity.removed.load(std::sync::atomic::Ordering::Relaxed) {
+                server.message_queue.send_message(
+                    server
+                        .chunks
+                        .get(&entity.position.to_chunk_pos())
+                        .unwrap()
+                        .viewers
+                        .iter(),
+                    entity.create_remove_message(),
+                    &server.users,
+                );
+                true
+            } else {
+                false
+            }
+            //todo: possible duplication(teleport to another chunk + unload at the same tick)
+        });
+
+        chunk_viewing_manager.manage(&mut server);
+
+        for (user, message) in server.message_queue.0.get_mut().drain(..) {
             network_server.send_message(user, DefaultChannel::ReliableOrdered, message);
         }
 
@@ -172,15 +254,45 @@ fn main() {
         server.ticks_passed += 1;
     }
 }
-
+#[derive(Default)]
+pub struct MessageQueue(Mutex<Vec<(ClientId, renet::Bytes)>>);
+impl MessageQueue {
+    pub fn send_message<T: std::borrow::Borrow<UserIndex>>(
+        &self,
+        users: impl Iterator<Item = T>,
+        message: NetworkMessageS2C,
+        user_map: &SlotMap<UserIndex, User>,
+    ) {
+        let message = bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap();
+        let message: renet::Bytes = message.into();
+        let mut message_queue = self.0.lock();
+        for user in users {
+            if let Some(user) = user_map.get(*user.borrow()) {
+                message_queue.push((user.client_id, message.clone()));
+            }
+        }
+    }
+}
 pub struct Server {
-    ticks_passed: u64,
-    tps: u64,
-    chunks: HashMap<ChunkPos, Chunk>,
-    users: SlotMap<UserIndex, User>,
-    message_queue: Mutex<Vec<(ClientId, renet::Bytes)>>,
+    pub ticks_passed: u64,
+    pub tps: u64,
+    pub chunks: HashMap<ChunkPos, Chunk>,
+    pub users: SlotMap<UserIndex, User>,
+    pub message_queue: MessageQueue,
+    pub entities: SlotMap<EntityIndex, Entity>,
+    entity_add_queue: Mutex<Vec<Entity>>,
 }
 impl Server {
+    pub fn spawn_entity(&self, entity: Entity) -> Result<(), ()> {
+        if !self
+            .chunks
+            .contains_key(&entity.position.to_block_pos().to_chunk_pos())
+        {
+            return Err(());
+        }
+        self.entity_add_queue.lock().push(entity);
+        Ok(())
+    }
     pub fn place(&self, position: BlockPos, block: BlockKey) -> bool {
         let (chunk, offset) = position.to_chunk_pos_offset();
         let chunk = match self.get_chunk(chunk) {
@@ -195,7 +307,7 @@ impl Server {
         }
         blocks.set(offset.index(), &block);
         self.send_message_multiple(
-            chunk.viewers.iter().cloned(),
+            chunk.viewers.iter(),
             NetworkMessageS2C::SetBlock { position, block },
         );
         true
@@ -213,21 +325,15 @@ impl Server {
         self.users.get(user)
     }
     pub fn send_message(&self, user: UserIndex, message: NetworkMessageS2C) {
-        self.send_message_multiple(std::iter::once(user), message);
+        self.message_queue
+            .send_message(std::iter::once(user), message, &self.users);
     }
-    pub fn send_message_multiple(
+    pub fn send_message_multiple<T: std::borrow::Borrow<UserIndex>>(
         &self,
-        users: impl Iterator<Item = UserIndex>,
+        users: impl Iterator<Item = T>,
         message: NetworkMessageS2C,
     ) {
-        let message = bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap();
-        let message: renet::Bytes = message.into();
-        let mut message_queue = self.message_queue.lock();
-        for user in users {
-            if let Some(user) = self.users.get(user) {
-                message_queue.push((user.client_id, message.clone()));
-            }
-        }
+        self.message_queue.send_message(users, message, &self.users);
     }
 }
 
@@ -278,7 +384,7 @@ impl ChunkViewingManager {
         {
             chunk.viewers = users.iter().cloned().collect();
             server.send_message_multiple(
-                users.iter().cloned(),
+                users.iter(),
                 NetworkMessageS2C::LoadChunk {
                     position,
                     blocks: chunk.blocks.read().clone(),

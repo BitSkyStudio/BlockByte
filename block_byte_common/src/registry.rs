@@ -231,7 +231,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity);
 
 impl<T> Key<T>
 where
@@ -275,7 +275,6 @@ fn full_aabb() -> Vec<crate::coord::AABB<f32>> {
 }
 #[derive(Deserialize)]
 pub struct BlockData {
-    #[cfg(feature = "server")]
     pub health: Option<f32>,
     #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
@@ -306,3 +305,7 @@ impl RegistryConfigLoadable for TextureData {
         })
     }
 }
+
+#[derive(Deserialize)]
+pub struct EntityData {}
+pub type EntityKey = Key<BlockData>;

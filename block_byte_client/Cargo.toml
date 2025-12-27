@@ -20,3 +20,4 @@ renet_netcode = "1.2.0"
 winit = "0.30.12"
 parking_lot = "0.12.5"
 rayon = "1.11.0"
+uuid = { version = "1.19.0", features = ["v4", "serde"] }

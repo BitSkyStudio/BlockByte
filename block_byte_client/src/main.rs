@@ -12,12 +12,13 @@ use std::{
 use block_byte_common::{
     coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
-    registry::{self, BlockPalette, Registry, TextureData, TextureKey, load_registries},
+    registry::{self, BlockPalette, EntityKey, Registry, TextureData, TextureKey, load_registries},
 };
 use image::RgbaImage;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
+use uuid::Uuid;
 use wgpu::{Buffer, Device, util::DeviceExt};
 use winit::{
     application::ApplicationHandler,
@@ -296,6 +297,23 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::GameTick { ticks_passed, dt } => {
                                 self.world.tick_server(dt);
                             }
+                            NetworkMessageS2C::AddEntity {
+                                uuid,
+                                key,
+                                position,
+                            } => {
+                                self.world
+                                    .entities
+                                    .insert(uuid, ClientEntity { key, position });
+                            }
+                            NetworkMessageS2C::MoveEntity { uuid, position } => {
+                                if let Some(entity) = self.world.entities.get_mut(&uuid) {
+                                    entity.position = position;
+                                }
+                            }
+                            NetworkMessageS2C::RemoveEntity { uuid } => {
+                                self.world.entities.remove(&uuid);
+                            }
                         }
                     }
                 } else if self.network_client.is_disconnected() {
@@ -509,6 +527,7 @@ impl ClientPlayer {
 pub struct ClientWorld {
     pub chunks: HashMap<ChunkPos, ClientChunk>,
     pub modified_chunks: HashSet<ChunkPos>,
+    pub entities: HashMap<Uuid, ClientEntity>,
 }
 impl ClientWorld {
     pub fn tick_client(&mut self, device: &Device) {
@@ -546,6 +565,10 @@ impl ClientWorld {
         }
     }
     pub fn tick_server(&mut self, dt: f32) {}
+}
+pub struct ClientEntity {
+    key: EntityKey,
+    position: Pos,
 }
 pub struct ClientChunk {
     pub position: ChunkPos,
