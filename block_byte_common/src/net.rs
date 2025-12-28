@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    coord::{BlockPos, ChunkPos, Face, Pos},
+    coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockKey, BlockPalette, EntityKey},
+    world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -22,6 +23,7 @@ pub enum NetworkMessageS2C {
     LoadChunk {
         position: ChunkPos,
         blocks: BlockPalette,
+        components: ClientChunkBlockComponents,
     },
     UnloadChunk {
         position: ChunkPos,
@@ -29,6 +31,11 @@ pub enum NetworkMessageS2C {
     SetBlock {
         position: BlockPos,
         block: BlockKey,
+    },
+    UpdateBlockComponents {
+        chunk: ChunkPos,
+        offset: ChunkOffset,
+        data: ClientBlockComponentUpdate,
     },
     AddEntity {
         uuid: Uuid,

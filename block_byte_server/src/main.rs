@@ -357,6 +357,7 @@ impl ChunkViewingManager {
             let message = NetworkMessageS2C::LoadChunk {
                 position,
                 blocks: chunk.blocks.read().clone(),
+                components: chunk.components.client(),
             };
             server.send_message(user, message);
         } else {
@@ -388,6 +389,7 @@ impl ChunkViewingManager {
                 NetworkMessageS2C::LoadChunk {
                     position,
                     blocks: chunk.blocks.read().clone(),
+                    components: chunk.components.client(),
                 },
             );
             server.chunks.insert(position, chunk);

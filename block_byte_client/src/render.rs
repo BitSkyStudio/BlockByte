@@ -204,6 +204,18 @@ impl RenderState {
         camera: &ClientPlayer,
         world: &mut ClientWorld,
     ) -> Result<(), wgpu::SurfaceError> {
+        let mut entity_mesh = Mesh {
+            vertices: Vec::new(),
+        };
+        world.tick_client(&self.device, &mut entity_mesh);
+        let entity_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Entity Vertex Buffer"),
+                contents: bytemuck::cast_slice(entity_mesh.vertices.as_slice()),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
+
         self.camera_uniform
             .load_view_proj_matrix(camera, self.size.width as f32 / self.size.height as f32);
         self.queue.write_buffer(
@@ -255,12 +267,15 @@ impl RenderState {
             render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
 
-            world.tick_client(&self.device);
             for (_, chunk) in &world.chunks {
                 if let Some((buffer, count)) = &chunk.buffer {
                     render_pass.set_vertex_buffer(0, buffer.slice(..));
                     render_pass.draw(0..*count, 0..1);
                 }
+            }
+            if !entity_mesh.vertices.is_empty() {
+                render_pass.set_vertex_buffer(0, entity_buffer.slice(..));
+                render_pass.draw(0..entity_mesh.vertices.len() as u32, 0..1);
             }
         }
 
@@ -330,7 +345,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::{ClientPlayer, ClientWorld};
+use crate::{ClientPlayer, ClientWorld, Mesh};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,

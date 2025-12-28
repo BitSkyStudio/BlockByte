@@ -9,5 +9,5 @@
             up: "grass_block",
         ),
     ),
-    health: Some(5.),
+    health: Some((health: 5.)),
 )

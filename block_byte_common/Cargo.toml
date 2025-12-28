@@ -15,7 +15,8 @@ image = { version = "0.24", default-features = false, features = [
 ], optional = true }
 anyhow = "1.0.100"
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
+parking_lot = { version = "0.12.5", features = ["serde"], optional = true }
 
 [features]
 client = ["dep:image"]
-server = []
+server = ["dep:parking_lot"]

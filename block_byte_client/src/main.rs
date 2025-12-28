@@ -13,6 +13,7 @@ use block_byte_common::{
     coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{self, BlockPalette, EntityKey, Registry, TextureData, TextureKey, load_registries},
+    world::ClientChunkBlockComponents,
 };
 use image::RgbaImage;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -244,13 +245,18 @@ impl ApplicationHandler for App {
                             )
                             .unwrap();
                         match message {
-                            NetworkMessageS2C::LoadChunk { position, blocks } => {
+                            NetworkMessageS2C::LoadChunk {
+                                position,
+                                blocks,
+                                components,
+                            } => {
                                 self.world.chunks.insert(
                                     position,
                                     ClientChunk {
                                         blocks,
                                         buffer: None,
                                         position,
+                                        components,
                                     },
                                 );
                                 self.world.modified_chunks.insert(position);
@@ -313,6 +319,15 @@ impl ApplicationHandler for App {
                             }
                             NetworkMessageS2C::RemoveEntity { uuid } => {
                                 self.world.entities.remove(&uuid);
+                            }
+                            NetworkMessageS2C::UpdateBlockComponents {
+                                chunk,
+                                offset,
+                                data,
+                            } => {
+                                if let Some(chunk) = self.world.chunks.get_mut(&chunk) {
+                                    data.update(offset, &mut chunk.components);
+                                }
                             }
                         }
                     }
@@ -530,7 +545,7 @@ pub struct ClientWorld {
     pub entities: HashMap<Uuid, ClientEntity>,
 }
 impl ClientWorld {
-    pub fn tick_client(&mut self, device: &Device) {
+    pub fn tick_client(&mut self, device: &Device, entity_mesh: &mut Mesh) {
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
             .modified_chunks
@@ -564,7 +579,23 @@ impl ClientWorld {
             };
         }
     }
-    pub fn tick_server(&mut self, dt: f32) {}
+    pub fn tick_server(&mut self, dt: f32) {
+        for (_, chunk) in &mut self.chunks {
+            chunk
+                .components
+                .damage
+                .components
+                .retain_mut(|(offset, health)| {
+                    let data = chunk.blocks.get(offset.index()).unwrap().data();
+                    if let Some(health_data) = &data.health {
+                        health.damage -= dt;
+                        health.damage > 0.
+                    } else {
+                        false
+                    }
+                });
+        }
+    }
 }
 pub struct ClientEntity {
     key: EntityKey,
@@ -573,13 +604,14 @@ pub struct ClientEntity {
 pub struct ClientChunk {
     pub position: ChunkPos,
     pub blocks: BlockPalette,
+    pub components: ClientChunkBlockComponents,
     pub buffer: Option<(Buffer, u32)>,
 }
-pub struct ChunkMesh {
+pub struct Mesh {
     pub vertices: Vec<Vertex>,
 }
 impl ClientChunk {
-    pub fn rebuild_chunk_mesh(&self, neighbor_chunks: FaceMap<Option<&ClientChunk>>) -> ChunkMesh {
+    pub fn rebuild_chunk_mesh(&self, neighbor_chunks: FaceMap<Option<&ClientChunk>>) -> Mesh {
         let mut vertices: Vec<Vertex> = Vec::new();
 
         for x in 0..CHUNK_SIZE {
@@ -639,7 +671,7 @@ impl ClientChunk {
             }
         }
 
-        ChunkMesh { vertices }
+        Mesh { vertices }
     }
     fn add_vertices(
         face: Face,

@@ -275,12 +275,16 @@ fn full_aabb() -> Vec<crate::coord::AABB<f32>> {
 }
 #[derive(Deserialize)]
 pub struct BlockData {
-    pub health: Option<f32>,
+    pub health: Option<BlockHealthData>,
     #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
     pub selection: Vec<crate::coord::AABB<f32>>,
+}
+#[derive(Deserialize)]
+pub struct BlockHealthData {
+    pub health: f32,
 }
 #[derive(Deserialize)]
 #[cfg(feature = "client")]

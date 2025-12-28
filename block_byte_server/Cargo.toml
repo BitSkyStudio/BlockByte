@@ -7,7 +7,7 @@ edition = "2024"
 block_byte_common = { path = "../block_byte_common", features = ["server"] }
 palettevec = { version = "0.4.0", features = ["serde"] }
 smallvec = "1.15.1"
-parking_lot = "0.12.5"
+parking_lot = { version = "0.12.5", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 rusqlite = "0.37.0"
 slotmap = "1.1.1"

@@ -8,6 +8,7 @@ use block_byte_common::{
     coord::{CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{BlockData, BlockKey, BlockPalette, EntityKey},
+    world::{BlockDamage, ChunkBlockComponents, ClientBlockComponentUpdate},
 };
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
 use parking_lot::{Mutex, RwLock};
@@ -64,16 +65,16 @@ impl Chunk {
         for (block, event) in processing_events {
             match event {
                 BlockEvent::Damage { damage } => {
-                    let health = self.blocks.read().get(block.index()).unwrap().data().health;
+                    let health = &self.blocks.read().get(block.index()).unwrap().data().health;
                     if let Some(health) = health {
                         let mut damage_component = self.components.damage.write();
                         let mut destroy = false;
 
-                        if damage >= health {
+                        if damage >= health.health {
                             destroy = true;
                         } else if let Some(block_damage) = damage_component.get_mut(block) {
                             block_damage.damage += damage;
-                            if block_damage.damage >= health {
+                            if block_damage.damage >= health.health {
                                 destroy = true;
                             }
                         } else {
@@ -90,6 +91,16 @@ impl Chunk {
                                 },
                             );
                         }
+                        server.send_message_multiple(
+                            self.viewers.iter(),
+                            NetworkMessageS2C::UpdateBlockComponents {
+                                chunk: self.position,
+                                offset: block,
+                                data: ClientBlockComponentUpdate::BlockDamage(
+                                    damage_component.get(block).map(|damage| damage.into()),
+                                ),
+                            },
+                        );
                     }
                 }
             }
@@ -110,77 +121,10 @@ pub enum BlockEvent {
     Damage { damage: f32 },
 }
 
-pub struct BlockDamage {
-    pub damage: f32,
-}
-
 static AIR_BLOCK: OnceLock<BlockKey> = OnceLock::new();
 pub fn air_block() -> BlockKey {
     *AIR_BLOCK.get_or_init(|| Key::id("air").unwrap())
 }
-pub struct BlockComponentStorage<T> {
-    pub components: Vec<(ChunkOffset, T)>,
-}
-impl<T> BlockComponentStorage<T> {
-    pub fn get(&self, block: ChunkOffset) -> Option<&T> {
-        self.components
-            .iter()
-            .find(|(offset, _)| *offset == block)
-            .map(|(_, data)| data)
-    }
-    pub fn get_mut(&mut self, block: ChunkOffset) -> Option<&mut T> {
-        self.components
-            .iter_mut()
-            .find(|(offset, _)| *offset == block)
-            .map(|(_, data)| data)
-    }
-    pub fn set(&mut self, block: ChunkOffset, data: T) {
-        if let Some(existing) = self.get_mut(block) {
-            *existing = data;
-        } else {
-            self.components.push((block, data));
-        }
-    }
-    pub fn remove(&mut self, block: ChunkOffset) -> bool {
-        if let Some(index) = self
-            .components
-            .iter()
-            .position(|(offset, _)| *offset == block)
-        {
-            self.components.swap_remove(index);
-            true
-        } else {
-            false
-        }
-    }
-}
-impl<T> Default for BlockComponentStorage<T> {
-    fn default() -> Self {
-        BlockComponentStorage {
-            components: Vec::new(),
-        }
-    }
-}
-macro_rules! create_chunk_block_components{
-    ($($type:ty,$id:ident);*) => {
-        trait GetComponentStorage<T>{
-            fn get_component_storage(&self) -> &RwLock<BlockComponentStorage<T>>;
-        }
-        #[derive(Default)]
-        pub struct ChunkBlockComponents{
-            $($id: RwLock<BlockComponentStorage<$type>>,)*
-        }
-        $(
-        impl GetComponentStorage<$type> for ChunkBlockComponents{
-            fn get_component_storage(&self) -> &RwLock<BlockComponentStorage<$type>>{
-                &self.$id
-            }
-        }
-        )*
-    }
-}
-
-create_chunk_block_components!(BlockDamage, damage);
 
 new_key_type! {pub struct EntityIndex;}
 pub struct Entity {
