@@ -8,7 +8,10 @@ use block_byte_common::{
     coord::{CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{BlockData, BlockKey, BlockPalette, EntityKey},
-    world::{BlockDamage, ChunkBlockComponents, ClientBlockComponentUpdate},
+    world::{
+        BlockDamage, ChunkBlockComponents, ClientBlockComponentUpdate, ClientBlockDamage,
+        ComponentClientFromServer,
+    },
 };
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
 use parking_lot::{Mutex, RwLock};
@@ -97,7 +100,9 @@ impl Chunk {
                                 chunk: self.position,
                                 offset: block,
                                 data: ClientBlockComponentUpdate::BlockDamage(
-                                    damage_component.get(block).map(|damage| damage.into()),
+                                    damage_component
+                                        .get(block)
+                                        .map(ClientBlockDamage::from_server),
                                 ),
                             },
                         );

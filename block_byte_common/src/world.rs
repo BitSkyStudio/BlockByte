@@ -38,17 +38,16 @@ impl<T> BlockComponentStorage<T> {
             false
         }
     }
-}
-impl<T, U> From<&BlockComponentStorage<T>> for BlockComponentStorage<U>
-where
-    U: for<'a> From<&'a T>,
-{
-    fn from(value: &BlockComponentStorage<T>) -> Self {
+    #[cfg(feature = "server")]
+    pub fn client<U>(&self) -> BlockComponentStorage<U>
+    where
+        U: ComponentClientFromServer<T>,
+    {
         BlockComponentStorage {
-            components: value
+            components: self
                 .components
                 .iter()
-                .map(|(offset, data)| (*offset, data.into()))
+                .map(|(offset, data)| (*offset, U::from_server(data)))
                 .collect(),
         }
     }
@@ -86,7 +85,7 @@ macro_rules! create_chunk_block_components{
         impl ChunkBlockComponents{
             pub fn client(&self) -> ClientChunkBlockComponents{
                 ClientChunkBlockComponents{
-                    $($id: (&*self.$id.read()).into(),)*
+                    $($id: (&*self.$id.read()).client(),)*
                 }
             }
         }
@@ -115,6 +114,10 @@ macro_rules! create_chunk_block_components{
 
 create_chunk_block_components!(BlockDamage, ClientBlockDamage, damage);
 
+pub trait ComponentClientFromServer<T> {
+    fn from_server(server: &T) -> Self;
+}
+
 #[derive(Serialize, Deserialize)]
 #[cfg(feature = "server")]
 pub struct BlockDamage {
@@ -124,10 +127,15 @@ pub struct BlockDamage {
 pub struct ClientBlockDamage {
     pub damage: f32,
 }
-impl From<&BlockDamage> for ClientBlockDamage {
-    fn from(value: &BlockDamage) -> Self {
+impl ComponentClientFromServer<BlockDamage> for ClientBlockDamage {
+    fn from_server(value: &BlockDamage) -> Self {
         ClientBlockDamage {
             damage: value.damage,
         }
+    }
+}
+impl<T> ComponentClientFromServer<T> for () {
+    fn from_server(server: &T) -> Self {
+        ()
     }
 }
