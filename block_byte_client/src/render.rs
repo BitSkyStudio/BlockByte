@@ -22,6 +22,7 @@ pub struct RenderState {
     size: PhysicalSize<u32>,
     window: Arc<Window>,
     chunk_render_pipeline: wgpu::RenderPipeline,
+    gui_render_pipeline: wgpu::RenderPipeline,
     texture: GPUTexture,
     camera_uniform: CameraUniform,
     camera_buffer: Buffer,
@@ -79,7 +80,11 @@ impl RenderState {
         let texture = GPUTexture::from_image(&device, &queue, &texture_image, Some("main texture"));
         let chunk_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Chunk Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+        });
+        let gui_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("GUI Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gui_shader.wgsl").into()),
         });
         let camera_uniform = CameraUniform::new();
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -163,6 +168,49 @@ impl RenderState {
                 multiview: None,
                 cache: None,
             });
+        let gui_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("GUI Render Pipeline Layout"),
+                bind_group_layouts: &[&texture.texture_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let gui_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("GUI Render Pipeline"),
+            layout: Some(&gui_render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &gui_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gui_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
         Self {
             window,
             surface,
@@ -170,6 +218,7 @@ impl RenderState {
             config,
             size,
             chunk_render_pipeline,
+            gui_render_pipeline,
             texture,
             camera_uniform,
             camera_buffer,
@@ -204,17 +253,9 @@ impl RenderState {
         camera: &ClientPlayer,
         world: &mut ClientWorld,
     ) -> Result<(), wgpu::SurfaceError> {
-        let mut entity_mesh = Mesh {
-            vertices: Vec::new(),
-        };
-        world.tick_client(&self.device, &mut entity_mesh);
-        let entity_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Entity Vertex Buffer"),
-                contents: bytemuck::cast_slice(entity_mesh.vertices.as_slice()),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            });
+        let mut entity_mesh = Mesh::default();
+        let mut gui_mesh = Mesh::default();
+        world.tick_client(&self.device, &mut entity_mesh, &mut gui_mesh);
 
         self.camera_uniform
             .load_view_proj_matrix(camera, self.size.width as f32 / self.size.height as f32);
@@ -274,8 +315,47 @@ impl RenderState {
                 }
             }
             if !entity_mesh.vertices.is_empty() {
+                let entity_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Entity Vertex Buffer"),
+                            contents: bytemuck::cast_slice(entity_mesh.vertices.as_slice()),
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        });
                 render_pass.set_vertex_buffer(0, entity_buffer.slice(..));
                 render_pass.draw(0..entity_mesh.vertices.len() as u32, 0..1);
+            }
+        }
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("GUI Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.gui_render_pipeline);
+            render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
+
+            if !gui_mesh.vertices.is_empty() {
+                let gui_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Entity Vertex Buffer"),
+                            contents: bytemuck::cast_slice(gui_mesh.vertices.as_slice()),
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        });
+                render_pass.set_vertex_buffer(0, gui_buffer.slice(..));
+                render_pass.draw(0..gui_mesh.vertices.len() as u32, 0..1);
             }
         }
 

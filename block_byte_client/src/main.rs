@@ -545,7 +545,7 @@ pub struct ClientWorld {
     pub entities: HashMap<Uuid, ClientEntity>,
 }
 impl ClientWorld {
-    pub fn tick_client(&mut self, device: &Device, entity_mesh: &mut Mesh) {
+    pub fn tick_client(&mut self, device: &Device, entity_mesh: &mut Mesh, gui_mesh: &mut Mesh) {
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
             .modified_chunks
@@ -607,6 +607,7 @@ pub struct ClientChunk {
     pub components: ClientChunkBlockComponents,
     pub buffer: Option<(Buffer, u32)>,
 }
+#[derive(Default)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
 }
