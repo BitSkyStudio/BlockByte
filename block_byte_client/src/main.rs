@@ -12,10 +12,12 @@ use std::{
 use block_byte_common::{
     coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
-    registry::{self, BlockPalette, EntityKey, Registry, TextureData, TextureKey, load_registries},
+    registry::{
+        self, BlockPalette, EntityKey, Key, Registry, TextureData, TextureKey, load_registries,
+    },
     world::ClientChunkBlockComponents,
 };
-use image::RgbaImage;
+use image::{DynamicImage, RgbaImage};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
@@ -29,13 +31,15 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
-use crate::render::{RenderState, Vertex};
+use crate::render::{GUIVertex, RenderState, Vertex};
 
 fn main() {
     load_registries(&Path::new("assets"));
     use block_byte_common::registry::RegistryProvider;
-    let (atlas, image) = TextureAtlas::pack(registry::REGISTRIES.get().unwrap().get_registry());
+    let (atlas, text_renderer, image) =
+        TextureAtlas::pack(registry::REGISTRIES.get().unwrap().get_registry());
     TEXTURE_ATLAS.set(atlas);
+    TEXT_RENDERER.set(text_renderer);
 
     let mut client = RenetClient::new(ConnectionConfig::default());
     let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
@@ -348,8 +352,88 @@ impl ApplicationHandler for App {
 pub struct TextureAtlas {
     textures: Vec<TexCoords>,
 }
+pub struct TextRenderer {
+    font: rusttype::Font<'static>,
+    glyphs: Vec<TexCoords>,
+}
+impl TextRenderer {
+    pub fn get_size(&self, text: &str, size: f32) -> Pos {
+        let layout = self.font.layout(
+            text,
+            rusttype::Scale::uniform(size),
+            rusttype::Point { x: 0., y: 0. },
+        );
+        let glyphs: Vec<_> = layout.collect();
+        let width: f32 = glyphs
+            .iter()
+            .map(|glyph| glyph.unpositioned().h_metrics().advance_width)
+            .sum();
+        let height = glyphs
+            .iter()
+            .map(|glyph| {
+                glyph
+                    .unpositioned()
+                    .exact_bounding_box()
+                    .map(|bb| -bb.min.y + bb.max.y)
+                    .unwrap_or(0.)
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.);
+        Pos {
+            x: width,
+            y: height,
+            z: 0.,
+        }
+    }
+    pub fn draw(&self, position: Pos, text: &str, size: f32, mesh: &mut GUIMesh) {
+        let layout = self.font.layout(
+            text,
+            rusttype::Scale::uniform(size),
+            rusttype::Point { x: 0., y: 0. },
+        );
+        let glyphs: Vec<_> = layout.collect();
+        let width: f32 = glyphs
+            .iter()
+            .map(|glyph| glyph.unpositioned().h_metrics().advance_width)
+            .sum();
+        let height = glyphs
+            .iter()
+            .map(|glyph| {
+                glyph
+                    .unpositioned()
+                    .exact_bounding_box()
+                    .map(|bb| -bb.min.y + bb.max.y)
+                    .unwrap_or(0.)
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.);
+        for glyph in glyphs {
+            if let Some(bb) = glyph.unpositioned().exact_bounding_box() {
+                let bb = rusttype::Rect {
+                    min: rusttype::point(bb.min.x, -bb.max.y),
+                    max: rusttype::point(bb.max.x, -bb.min.y),
+                };
+                let texture = self.glyphs[glyph.id().0 as usize];
+                let size_x = -bb.min.x + bb.max.x;
+                let size_y = -bb.min.y + bb.max.y;
+                let x = glyph.position().x + bb.min.x + position.x;
+                let y = glyph.position().y + bb.min.y + position.y;
+                mesh.add_quad(
+                    Pos { x: x, y: y, z: 0. },
+                    Pos {
+                        x: size_x,
+                        y: size_y,
+                        z: 0.,
+                    },
+                    texture,
+                );
+            }
+        }
+    }
+}
 impl TextureAtlas {
-    pub fn pack(texture_registry: &Registry<TextureData>) -> (Self, RgbaImage) {
+    pub fn pack(texture_registry: &Registry<TextureData>) -> (Self, TextRenderer, RgbaImage) {
+        let texture_count = texture_registry.data_entries().count();
         let mut packer =
             texture_packer::TexturePacker::new_skyline(texture_packer::TexturePackerConfig {
                 max_width: 2048,
@@ -364,6 +448,30 @@ impl TextureAtlas {
         for (i, texture) in texture_registry.data_entries().enumerate() {
             packer.pack_ref(i, &texture.texture).unwrap();
         }
+        let font = rusttype::Font::try_from_vec(std::fs::read("assets/font.ttf").unwrap()).unwrap();
+        {
+            let glyphs: Vec<_> = (0..font.glyph_count())
+                .map(|i| {
+                    font.glyph(rusttype::GlyphId(i as u16))
+                        .scaled(rusttype::Scale::uniform(60.))
+                        .positioned(rusttype::Point { x: 0., y: 0. })
+                })
+                .collect();
+            for (i, g) in glyphs.iter().enumerate() {
+                if let Some(bb) = g.pixel_bounding_box() {
+                    let mut font_texture =
+                        DynamicImage::new_rgba8(bb.width() as u32, bb.height() as u32);
+                    let font_buffer = match &mut font_texture {
+                        DynamicImage::ImageRgba8(buffer) => buffer,
+                        _ => panic!(),
+                    };
+                    g.draw(|x, y, v| {
+                        font_buffer.put_pixel(x, y, image::Rgba([255, 255, 255, (255. * v) as u8]));
+                    });
+                    packer.pack_own(texture_count + i, font_texture).unwrap();
+                }
+            }
+        }
         use texture_packer::exporter::ImageExporter;
         use texture_packer::texture::Texture;
         let exporter = ImageExporter::export(&packer).unwrap();
@@ -372,7 +480,7 @@ impl TextureAtlas {
         }
         (
             TextureAtlas {
-                textures: (0..packer.get_frames().len())
+                textures: (0..texture_count)
                     .map(|i| {
                         let frame = packer.get_frame(&i).unwrap();
                         TexCoords {
@@ -383,6 +491,25 @@ impl TextureAtlas {
                         }
                     })
                     .collect(),
+            },
+            TextRenderer {
+                glyphs: (0..font.glyph_count())
+                    .map(|i| match packer.get_frame(&(i + texture_count)) {
+                        Some(frame) => TexCoords {
+                            u1: frame.frame.x as f32 / packer.width() as f32,
+                            v1: frame.frame.y as f32 / packer.height() as f32,
+                            u2: (frame.frame.x + frame.frame.w) as f32 / packer.width() as f32,
+                            v2: (frame.frame.y + frame.frame.h) as f32 / packer.height() as f32,
+                        },
+                        None => TexCoords {
+                            u1: 0.,
+                            v1: 0.,
+                            u2: 0.,
+                            v2: 0.,
+                        },
+                    })
+                    .collect(),
+                font,
             },
             exporter.to_rgba8(),
         )
@@ -400,6 +527,10 @@ pub struct TexCoords {
     pub v1: f32,
     pub u2: f32,
     pub v2: f32,
+}
+static TEXT_RENDERER: OnceLock<TextRenderer> = OnceLock::new();
+pub fn text_renderer() -> &'static TextRenderer {
+    TEXT_RENDERER.get().unwrap()
 }
 static TEXTURE_ATLAS: OnceLock<TextureAtlas> = OnceLock::new();
 trait TexCoordsExt {
@@ -545,7 +676,12 @@ pub struct ClientWorld {
     pub entities: HashMap<Uuid, ClientEntity>,
 }
 impl ClientWorld {
-    pub fn tick_client(&mut self, device: &Device, entity_mesh: &mut Mesh, gui_mesh: &mut Mesh) {
+    pub fn tick_client(
+        &mut self,
+        device: &Device,
+        entity_mesh: &mut BaseMesh,
+        gui_mesh: &mut GUIMesh,
+    ) {
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
             .modified_chunks
@@ -600,6 +736,9 @@ impl ClientWorld {
 pub struct ClientEntity {
     key: EntityKey,
     position: Pos,
+    //previous_position: Pos,
+    //previous_timestamp: Instant,
+    //current_timestamp: Instant,
 }
 pub struct ClientChunk {
     pub position: ChunkPos,
@@ -607,12 +746,46 @@ pub struct ClientChunk {
     pub components: ClientChunkBlockComponents,
     pub buffer: Option<(Buffer, u32)>,
 }
-#[derive(Default)]
-pub struct Mesh {
-    pub vertices: Vec<Vertex>,
+pub struct Mesh<T> {
+    pub vertices: Vec<T>,
+}
+impl<T> Default for Mesh<T> {
+    fn default() -> Self {
+        Mesh {
+            vertices: Vec::new(),
+        }
+    }
+}
+pub type BaseMesh = Mesh<Vertex>;
+pub type GUIMesh = Mesh<GUIVertex>;
+impl GUIMesh {
+    pub fn add_quad(&mut self, position: Pos, size: Pos, texture: TexCoords) {
+        let a = GUIVertex {
+            position: [position.x, position.y],
+            tex_coords: [texture.u1, texture.v2],
+        };
+        let b = GUIVertex {
+            position: [position.x + size.x, position.y],
+            tex_coords: [texture.u2, texture.v2],
+        };
+        let c = GUIVertex {
+            position: [position.x, position.y + size.y],
+            tex_coords: [texture.u1, texture.v1],
+        };
+        let d = GUIVertex {
+            position: [position.x + size.x, position.y + size.y],
+            tex_coords: [texture.u2, texture.v1],
+        };
+        self.vertices.push(a);
+        self.vertices.push(b);
+        self.vertices.push(d);
+        self.vertices.push(d);
+        self.vertices.push(c);
+        self.vertices.push(a);
+    }
 }
 impl ClientChunk {
-    pub fn rebuild_chunk_mesh(&self, neighbor_chunks: FaceMap<Option<&ClientChunk>>) -> Mesh {
+    pub fn rebuild_chunk_mesh(&self, neighbor_chunks: FaceMap<Option<&ClientChunk>>) -> BaseMesh {
         let mut vertices: Vec<Vertex> = Vec::new();
 
         for x in 0..CHUNK_SIZE {

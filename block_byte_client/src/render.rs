@@ -1,3 +1,5 @@
+use block_byte_common::coord::Vec3;
+use block_byte_common::registry::{Key, TextureData};
 use cgmath::{Matrix4, SquareMatrix};
 use image::RgbaImage;
 use std::f64::consts::PI;
@@ -180,7 +182,7 @@ impl RenderState {
             vertex: wgpu::VertexState {
                 module: &gui_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
+                buffers: &[GUIVertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -256,6 +258,17 @@ impl RenderState {
         let mut entity_mesh = Mesh::default();
         let mut gui_mesh = Mesh::default();
         world.tick_client(&self.device, &mut entity_mesh, &mut gui_mesh);
+
+        {
+            let aspect_ratio = self.size.width as f32 / self.size.height as f32;
+            let crosshair_size = Vec3 {
+                x: 0.02,
+                y: 0.02 * aspect_ratio,
+                z: 0.,
+            };
+            let crosshair_texture = Key::<TextureData>::id("crosshair").unwrap().tex_coords();
+            gui_mesh.add_quad(-crosshair_size / 2., crosshair_size, crosshair_texture);
+        }
 
         self.camera_uniform
             .load_view_proj_matrix(camera, self.size.width as f32 / self.size.height as f32);
@@ -395,6 +408,27 @@ impl Vertex {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GUIVertex {
+    pub position: [f32; 2],
+    pub tex_coords: [f32; 2],
+}
+impl GUIVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
@@ -425,7 +459,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::{ClientPlayer, ClientWorld, Mesh};
+use crate::{ClientPlayer, ClientWorld, Mesh, TexCoordsExt};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,
