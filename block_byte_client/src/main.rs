@@ -10,10 +10,11 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::{BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{
-        self, BlockPalette, EntityKey, Key, Registry, TextureData, TextureKey, load_registries,
+        self, BlockPalette, BlockRenderData, EntityKey, Key, Registry, TextureData, TextureKey,
+        load_registries,
     },
     world::ClientChunkBlockComponents,
 };
@@ -714,6 +715,29 @@ impl ClientWorld {
                 ))
             };
         }
+        let crack_texture = Key::<TextureData>::id("block_damage.0")
+            .unwrap()
+            .tex_coords();
+        for (chunk_position, chunk) in &self.chunks {
+            for (offset, damage) in &chunk.components.damage.components {
+                let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
+                for face in Face::all() {
+                    ClientChunk::add_vertices(*face, crack_texture, |position, coords| {
+                        let border = 0.01;
+                        let vt_pos = base_position + position * (1. + border * 2.)
+                            - Pos {
+                                x: border,
+                                y: border,
+                                z: border,
+                            };
+                        entity_mesh.vertices.push(Vertex {
+                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
+                            tex_coords: [coords.0, coords.1],
+                        });
+                    });
+                }
+            }
+        }
     }
     pub fn tick_server(&mut self, dt: f32) {
         for (_, chunk) in &mut self.chunks {
@@ -823,8 +847,8 @@ impl ClientChunk {
                                         .unwrap()
                                         .data();
                                     match &neighbor_block_data.render_data {
-                                        registry::BlockRenderData::Air => {}
-                                        registry::BlockRenderData::Full { faces } => {
+                                        BlockRenderData::Air => {}
+                                        BlockRenderData::Full { faces } => {
                                             continue;
                                         }
                                     }
