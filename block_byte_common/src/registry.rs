@@ -231,7 +231,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant);
 
 impl<T> Key<T>
 where
@@ -255,6 +255,7 @@ impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
 #[derive(Deserialize)]
 pub struct ItemData {
     place: Option<BlockKey>,
+    stack_size: u16,
 }
 pub type ItemKey = Key<ItemData>;
 
@@ -281,6 +282,8 @@ pub struct BlockData {
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
     pub selection: Vec<crate::coord::AABB<f32>>,
+    #[serde(default)]
+    pub plantable: bool,
 }
 #[derive(Deserialize)]
 pub struct BlockHealthData {
@@ -311,5 +314,14 @@ impl RegistryConfigLoadable for TextureData {
 }
 
 #[derive(Deserialize)]
-pub struct EntityData {}
-pub type EntityKey = Key<BlockData>;
+pub struct EntityData {
+    pub inventory_size: usize,
+}
+pub type EntityKey = Key<EntityData>;
+
+#[derive(Deserialize)]
+pub struct PlantData {
+    #[cfg(feature = "client")]
+    pub texture: TextureKey,
+}
+pub type PlantKey = Key<PlantData>;

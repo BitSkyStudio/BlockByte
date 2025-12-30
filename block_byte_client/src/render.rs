@@ -254,10 +254,21 @@ impl RenderState {
         &mut self,
         camera: &ClientPlayer,
         world: &mut ClientWorld,
+        dt: f32,
     ) -> Result<(), wgpu::SurfaceError> {
         let mut entity_mesh = Mesh::default();
         let mut gui_mesh = Mesh::default();
         world.tick_client(&self.device, &mut entity_mesh, &mut gui_mesh);
+        text_renderer().draw(
+            Vec3 {
+                x: -0.9,
+                y: 0.9,
+                z: 0.,
+            },
+            &format!("{:?} {}", world.player_position, 1. / dt),
+            0.05,
+            &mut gui_mesh,
+        );
 
         {
             let aspect_ratio = self.size.width as f32 / self.size.height as f32;
@@ -459,7 +470,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::{ClientPlayer, ClientWorld, Mesh, TexCoordsExt};
+use crate::{ClientPlayer, ClientWorld, Mesh, TexCoordsExt, text_renderer};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,

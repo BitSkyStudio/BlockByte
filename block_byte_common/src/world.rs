@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::coord::ChunkOffset;
+use crate::{coord::ChunkOffset, registry::PlantKey};
 
 #[derive(Serialize, Deserialize)]
 pub struct BlockComponentStorage<T> {
@@ -74,12 +74,17 @@ macro_rules! create_chunk_block_components{
         #[cfg(feature="server")]
         pub struct ChunkBlockComponents{
             #[serde(skip_serializing_if = "skip_serializing_component_storage_rwlock")]
-            pub $($id: parking_lot::RwLock<BlockComponentStorage<$type>>,)*
+            $(pub $id: parking_lot::RwLock<BlockComponentStorage<$type>>,)*
         }
         #[derive(Serialize, Deserialize)]
         pub struct ClientChunkBlockComponents{
             //#[serde(skip_serializing_if = "skip_serializing_component_storage")]
-            pub $($id: BlockComponentStorage<$ctype>,)*
+            $(pub $id: BlockComponentStorage<$ctype>,)*
+        }
+        impl ClientChunkBlockComponents{
+            pub fn remove_block(&mut self, offset: ChunkOffset){
+                $(self.$id.remove(offset);)*
+            }
         }
         #[cfg(feature="server")]
         impl ChunkBlockComponents{
@@ -112,7 +117,7 @@ macro_rules! create_chunk_block_components{
     }
 }
 
-create_chunk_block_components!(BlockDamage, ClientBlockDamage, damage);
+create_chunk_block_components!(BlockDamage, ClientBlockDamage, damage; BlockPlants, ClientBlockPlants, plant);
 
 pub trait ComponentClientFromServer<T> {
     fn from_server(server: &T) -> Self;
@@ -137,5 +142,20 @@ impl ComponentClientFromServer<BlockDamage> for ClientBlockDamage {
 impl<T> ComponentClientFromServer<T> for () {
     fn from_server(server: &T) -> Self {
         ()
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub struct BlockPlants {
+    pub plants: Vec<(PlantKey, f32)>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct ClientBlockPlants {
+    pub plants: Vec<PlantKey>,
+}
+impl ComponentClientFromServer<BlockPlants> for ClientBlockPlants {
+    fn from_server(server: &BlockPlants) -> Self {
+        ClientBlockPlants {
+            plants: server.plants.iter().map(|(plant, _)| *plant).collect(),
+        }
     }
 }

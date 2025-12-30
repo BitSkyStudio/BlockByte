@@ -1,3 +1,4 @@
 (
     place: Some("nature.grass"),
+    stack_size: 20,
 )

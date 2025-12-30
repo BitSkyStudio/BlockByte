@@ -9,8 +9,8 @@ use block_byte_common::{
     net::NetworkMessageS2C,
     registry::{BlockData, BlockKey, BlockPalette, EntityKey},
     world::{
-        BlockDamage, ChunkBlockComponents, ClientBlockComponentUpdate, ClientBlockDamage,
-        ComponentClientFromServer,
+        BlockDamage, BlockPlants, ChunkBlockComponents, ClientBlockComponentUpdate,
+        ClientBlockDamage, ComponentClientFromServer,
     },
 };
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     Server, UserIndex,
+    inventory::Inventory,
     registry::{Key, RegistryConfigLoadable},
 };
 pub struct Chunk {
@@ -40,13 +41,22 @@ impl Chunk {
             air,
             CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize,
         );
+        let mut components = ChunkBlockComponents::default();
         for z in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
                 for x in 0..CHUNK_SIZE {
                     let offset = ChunkOffset::new(x, y, z);
                     let block_pos = position.to_block_pos() + offset.xyz();
-                    if block_pos.y < 45 + ((block_pos.x + block_pos.z).abs() as i32 % 10 - 5).abs()
-                    {
+                    let height = 45 + ((block_pos.x + block_pos.z).abs() as i32 % 10 - 5).abs();
+                    if block_pos.y == height {
+                        blocks.set(offset.index(), &grass);
+                        components.plant.write().set(
+                            offset,
+                            BlockPlants {
+                                plants: vec![(Key::id("grass").unwrap(), 0.)],
+                            },
+                        );
+                    } else if block_pos.y < height {
                         blocks.set(offset.index(), &grass);
                     }
                 }
@@ -58,7 +68,7 @@ impl Chunk {
             blocks: RwLock::new(blocks),
             viewers: HashSet::new(),
             block_events: Mutex::new(Vec::new()),
-            components: ChunkBlockComponents::default(),
+            components,
             entities: Vec::new(),
         }
     }
@@ -68,8 +78,8 @@ impl Chunk {
         for (block, event) in processing_events {
             match event {
                 BlockEvent::Damage { damage } => {
-                    let health = &self.blocks.read().get(block.index()).unwrap().data().health;
-                    if let Some(health) = health {
+                    let block_data = &self.blocks.read().get(block.index()).unwrap().data();
+                    if let Some(health) = &block_data.health {
                         let mut damage_component = self.components.damage.write();
                         let mut destroy = false;
 
@@ -86,6 +96,9 @@ impl Chunk {
                         if destroy {
                             damage_component.remove(block);
                             self.blocks.write().set(block.index(), &air_block());
+                            if block_data.plantable {
+                                self.components.plant.write().remove(block);
+                            }
                             server.send_message_multiple(
                                 self.viewers.iter(),
                                 NetworkMessageS2C::SetBlock {
@@ -138,15 +151,18 @@ pub struct Entity {
     pub position: Pos,
     pub teleport: Mutex<Option<Pos>>,
     pub removed: AtomicBool,
+    pub inventory: RwLock<Inventory>,
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
+        let entity_data = key.data();
         Entity {
             key,
             uuid: Uuid::new_v4(),
             position,
             teleport: Mutex::new(None),
             removed: AtomicBool::new(false),
+            inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
         }
     }
 }

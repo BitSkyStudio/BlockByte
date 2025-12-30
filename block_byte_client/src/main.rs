@@ -211,7 +211,7 @@ impl ApplicationHandler for App {
 
                 // Draw.
                 let render_state = self.render_state.as_mut().unwrap();
-                match render_state.render(&self.camera, &mut self.world) {
+                match render_state.render(&self.camera, &mut self.world, dt) {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                         render_state.resize(render_state.size())
@@ -236,6 +236,7 @@ impl ApplicationHandler for App {
                 }
                 if self.network_client.is_connected() {
                     self.camera.update_position(&self.keys, dt, &self.world);
+                    self.world.player_position = self.camera.position;
                     self.send_message(NetworkMessageC2S::PlayerPosition {
                         position: self.camera.position,
                     });
@@ -276,12 +277,11 @@ impl ApplicationHandler for App {
                             }
                             NetworkMessageS2C::SetBlock { position, block } => {
                                 let (chunk, offset) = position.to_chunk_pos_offset();
-                                self.world
-                                    .chunks
-                                    .get_mut(&chunk)
-                                    .unwrap()
-                                    .blocks
-                                    .set(offset.index(), &block);
+                                {
+                                    let chunk = self.world.chunks.get_mut(&chunk).unwrap();
+                                    chunk.blocks.set(offset.index(), &block);
+                                    chunk.components.remove_block(offset);
+                                }
                                 self.world.modified_chunks.insert(chunk);
                                 let offset_xyz = offset.xyz();
                                 for face in Face::all() {
@@ -670,11 +670,25 @@ impl ClientPlayer {
         cgmath::perspective(cgmath::Deg(90.), aspect, 0.05, 500.)
     }
 }
-#[derive(Default)]
 pub struct ClientWorld {
+    pub player_position: Pos,
     pub chunks: HashMap<ChunkPos, ClientChunk>,
     pub modified_chunks: HashSet<ChunkPos>,
     pub entities: HashMap<Uuid, ClientEntity>,
+}
+impl Default for ClientWorld {
+    fn default() -> Self {
+        Self {
+            player_position: Pos {
+                x: 0.,
+                y: 0.,
+                z: 0.,
+            },
+            chunks: Default::default(),
+            modified_chunks: Default::default(),
+            entities: Default::default(),
+        }
+    }
 }
 impl ClientWorld {
     pub fn tick_client(
@@ -718,23 +732,73 @@ impl ClientWorld {
         let crack_texture = Key::<TextureData>::id("block_damage.0")
             .unwrap()
             .tex_coords();
-        for (chunk_position, chunk) in &self.chunks {
-            for (offset, damage) in &chunk.components.damage.components {
-                let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
-                for face in Face::all() {
-                    ClientChunk::add_vertices(*face, crack_texture, |position, coords| {
-                        let border = 0.01;
-                        let vt_pos = base_position + position * (1. + border * 2.)
-                            - Pos {
-                                x: border,
-                                y: border,
-                                z: border,
-                            };
-                        entity_mesh.vertices.push(Vertex {
-                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
-                            tex_coords: [coords.0, coords.1],
+        let player_chunk = self.player_position.to_chunk_pos();
+        for chunk_position in AABB::new(
+            Vec3 {
+                x: player_chunk.x - 1,
+                y: player_chunk.y - 1,
+                z: player_chunk.z - 1,
+            },
+            Vec3 {
+                x: player_chunk.x + 1,
+                y: player_chunk.y + 1,
+                z: player_chunk.z + 1,
+            },
+        ) {
+            if let Some(chunk) = self.chunks.get(&chunk_position) {
+                for (offset, damage) in &chunk.components.damage.components {
+                    let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
+                    if base_position.distance_squared(self.player_position)
+                        > CHUNK_SIZE as f32 * CHUNK_SIZE as f32
+                    {
+                        continue;
+                    }
+                    for face in Face::all() {
+                        ClientChunk::add_vertices(*face, crack_texture, |position, coords| {
+                            let border = 0.01;
+                            let vt_pos = base_position + position * (1. + border * 2.)
+                                - Pos {
+                                    x: border,
+                                    y: border,
+                                    z: border,
+                                };
+                            entity_mesh.vertices.push(Vertex {
+                                position: [vt_pos.x, vt_pos.y, vt_pos.z],
+                                tex_coords: [coords.0, coords.1],
+                            });
                         });
-                    });
+                    }
+                }
+                for (offset, plants) in &chunk.components.plant.components {
+                    let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
+                    if base_position.distance_squared(self.player_position)
+                        > CHUNK_SIZE as f32 * CHUNK_SIZE as f32
+                    {
+                        continue;
+                    }
+                    for plant in &plants.plants {
+                        let plant = plant.data();
+                        for shift in [0., 1.] {
+                            for face in [Face::Front, Face::Back] {
+                                ClientChunk::add_vertices(
+                                    face,
+                                    plant.texture.tex_coords(),
+                                    |position, coords| {
+                                        let vt_pos = base_position
+                                            + Pos {
+                                                x: (shift - position.x).abs(),
+                                                y: position.y + 1.,
+                                                z: (1. - position.x).abs(),
+                                            };
+                                        entity_mesh.vertices.push(Vertex {
+                                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
+                                            tex_coords: [coords.0, coords.1],
+                                        });
+                                    },
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }

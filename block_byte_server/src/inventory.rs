@@ -6,10 +6,12 @@ use smallvec::SmallVec;
 
 use crate::registry::{Key, RegistryConfigLoadable};
 
+pub type ItemCount = u16;
+
 #[derive(Clone)]
 pub struct ItemStack {
     pub item: ItemKey,
-    pub count: u16,
+    pub count: ItemCount,
     pub components: SmallVec<[ItemComponent; 4]>,
 }
 impl ItemStack {
@@ -99,6 +101,16 @@ impl ItemStack {
             .find(|(_, c)| c.is_component())
             .map(|(i, _)| i)
     }
+    pub fn copy(&self, new_count: ItemCount) -> ItemStack {
+        ItemStack {
+            item: self.item,
+            count: new_count,
+            components: self.components.clone(),
+        }
+    }
+    pub fn merge(&self, other: &ItemStack) -> Option<(ItemStack, ItemCount)> {
+        unimplemented!()
+    }
 }
 
 macro_rules! create_component_enum{
@@ -141,8 +153,53 @@ macro_rules! create_component_enum{
 
 create_component_enum!(ItemDurability, ItemMana);
 
+/*pub trait ItemComponentMerge {
+    pub fn merge(
+        &self,
+        self_count: ItemCount,
+        other: Option<&Self>,
+        other_count: ItemCount,
+    ) -> Option<Self>;
+}*/
+
 #[derive(Clone)]
 pub struct ItemDurability(pub f32);
 
 #[derive(Clone)]
 pub struct ItemMana(pub f32);
+
+pub struct Inventory {
+    pub items: Box<[Option<ItemStack>]>,
+}
+impl Inventory {
+    pub fn new(size: usize) -> Inventory {
+        Inventory {
+            items: (0..size)
+                .map(|_| None)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        }
+    }
+}
+
+pub struct InventoryView<'a> {
+    slots: Vec<usize>,
+    inventory: &'a mut Inventory,
+}
+impl InventoryView<'_> {
+    pub fn size(&self) -> usize {
+        self.slots.len()
+    }
+    pub fn get_slot(&self, slot: usize) -> Option<&ItemStack> {
+        self.inventory.items[*self.slots.get(slot)?].as_ref()
+    }
+    pub fn set_slot(&mut self, slot: usize, item: Option<ItemStack>) -> Result<(), ()> {
+        match self.slots.get(slot) {
+            Some(slot) => {
+                self.inventory.items[*slot] = item;
+                Ok(())
+            }
+            None => Err(()),
+        }
+    }
+}

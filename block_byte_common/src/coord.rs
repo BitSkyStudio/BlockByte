@@ -70,7 +70,7 @@ impl<T: Debug + Copy> Debug for Vec3<T> {
 }
 impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Vec3<T> {
     pub fn length_squared(self) -> T {
-        (self.x * self.y) + (self.y * self.y) + (self.z * self.z)
+        (self.x * self.x) + (self.y * self.y) + (self.z * self.z)
     }
     pub fn distance_squared(self, other: Self) -> T {
         (self - other).length_squared()

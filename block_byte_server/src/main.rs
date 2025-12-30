@@ -405,7 +405,7 @@ pub struct User {
 impl User {
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
         let distance = 8;
-        let world_height = 8;
+        let world_height = 4;
         AABB {
             min: ChunkPos {
                 x: view_position.x - distance,
