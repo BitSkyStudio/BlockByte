@@ -28,7 +28,9 @@ pub struct RenderState {
     texture: GPUTexture,
     camera_uniform: CameraUniform,
     camera_buffer: Buffer,
+    gui_camera_buffer: Buffer,
     camera_bind_group: wgpu::BindGroup,
+    gui_camera_bind_group: wgpu::BindGroup,
     depth_texture: (wgpu::Texture, Sampler, TextureView),
 }
 
@@ -94,6 +96,11 @@ impl RenderState {
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let gui_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("GUI Camera Buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -115,6 +122,14 @@ impl RenderState {
                 resource: camera_buffer.as_entire_binding(),
             }],
             label: Some("camera_bind_group"),
+        });
+        let gui_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: gui_camera_buffer.as_entire_binding(),
+            }],
+            label: Some("gui_camera_bind_group"),
         });
         let depth_texture = create_depth_texture(&device, &config, "depth_texture");
         let chunk_render_pipeline_layout =
@@ -173,7 +188,10 @@ impl RenderState {
         let gui_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("GUI Render Pipeline Layout"),
-                bind_group_layouts: &[&texture.texture_bind_group_layout],
+                bind_group_layouts: &[
+                    &texture.texture_bind_group_layout,
+                    &camera_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
         let gui_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -225,8 +243,10 @@ impl RenderState {
             camera_uniform,
             camera_buffer,
             camera_bind_group,
+            gui_camera_bind_group,
             depth_texture,
             device,
+            gui_camera_buffer,
         }
     }
 
@@ -259,9 +279,10 @@ impl RenderState {
         let mut entity_mesh = Mesh::default();
         let mut gui_mesh = Mesh::default();
         world.tick_client(&self.device, &mut entity_mesh, &mut gui_mesh);
+        let aspect_ratio = self.size.width as f32 / self.size.height as f32;
         text_renderer().draw(
             Vec3 {
-                x: -0.9,
+                x: -aspect_ratio + 0.1,
                 y: 0.9,
                 z: 0.,
             },
@@ -271,10 +292,9 @@ impl RenderState {
         );
 
         {
-            let aspect_ratio = self.size.width as f32 / self.size.height as f32;
             let crosshair_size = Vec3 {
                 x: 0.02,
-                y: 0.02 * aspect_ratio,
+                y: 0.02,
                 z: 0.,
             };
             let crosshair_texture = Key::<TextureData>::id("crosshair").unwrap().tex_coords();
@@ -285,6 +305,14 @@ impl RenderState {
             .load_view_proj_matrix(camera, self.size.width as f32 / self.size.height as f32);
         self.queue.write_buffer(
             &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
+
+        self.camera_uniform
+            .load_gui_matrix(self.size.height as f32 / self.size.width as f32);
+        self.queue.write_buffer(
+            &self.gui_camera_buffer,
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
@@ -369,6 +397,7 @@ impl RenderState {
             });
             render_pass.set_pipeline(&self.gui_render_pipeline);
             render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.gui_camera_bind_group, &[]);
 
             if !gui_mesh.vertices.is_empty() {
                 let gui_buffer =
@@ -454,6 +483,17 @@ impl CameraUniform {
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
             * ClientPlayer::create_projection_matrix(aspect_ratio)
             * camera.create_view_matrix())
+        .into();
+    }
+    #[rustfmt::skip]
+    fn load_gui_matrix(&mut self, aspect_ratio: f32) {
+        self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
+            * cgmath::Matrix4::new(
+                aspect_ratio, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ))
         .into();
     }
     #[rustfmt::skip]
