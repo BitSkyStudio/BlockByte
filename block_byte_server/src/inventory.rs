@@ -1,14 +1,14 @@
 use std::path::Path;
 
 use block_byte_common::registry::ItemKey;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::registry::{Key, RegistryConfigLoadable};
 
 pub type ItemCount = u16;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ItemStack {
     pub item: ItemKey,
     pub count: ItemCount,
@@ -115,7 +115,7 @@ impl ItemStack {
 
 macro_rules! create_component_enum{
     ($($type:tt),*) => {
-        #[derive(Clone)]
+        #[derive(Clone, Serialize, Deserialize)]
         pub enum ItemComponent{
             $($type($type),)*
         }
@@ -162,12 +162,13 @@ create_component_enum!(ItemDurability, ItemMana);
     ) -> Option<Self>;
 }*/
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ItemDurability(pub f32);
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ItemMana(pub f32);
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Inventory {
     pub items: Box<[Option<ItemStack>]>,
 }

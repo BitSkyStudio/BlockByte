@@ -123,7 +123,8 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                println!("Close was requested; stopping");
+                self.network_client.disconnect();
+                self.network_transport.disconnect();
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
@@ -227,7 +228,7 @@ impl ApplicationHandler for App {
                     .unwrap()
                     .window()
                     .request_redraw();
-                {
+                if !self.network_client.is_disconnected() {
                     let delta_time_duration = Duration::from_secs_f32(dt);
                     self.network_client.update(delta_time_duration);
                     self.network_transport

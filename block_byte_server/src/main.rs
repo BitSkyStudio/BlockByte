@@ -12,8 +12,10 @@ use block_byte_common::{
     registry::{self, BlockData, BlockKey, load_registries},
 };
 use palettevec::PaletteVec;
-use parking_lot::Mutex;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use parking_lot::{Mutex, RwLock};
+use rayon::iter::{
+    IntoParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator,
+};
 use renet::{ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use serde::Deserialize;
@@ -22,7 +24,7 @@ use slotmap::{SlotMap, new_key_type};
 use crate::{
     inventory::{ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
-    world::{BlockEvent, Chunk, Entity, EntityIndex, air_block},
+    world::{BlockEvent, Chunk, ChunkSaveData, Entity, EntityIndex, air_block},
 };
 
 mod inventory;
@@ -44,6 +46,30 @@ fn main() {
     };
     let mut network_transport =
         NetcodeServerTransport::new(network_server_config, network_socket).unwrap();
+
+    let database_path = Path::new("save.db3");
+    let database = rusqlite::Connection::open(database_path).unwrap();
+    {
+        database.execute(
+            "CREATE TABLE `chunks` (
+            `x` INTEGER, `y` INTEGER, `z` INTEGER,
+            `data` BLOB NOT NULL,
+            PRIMARY KEY (`x`, `z`, `y`)
+        )",
+            (),
+        );
+        /*database
+        .execute(
+            "CREATE TABLE `structure_placement` (
+            `chunk_x` INTEGER, `chunk_y` INTEGER, `chunk_z` INTEGER,
+            `x` INTEGER, `y` INTEGER, `z` INTEGER,
+            `structure_id` STRING, 'seed' INTEGER
+        )",
+            (),
+        )
+        .unwrap();*/
+    }
+    let database = Mutex::new(database);
 
     let mut server = Server {
         ticks_passed: 0,
@@ -72,6 +98,7 @@ fn main() {
                     let user = server.users.insert(User {
                         client_id,
                         view_position: Mutex::new(ChunkPos { x: 0, y: 0, z: 0 }),
+                        entity: None,
                     });
                     net_users.insert(client_id, user);
                     for chunk_position in
@@ -224,7 +251,7 @@ fn main() {
             //todo: possible duplication(teleport to another chunk + unload at the same tick)
         });
 
-        chunk_viewing_manager.manage(&mut server);
+        chunk_viewing_manager.manage(&mut server, &database);
 
         for (user, message) in server.message_queue.0.get_mut().drain(..) {
             network_server.send_message(user, DefaultChannel::ReliableOrdered, message);
@@ -372,18 +399,93 @@ impl ChunkViewingManager {
         }
         server.send_message(user, NetworkMessageS2C::UnloadChunk { position });
     }
-    pub fn manage(self, server: &mut Server) {
-        for position in self.unload {
-            server.chunks.remove(&position);
-        }
+    pub fn manage(self, server: &mut Server, db: &Mutex<rusqlite::Connection>) {
         use rayon::iter::ParallelIterator;
-        for (position, users, mut chunk) in self
+
+        let unloads = self
+            .unload
+            .iter()
+            .map(|position| {
+                let chunk = server.chunks.remove(&position).unwrap();
+                (
+                    position,
+                    ChunkSaveData {
+                        blocks: chunk.blocks.into_inner(),
+                        block_events: chunk.block_events.into_inner(),
+                        components: chunk.components,
+                        entities: chunk
+                            .entities
+                            .into_iter()
+                            .filter_map(|entity| {
+                                let entity = server.entities.remove(entity)?;
+                                if entity.removed.load(std::sync::atomic::Ordering::Relaxed) {
+                                    return None;
+                                }
+                                Some(entity)
+                            })
+                            .collect(),
+                    },
+                )
+            })
+            .par_bridge()
+            .map(|(position, data)| {
+                let chunk_data = serde_cbor::to_vec(&data).unwrap();
+                (position, chunk_data)
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut db = db.lock();
+            let transaction = db.transaction().unwrap();
+            let mut statement = transaction
+                .prepare_cached("REPLACE INTO chunks (x,y,z,data) VALUES (?1,?2,?3,?4)")
+                .unwrap();
+            for (position, chunk_data) in unloads {
+                statement
+                    .execute((position.x, position.y, position.z, chunk_data))
+                    .unwrap();
+            }
+            drop(statement);
+            transaction.commit().unwrap();
+        }
+        for (position, users, (mut chunk, entities)) in self
             .load
             .into_par_iter()
-            .map(|(position, users)| (position, users, Chunk::generate(position)))
+            .map(|(position, users)| {
+                let db = db.lock();
+                let mut stmt = db
+                    .prepare_cached("SELECT data FROM chunks WHERE x=?1 and y=?2 and z=?3")
+                    .unwrap();
+                let data = stmt
+                    .query_row((position.x, position.y, position.z), |row| {
+                        row.get::<_, Vec<u8>>(0)
+                    })
+                    .ok();
+                let chunk = match data {
+                    Some(data) => {
+                        let data: ChunkSaveData = serde_cbor::from_slice(data.as_slice()).unwrap();
+                        (
+                            Chunk {
+                                blocks: RwLock::new(data.blocks),
+                                block_events: Mutex::new(data.block_events),
+                                components: data.components,
+                                position,
+                                viewers: HashSet::new(),
+                                entities: Vec::new(),
+                            },
+                            data.entities,
+                        )
+                    }
+                    None => (Chunk::generate(position), Vec::new()),
+                };
+                (position, users, chunk)
+            })
             .collect::<Vec<_>>()
         {
             chunk.viewers = users.iter().cloned().collect();
+            for entity in entities {
+                server.send_message_multiple(users.iter(), entity.create_add_message());
+                chunk.entities.push(server.entities.insert(entity));
+            }
             server.send_message_multiple(
                 users.iter(),
                 NetworkMessageS2C::LoadChunk {
@@ -401,6 +503,7 @@ new_key_type! {pub struct UserIndex;}
 pub struct User {
     client_id: ClientId,
     view_position: Mutex<ChunkPos>,
+    entity: Option<EntityIndex>,
 }
 impl User {
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {

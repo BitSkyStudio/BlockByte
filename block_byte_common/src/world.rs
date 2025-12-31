@@ -73,8 +73,10 @@ macro_rules! create_chunk_block_components{
         #[derive(Default, Serialize, Deserialize)]
         #[cfg(feature="server")]
         pub struct ChunkBlockComponents{
-            #[serde(skip_serializing_if = "skip_serializing_component_storage_rwlock")]
-            $(pub $id: parking_lot::RwLock<BlockComponentStorage<$type>>,)*
+            $(
+                #[serde(skip_serializing_if = "skip_serializing_component_storage_rwlock", default)]
+                pub $id: parking_lot::RwLock<BlockComponentStorage<$type>>,
+            )*
         }
         #[derive(Serialize, Deserialize)]
         pub struct ClientChunkBlockComponents{

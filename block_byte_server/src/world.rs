@@ -15,7 +15,7 @@ use block_byte_common::{
 };
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
 use parking_lot::{Mutex, RwLock};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use slotmap::new_key_type;
 use uuid::Uuid;
 
@@ -24,6 +24,13 @@ use crate::{
     inventory::Inventory,
     registry::{Key, RegistryConfigLoadable},
 };
+#[derive(Serialize, Deserialize)]
+pub struct ChunkSaveData {
+    pub blocks: BlockPalette,
+    pub block_events: Vec<(ChunkOffset, BlockEvent)>,
+    pub components: ChunkBlockComponents,
+    pub entities: Vec<Entity>,
+}
 pub struct Chunk {
     pub position: ChunkPos,
     pub blocks: RwLock<BlockPalette>,
@@ -135,6 +142,7 @@ impl Chunk {
         }
     }
 }
+#[derive(Serialize, Deserialize)]
 pub enum BlockEvent {
     Damage { damage: f32 },
 }
@@ -145,6 +153,7 @@ pub fn air_block() -> BlockKey {
 }
 
 new_key_type! {pub struct EntityIndex;}
+#[derive(Serialize, Deserialize)]
 pub struct Entity {
     pub key: EntityKey,
     pub uuid: Uuid,
