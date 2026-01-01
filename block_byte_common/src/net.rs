@@ -49,4 +49,10 @@ pub enum NetworkMessageS2C {
     RemoveEntity {
         uuid: Uuid,
     },
+    SetPlayerEntity {
+        uuid: Option<Uuid>,
+    },
+    TeleportPlayer {
+        position: Pos,
+    },
 }

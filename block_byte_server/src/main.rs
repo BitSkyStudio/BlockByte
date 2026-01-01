@@ -7,7 +7,7 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{self, BlockData, BlockKey, load_registries},
 };
@@ -82,6 +82,7 @@ fn main() {
     };
     let start_time = Instant::now();
     let mut net_users = HashMap::new();
+    let mut player_spawns = Vec::new();
     loop {
         {
             let delta_time = Duration::from_millis(1000 / server.tps as u64); //probably make it smarter
@@ -90,31 +91,74 @@ fn main() {
                 .update(delta_time, &mut network_server)
                 .unwrap();
         }
+        for (user, spawn_position) in player_spawns.drain(..) {
+            let entity = Entity::new(Key::id("player").unwrap(), spawn_position);
+            let player_uuid = entity.uuid;
+            let add_message = entity.create_add_message();
+            let chunk_position = entity.position.to_chunk_pos();
+            let entity_index = server.entities.insert(entity);
+            let mut chunk = server.chunks.get_mut(&chunk_position).unwrap();
+            chunk.entities.push(entity_index);
+            server
+                .message_queue
+                .send_message(chunk.viewers.iter(), add_message, &server.users);
+            server.users.get_mut(user).unwrap().entity = Some(entity_index);
+            server.send_message(
+                user,
+                NetworkMessageS2C::TeleportPlayer {
+                    position: spawn_position,
+                },
+            );
+            server.send_message(
+                user,
+                NetworkMessageS2C::SetPlayerEntity {
+                    uuid: Some(player_uuid),
+                },
+            );
+        }
         let mut chunk_viewing_manager = ChunkViewingManager::new();
         while let Some(event) = network_server.get_event() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
                     println!("Client {client_id} connected");
+                    let spawn_position = Pos {
+                        x: 0.,
+                        y: 0.,
+                        z: 0.,
+                    };
                     let user = server.users.insert(User {
                         client_id,
-                        view_position: Mutex::new(ChunkPos { x: 0, y: 0, z: 0 }),
+                        view_position: Mutex::new(spawn_position.to_chunk_pos()),
                         entity: None,
                     });
+                    player_spawns.push((user, spawn_position));
                     net_users.insert(client_id, user);
                     for chunk_position in
-                        User::loading_area_for_view_position(ChunkPos { x: 0, y: 0, z: 0 })
+                        User::loading_area_for_view_position(spawn_position.to_chunk_pos())
                     {
                         chunk_viewing_manager.add_viewer(chunk_position, user, &mut server);
                     }
                 }
                 ServerEvent::ClientDisconnected { client_id, reason } => {
                     println!("Client {client_id} disconnected: {reason}");
-                    let user = net_users.remove(&client_id).unwrap();
-                    let view_position = *server.users.get(user).unwrap().view_position.lock();
+                    let user_index = net_users.remove(&client_id).unwrap();
+                    let user = server.users.remove(user_index).unwrap();
+                    let view_position = *user.view_position.lock();
                     for chunk_position in User::loading_area_for_view_position(view_position) {
-                        chunk_viewing_manager.remove_viewer(chunk_position, user, &mut server);
+                        chunk_viewing_manager.remove_viewer(
+                            chunk_position,
+                            user_index,
+                            &mut server,
+                        );
                     }
-                    server.users.remove(user);
+                    if let Some(entity) = user.entity {
+                        server
+                            .entities
+                            .get(entity)
+                            .unwrap()
+                            .removed
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
             }
         }
@@ -139,6 +183,9 @@ fn main() {
                                     .insert(user_id, (view_position, chunk_position));
                             }
                             *user.view_position.lock() = chunk_position;
+                        }
+                        if let Some(entity) = user.entity {
+                            *server.entities.get(entity).unwrap().teleport.lock() = Some(position);
                         }
                     }
                     NetworkMessageC2S::AttackBlock { position } => {
@@ -185,7 +232,6 @@ fn main() {
 
         server.entities.retain(|index, entity| {
             if let Some(teleport) = entity.teleport.lock().take() {
-                //todo: check if chunk loaded, maybe should be done on calling site?
                 if server.chunks.contains_key(&teleport.to_chunk_pos()) {
                     if entity.position.to_chunk_pos() != teleport.to_chunk_pos() {
                         let [previous_chunk, new_chunk] = server
@@ -226,14 +272,10 @@ fn main() {
                             &server.users,
                         );
                     }
-                } else {
-                    println!("invalid teleport");
                 }
             }
-            if !server.chunks.contains_key(&entity.position.to_chunk_pos()) {
-                return true;
-            }
-            if !entity.removed.load(std::sync::atomic::Ordering::Relaxed) {
+            let removed = entity.removed.load(std::sync::atomic::Ordering::Relaxed);
+            if removed {
                 server.message_queue.send_message(
                     server
                         .chunks
@@ -244,11 +286,8 @@ fn main() {
                     entity.create_remove_message(),
                     &server.users,
                 );
-                true
-            } else {
-                false
             }
-            //todo: possible duplication(teleport to another chunk + unload at the same tick)
+            !removed
         });
 
         chunk_viewing_manager.manage(&mut server, &database);
@@ -386,6 +425,14 @@ impl ChunkViewingManager {
                 blocks: chunk.blocks.read().clone(),
                 components: chunk.components.client(),
             };
+            for entity in &chunk.entities {
+                let add_message = server.entities.get(*entity).unwrap().create_add_message();
+                server.message_queue.send_message(
+                    std::iter::once(user),
+                    add_message,
+                    &server.users,
+                );
+            }
             server.send_message(user, message);
         } else {
             self.load.entry(position).or_default().push(user);
@@ -419,6 +466,9 @@ impl ChunkViewingManager {
                             .filter_map(|entity| {
                                 let entity = server.entities.remove(entity)?;
                                 if entity.removed.load(std::sync::atomic::Ordering::Relaxed) {
+                                    return None;
+                                }
+                                if entity.key == Key::id("player").unwrap() {
                                     return None;
                                 }
                                 Some(entity)

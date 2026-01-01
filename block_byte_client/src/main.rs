@@ -16,7 +16,7 @@ use block_byte_common::{
         self, BlockPalette, BlockRenderData, EntityKey, Key, Registry, TextureData, TextureKey,
         load_registries,
     },
-    world::ClientChunkBlockComponents,
+    world::{self, ClientChunkBlockComponents},
 };
 use image::{DynamicImage, RgbaImage};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -68,6 +68,7 @@ fn main() {
             network_transport: transport,
             keys: HashSet::new(),
             last_update: Instant::now(),
+            had_first_teleport: false,
         })
         .unwrap();
 }
@@ -81,6 +82,7 @@ struct App {
     network_transport: NetcodeClientTransport,
     keys: HashSet<KeyCode>,
     last_update: Instant,
+    had_first_teleport: bool,
 }
 impl App {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
@@ -236,11 +238,13 @@ impl ApplicationHandler for App {
                         .unwrap();
                 }
                 if self.network_client.is_connected() {
-                    self.camera.update_position(&self.keys, dt, &self.world);
-                    self.world.player_position = self.camera.position;
-                    self.send_message(NetworkMessageC2S::PlayerPosition {
-                        position: self.camera.position,
-                    });
+                    if self.had_first_teleport {
+                        self.camera.update_position(&self.keys, dt, &self.world);
+                        self.world.player_position = self.camera.position;
+                        self.send_message(NetworkMessageC2S::PlayerPosition {
+                            position: self.camera.position,
+                        });
+                    }
                     while let Some(message) = self
                         .network_client
                         .receive_message(DefaultChannel::ReliableOrdered)
@@ -334,6 +338,13 @@ impl ApplicationHandler for App {
                                 if let Some(chunk) = self.world.chunks.get_mut(&chunk) {
                                     data.update(offset, &mut chunk.components);
                                 }
+                            }
+                            NetworkMessageS2C::SetPlayerEntity { uuid } => {
+                                self.world.player_entity = uuid;
+                            }
+                            NetworkMessageS2C::TeleportPlayer { position } => {
+                                self.camera.position = position;
+                                self.had_first_teleport = true;
                             }
                         }
                     }
@@ -676,6 +687,7 @@ pub struct ClientWorld {
     pub chunks: HashMap<ChunkPos, ClientChunk>,
     pub modified_chunks: HashSet<ChunkPos>,
     pub entities: HashMap<Uuid, ClientEntity>,
+    pub player_entity: Option<Uuid>,
 }
 impl Default for ClientWorld {
     fn default() -> Self {
@@ -688,6 +700,7 @@ impl Default for ClientWorld {
             chunks: Default::default(),
             modified_chunks: Default::default(),
             entities: Default::default(),
+            player_entity: None,
         }
     }
 }
@@ -729,6 +742,31 @@ impl ClientWorld {
                     mesh.vertices.len() as u32,
                 ))
             };
+        }
+        for (id, entity) in &self.entities {
+            if Some(*id) == self.player_entity {
+                continue;
+            }
+            let base_position = entity.position;
+            for face in Face::all() {
+                ClientChunk::add_vertices(
+                    *face,
+                    Key::<TextureData>::id("dirt").unwrap().tex_coords(),
+                    |position, coords| {
+                        let border = 0.01;
+                        let vt_pos = base_position + position * (1. + border * 2.)
+                            - Pos {
+                                x: border,
+                                y: border,
+                                z: border,
+                            };
+                        entity_mesh.vertices.push(Vertex {
+                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
+                            tex_coords: [coords.0, coords.1],
+                        });
+                    },
+                );
+            }
         }
         let crack_texture = Key::<TextureData>::id("block_damage.0")
             .unwrap()
