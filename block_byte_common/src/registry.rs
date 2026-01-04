@@ -332,11 +332,14 @@ pub struct BiomeData {
     pub top_block: BlockKey,
     pub middle_block: BlockKey,
     pub bottom_block: BlockKey,
-    pub plants: Vec<Spawner<PlantKey>>,
+    pub plants: Vec<Spawner<PlantData>>,
 }
 #[derive(Deserialize)]
-pub struct Spawner<T> {
+pub struct Spawner<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+{
     pub chance: f32,
-    pub entry: T,
+    pub entry: Key<T>,
 }
 pub type BiomeKey = Key<BiomeData>;

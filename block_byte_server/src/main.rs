@@ -7,6 +7,7 @@ use std::{
 };
 
 use block_byte_common::{
+    MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{self, BlockData, BlockKey, load_registries},
@@ -111,12 +112,22 @@ fn main() {
                 user,
                 NetworkMessageS2C::TeleportPlayer {
                     position: spawn_position,
+                    teleport_id: 1,
                 },
             );
             server.send_message(
                 user,
                 NetworkMessageS2C::SetPlayerEntity {
                     uuid: Some(player_uuid),
+                },
+            );
+            server.send_message(
+                user,
+                NetworkMessageS2C::PlayerAbilities {
+                    abilities: PlayerAbilities {
+                        move_mode: MoveMode::Normal,
+                        speed: 1.,
+                    },
                 },
             );
         }
@@ -127,13 +138,14 @@ fn main() {
                     println!("Client {client_id} connected");
                     let spawn_position = Pos {
                         x: 0.,
-                        y: 0.,
+                        y: 85.,
                         z: 0.,
                     };
                     let user = server.users.insert(User {
                         client_id,
                         view_position: Mutex::new(spawn_position.to_chunk_pos()),
                         entity: None,
+                        teleport_id: 1,
                     });
                     player_spawns.push((user, spawn_position));
                     net_users.insert(client_id, user);
@@ -176,7 +188,13 @@ fn main() {
                     bincode::serde::decode_from_slice(&message, bincode::config::standard())
                         .unwrap();
                 match message {
-                    NetworkMessageC2S::PlayerPosition { position } => {
+                    NetworkMessageC2S::PlayerPosition {
+                        position,
+                        teleport_id,
+                    } => {
+                        if teleport_id != user.teleport_id {
+                            continue;
+                        }
                         let chunk_position = position.to_block_pos().to_chunk_pos();
                         let view_position = *user.view_position.lock();
                         if chunk_position != view_position {
@@ -579,6 +597,7 @@ pub struct User {
     client_id: ClientId,
     view_position: Mutex<ChunkPos>,
     entity: Option<EntityIndex>,
+    teleport_id: u32,
 }
 impl User {
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {

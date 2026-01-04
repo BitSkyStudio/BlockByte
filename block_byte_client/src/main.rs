@@ -10,6 +10,7 @@ use std::{
 };
 
 use block_byte_common::{
+    MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{
@@ -67,7 +68,11 @@ fn main() {
             network_transport: transport,
             keys: HashSet::new(),
             last_update: Instant::now(),
-            had_first_teleport: false,
+            teleport_id: 0,
+            player_abilities: PlayerAbilities {
+                move_mode: MoveMode::Normal,
+                speed: 1.,
+            },
         })
         .unwrap();
 }
@@ -81,7 +86,8 @@ struct App {
     network_transport: NetcodeClientTransport,
     keys: HashSet<KeyCode>,
     last_update: Instant,
-    had_first_teleport: bool,
+    teleport_id: u32,
+    player_abilities: PlayerAbilities,
 }
 impl App {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
@@ -237,13 +243,17 @@ impl ApplicationHandler for App {
                         .unwrap();
                 }
                 if self.network_client.is_connected() {
-                    if self.had_first_teleport {
-                        self.camera.update_position(&self.keys, dt, &self.world);
-                        self.world.player_position = self.camera.position;
-                        self.send_message(NetworkMessageC2S::PlayerPosition {
-                            position: self.camera.position,
-                        });
-                    }
+                    self.camera.update_position(
+                        &self.keys,
+                        dt,
+                        &self.world,
+                        &self.player_abilities,
+                    );
+                    self.world.player_position = self.camera.position;
+                    self.send_message(NetworkMessageC2S::PlayerPosition {
+                        position: self.camera.position,
+                        teleport_id: self.teleport_id,
+                    });
                     while let Some(message) = self
                         .network_client
                         .receive_message(DefaultChannel::ReliableOrdered)
@@ -341,9 +351,15 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::SetPlayerEntity { uuid } => {
                                 self.world.player_entity = uuid;
                             }
-                            NetworkMessageS2C::TeleportPlayer { position } => {
+                            NetworkMessageS2C::TeleportPlayer {
+                                position,
+                                teleport_id,
+                            } => {
                                 self.camera.position = position;
-                                self.had_first_teleport = true;
+                                self.teleport_id = teleport_id;
+                            }
+                            NetworkMessageS2C::PlayerAbilities { abilities } => {
+                                self.player_abilities = abilities;
                             }
                         }
                     }
@@ -556,9 +572,10 @@ impl TexCoordsExt for TextureKey {
 #[derive(Debug)]
 pub struct ClientPlayer {
     pub position: Pos,
+    pub velocity: Pos,
     pub pitch_deg: f32,
     pub yaw_deg: f32,
-    speed: f32,
+    pub on_ground: bool,
 }
 impl Default for ClientPlayer {
     fn default() -> Self {
@@ -568,9 +585,14 @@ impl Default for ClientPlayer {
                 y: 0.,
                 z: 0.,
             },
+            velocity: Pos {
+                x: 0.,
+                y: 0.,
+                z: 0.,
+            },
             pitch_deg: 0.,
             yaw_deg: 0.,
-            speed: 10.,
+            on_ground: false,
         }
     }
 }
@@ -606,6 +628,7 @@ impl ClientPlayer {
         keys: &HashSet<KeyCode>,
         delta_time: f32,
         world: &ClientWorld,
+        abilities: &PlayerAbilities,
     ) {
         let mut forward = cgmath::Vector3::new(
             f32::to_radians(self.yaw_deg).sin(),
@@ -614,7 +637,7 @@ impl ClientPlayer {
         );
         use cgmath::InnerSpace;
         let cross_normalized = forward.cross(Self::UP).normalize();
-        let mut move_vector = keys.iter().copied().fold(
+        let move_vector = keys.iter().copied().fold(
             cgmath::Vector3 {
                 x: 0.0,
                 y: 0.0,
@@ -625,29 +648,124 @@ impl ClientPlayer {
                 KeyCode::KeyS => vec - forward,
                 KeyCode::KeyA => vec - cross_normalized,
                 KeyCode::KeyD => vec + cross_normalized,
+                KeyCode::Space => vec + Self::UP,
+                KeyCode::ShiftLeft => vec - Self::UP,
                 _ => vec,
             },
         );
-
-        if !(move_vector.x == 0.0 && move_vector.y == 0.0 && move_vector.z == 0.0) {
-            move_vector = move_vector.normalize();
-        }
-        if keys.contains(&KeyCode::Space) {
-            move_vector.y += 1.;
-        }
-        if keys.contains(&KeyCode::ShiftLeft) {
-            move_vector.y -= 1.;
-        }
-
-        move_vector *= self.speed;
-        move_vector *= 5.;
-
-        let mut total_move = move_vector * delta_time;
-        self.position += Pos {
-            x: total_move.x,
-            y: total_move.y,
-            z: total_move.z,
+        let mut move_vector = Pos {
+            x: move_vector.x,
+            y: move_vector.y,
+            z: move_vector.z,
         };
+        if !(move_vector.x == 0.0 && move_vector.z == 0.0) {
+            let xz_mag = (move_vector.x.powi(2) + move_vector.z.powi(2)).sqrt();
+            move_vector.x /= xz_mag;
+            move_vector.z /= xz_mag;
+        }
+        move_vector *= abilities.speed;
+        move_vector *= 7.;
+        let total_move = match abilities.move_mode {
+            MoveMode::Normal => {
+                move_vector.y = 0.;
+                if keys.contains(&KeyCode::ShiftLeft) {
+                    move_vector /= 2.;
+                }
+                if keys.contains(&KeyCode::Space) && self.on_ground {
+                    self.velocity.y += 5.;
+                }
+                self.velocity.y -= 10. * delta_time;
+                (move_vector + self.velocity) * delta_time
+            }
+            MoveMode::Fly | MoveMode::NoClip => move_vector * delta_time,
+        };
+
+        match abilities.move_mode {
+            MoveMode::Normal | MoveMode::Fly => {
+                if !Self::collides_at(
+                    self.position
+                        + Pos {
+                            x: total_move.x,
+                            y: 0.,
+                            z: 0.,
+                        },
+                    world,
+                ) {
+                    self.position.x += total_move.x;
+                } else {
+                    self.velocity.x = 0.;
+                }
+                if !Self::collides_at(
+                    self.position
+                        + Pos {
+                            x: 0.,
+                            y: total_move.y,
+                            z: 0.,
+                        },
+                    world,
+                ) {
+                    self.position.y += total_move.y;
+                    self.on_ground = false;
+                } else {
+                    self.on_ground = self.velocity.y < 0.;
+                    self.velocity.y = 0.;
+                }
+                if !Self::collides_at(
+                    self.position
+                        + Pos {
+                            x: 0.,
+                            y: 0.,
+                            z: total_move.z,
+                        },
+                    world,
+                ) {
+                    self.position.z += total_move.z;
+                } else {
+                    self.velocity.z = 0.;
+                }
+            }
+            MoveMode::NoClip => {
+                self.position += total_move;
+            }
+        }
+    }
+    fn collides_at(position: Pos, world: &ClientWorld) -> bool {
+        let hitbox_size = 0.3;
+        let collider = AABB {
+            min: (position
+                - Pos {
+                    x: hitbox_size,
+                    y: 0.,
+                    z: hitbox_size,
+                })
+            .to_block_pos(),
+            max: (position
+                + Pos {
+                    x: hitbox_size,
+                    y: 2.,
+                    z: hitbox_size,
+                })
+            .to_block_pos(),
+        };
+        for block in collider {
+            let (chunk, offset) = block.to_chunk_pos_offset();
+            match world.chunks.get(&chunk) {
+                Some(chunk) => {
+                    if !chunk
+                        .blocks
+                        .get(offset.index())
+                        .unwrap()
+                        .data()
+                        .selection
+                        .is_empty()
+                    {
+                        return true;
+                    }
+                }
+                None => return true,
+            }
+        }
+        false
     }
     fn eye_height_diff(&self) -> f32 {
         2. - 0.15

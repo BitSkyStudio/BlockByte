@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockKey, BlockPalette, EntityKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
@@ -10,7 +11,7 @@ use crate::{
 
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageC2S {
-    PlayerPosition { position: Pos },
+    PlayerPosition { position: Pos, teleport_id: u32 },
     AttackBlock { position: BlockPos },
     InteractBlock { position: BlockPos, face: Face },
 }
@@ -54,5 +55,9 @@ pub enum NetworkMessageS2C {
     },
     TeleportPlayer {
         position: Pos,
+        teleport_id: u32,
+    },
+    PlayerAbilities {
+        abilities: PlayerAbilities,
     },
 }
