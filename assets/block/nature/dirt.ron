@@ -1,0 +1,13 @@
+(
+    render_data: Full(
+        faces: (
+            front: "dirt",
+            back: "dirt",
+            left: "dirt",
+            right: "dirt",
+            down: "dirt",
+            up: "dirt",
+        ),
+    ),
+    health: Some((health: 5.)),
+)

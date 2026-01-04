@@ -1,5 +1,5 @@
 use block_byte_common::coord::Vec3;
-use block_byte_common::registry::{Key, TextureData};
+use block_byte_common::registry::{Key, TextureData, TextureKey};
 use cgmath::{Matrix4, SquareMatrix};
 use image::RgbaImage;
 use std::f64::consts::PI;
@@ -297,7 +297,7 @@ impl RenderState {
                 y: 0.02,
                 z: 0.,
             };
-            let crosshair_texture = Key::<TextureData>::id("crosshair").unwrap().tex_coords();
+            let crosshair_texture = TextureKey::id("crosshair").unwrap().tex_coords();
             gui_mesh.add_quad(-crosshair_size / 2., crosshair_size, crosshair_texture);
         }
 

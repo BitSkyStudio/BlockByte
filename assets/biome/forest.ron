@@ -1,0 +1,9 @@
+(
+    top_block: "nature.grass",
+    middle_block: "nature.dirt",
+    bottom_block: "nature.dirt",
+    plants: [(
+        chance: 0.2,
+        entry: "grass",
+    )],
+)

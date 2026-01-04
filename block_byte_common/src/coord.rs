@@ -230,9 +230,6 @@ impl ChunkPos {
 pub struct ChunkOffset(pub u16);
 impl ChunkOffset {
     pub fn new(x: u8, y: u8, z: u8) -> Self {
-        debug_assert!(x < CHUNK_SIZE);
-        debug_assert!(y < CHUNK_SIZE);
-        debug_assert!(z < CHUNK_SIZE);
         Self((x as u16) | (y as u16) << CHUNK_SIZE_BITS | (z as u16) << CHUNK_SIZE_BITS * 2)
     }
     pub fn xyz(self) -> BlockPos {

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
+use anyhow::anyhow;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
@@ -216,13 +217,12 @@ where
             where
                 E: serde::de::Error,
             {
-                let id = LOAD_REGISTRIES
+                LOAD_REGISTRIES
                     .get()
                     .unwrap()
                     .get_load_registry()
                     .key(v)
-                    .unwrap();
-                Ok(id)
+                    .ok_or_else(|| serde::de::Error::custom(format!("id {} not found", v)))
             }
         }
         deserializer.deserialize_str(KeyVisitor::<T>(PhantomData))
@@ -231,7 +231,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome);
 
 impl<T> Key<T>
 where
@@ -326,3 +326,17 @@ pub struct PlantData {
     pub texture: TextureKey,
 }
 pub type PlantKey = Key<PlantData>;
+
+#[derive(Deserialize)]
+pub struct BiomeData {
+    pub top_block: BlockKey,
+    pub middle_block: BlockKey,
+    pub bottom_block: BlockKey,
+    pub plants: Vec<Spawner<PlantKey>>,
+}
+#[derive(Deserialize)]
+pub struct Spawner<T> {
+    pub chance: f32,
+    pub entry: T,
+}
+pub type BiomeKey = Key<BiomeData>;

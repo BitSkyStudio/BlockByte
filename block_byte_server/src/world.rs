@@ -7,16 +7,20 @@ use std::{
 use block_byte_common::{
     coord::{CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
-    registry::{BlockData, BlockKey, BlockPalette, EntityKey},
+    registry::{BiomeKey, BlockData, BlockKey, BlockPalette, EntityKey},
     world::{
         BlockDamage, BlockPlants, ChunkBlockComponents, ClientBlockComponentUpdate,
         ClientBlockDamage, ComponentClientFromServer,
     },
 };
+use noise::{BasicMulti, NoiseFn, Perlin};
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
 use parking_lot::{Mutex, RwLock};
+use rand::{Rng, rngs::StdRng};
+use rand_seeder::Seeder;
 use serde::{Deserialize, Serialize};
 use slotmap::new_key_type;
+use splines::{Interpolation, Spline};
 use uuid::Uuid;
 
 use crate::{
@@ -41,30 +45,81 @@ pub struct Chunk {
 }
 impl Chunk {
     pub fn generate(position: ChunkPos) -> Chunk {
-        let air = air_block();
-        let grass = Key::id("nature.grass").unwrap();
+        let seed = 1;
+
+        /*use noise::MultiFractal;
+        let height_noise: BasicMulti<Perlin> = BasicMulti::new(seed)
+            .set_octaves(4)
+            .set_frequency(1.0)
+            .set_lacunarity(2.0)
+            .set_persistence(0.5);*/
+        let height_noise = Perlin::new(seed);
 
         let mut blocks = BlockPalette::filled(
-            air,
+            air_block(),
             CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize,
         );
         let mut components = ChunkBlockComponents::default();
+        let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
+        for z in 0..CHUNK_SIZE {
+            for x in 0..CHUNK_SIZE {
+                let block_x = x as i32 + position.x as i32 * CHUNK_SIZE as i32;
+                let block_z = z as i32 + position.z as i32 * CHUNK_SIZE as i32;
+                let mountain_spline = Spline::from_vec(vec![
+                    splines::Key::new(-1., 60., Interpolation::Linear),
+                    splines::Key::new(0., 80., Interpolation::Linear),
+                    splines::Key::new(0.5, 100., Interpolation::Cosine),
+                    splines::Key::new(1., 200., Interpolation::Linear),
+                ]);
+                let mountain_height = height_noise
+                    .get([block_x as f64 / 500., block_z as f64 / 500.])
+                    .clamp(-0.99, 0.99);
+                let small_spline = Spline::from_vec(vec![
+                    splines::Key::new(-1., -3., Interpolation::Linear),
+                    splines::Key::new(1., 3., Interpolation::Linear),
+                ]);
+                let small_noise = height_noise
+                    .get([block_x as f64 / 30., block_z as f64 / 30.])
+                    .clamp(-0.99, 0.99);
+                let height = (mountain_spline.sample(mountain_height).unwrap()
+                    + small_spline.sample(small_noise).unwrap());
+                height_map[x as usize][z as usize] = height as i32;
+            }
+        }
+        let biome = BiomeKey::id("forest").unwrap().data();
+        use rand::SeedableRng;
+        let mut rng = StdRng::from_seed(Seeder::from((seed, position)).make_seed());
         for z in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
                 for x in 0..CHUNK_SIZE {
                     let offset = ChunkOffset::new(x, y, z);
-                    let block_pos = position.to_block_pos() + offset.xyz();
-                    let height = 45 + ((block_pos.x + block_pos.z).abs() as i32 % 10 - 5).abs();
-                    if block_pos.y == height {
-                        blocks.set(offset.index(), &grass);
-                        components.plant.write().set(
-                            offset,
-                            BlockPlants {
-                                plants: vec![(Key::id("grass").unwrap(), 0.)],
-                            },
-                        );
-                    } else if block_pos.y < height {
-                        blocks.set(offset.index(), &grass);
+                    let y_pos = y as i32 + position.y as i32 * CHUNK_SIZE as i32;
+                    let height = height_map[x as usize][z as usize];
+                    if y_pos == height {
+                        blocks.set(offset.index(), &biome.top_block);
+                        let spawned_plants: Vec<_> = biome
+                            .plants
+                            .iter()
+                            .filter_map(|spawner| {
+                                if rng.random_bool(spawner.chance as f64) {
+                                    Some((spawner.entry, 0.))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !spawned_plants.is_empty() {
+                            components.plant.write().set(
+                                offset,
+                                BlockPlants {
+                                    plants: spawned_plants,
+                                },
+                            );
+                        }
+                    } else if y_pos < height - 3 {
+                        blocks.set(offset.index(), &biome.bottom_block);
+                    } else if y_pos < height {
+                        blocks.set(offset.index(), &biome.middle_block);
                     }
                 }
             }

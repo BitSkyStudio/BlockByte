@@ -41,7 +41,6 @@ fn main() {
         TextureAtlas::pack(registry::REGISTRIES.get().unwrap().get_registry());
     TEXTURE_ATLAS.set(atlas);
     TEXT_RENDERER.set(text_renderer);
-
     let mut client = RenetClient::new(ConnectionConfig::default());
     let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -751,7 +750,7 @@ impl ClientWorld {
             for face in Face::all() {
                 ClientChunk::add_vertices(
                     *face,
-                    Key::<TextureData>::id("dirt").unwrap().tex_coords(),
+                    TextureKey::id("dirt").unwrap().tex_coords(),
                     |position, coords| {
                         let border = 0.01;
                         let vt_pos = base_position + position * (1. + border * 2.)
@@ -768,27 +767,28 @@ impl ClientWorld {
                 );
             }
         }
-        let crack_texture = Key::<TextureData>::id("block_damage.0")
-            .unwrap()
-            .tex_coords();
+        let crack_texture = TextureKey::id("block_damage.0").unwrap().tex_coords();
         let player_chunk = self.player_position.to_chunk_pos();
+        let view_distance = 2;
         for chunk_position in AABB::new(
             Vec3 {
-                x: player_chunk.x - 1,
-                y: player_chunk.y - 1,
-                z: player_chunk.z - 1,
+                x: player_chunk.x - view_distance,
+                y: player_chunk.y - view_distance,
+                z: player_chunk.z - view_distance,
             },
             Vec3 {
-                x: player_chunk.x + 1,
-                y: player_chunk.y + 1,
-                z: player_chunk.z + 1,
+                x: player_chunk.x + view_distance,
+                y: player_chunk.y + view_distance,
+                z: player_chunk.z + view_distance,
             },
         ) {
             if let Some(chunk) = self.chunks.get(&chunk_position) {
                 for (offset, damage) in &chunk.components.damage.components {
                     let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
                     if base_position.distance_squared(self.player_position)
-                        > CHUNK_SIZE as f32 * CHUNK_SIZE as f32
+                        > (view_distance * view_distance) as f32
+                            * CHUNK_SIZE as f32
+                            * CHUNK_SIZE as f32
                     {
                         continue;
                     }
@@ -811,7 +811,9 @@ impl ClientWorld {
                 for (offset, plants) in &chunk.components.plant.components {
                     let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
                     if base_position.distance_squared(self.player_position)
-                        > CHUNK_SIZE as f32 * CHUNK_SIZE as f32
+                        > (view_distance * view_distance) as f32
+                            * CHUNK_SIZE as f32
+                            * CHUNK_SIZE as f32
                     {
                         continue;
                     }

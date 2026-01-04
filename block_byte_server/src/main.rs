@@ -31,6 +31,10 @@ mod inventory;
 mod world;
 
 fn main() {
+    /*rayon::ThreadPoolBuilder::new()
+    .num_threads(1)
+    .build_global()
+    .unwrap();*/
     load_registries(&Path::new("assets"));
     let mut network_server = RenetServer::new(ConnectionConfig::default());
     const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
@@ -292,8 +296,25 @@ fn main() {
 
         chunk_viewing_manager.manage(&mut server, &database);
 
-        for (user, message) in server.message_queue.0.get_mut().drain(..) {
-            network_server.send_message(user, DefaultChannel::ReliableOrdered, message);
+        {
+            let mut skipping_users = HashSet::new();
+            server.message_queue.0.get_mut().retain(|(user, message)| {
+                if skipping_users.contains(user) {
+                    return true;
+                }
+                if network_server.channel_available_memory(*user, DefaultChannel::ReliableOrdered)
+                    < message.len()
+                {
+                    skipping_users.insert(*user);
+                    return true;
+                }
+                network_server.send_message(
+                    *user,
+                    DefaultChannel::ReliableOrdered,
+                    message.clone(),
+                );
+                false
+            });
         }
 
         network_server.broadcast_message(
@@ -499,7 +520,7 @@ impl ChunkViewingManager {
         }
         for (position, users, (mut chunk, entities)) in self
             .load
-            .into_par_iter()
+            .into_iter()
             .map(|(position, users)| {
                 let db = db.lock();
                 let mut stmt = db
@@ -510,6 +531,10 @@ impl ChunkViewingManager {
                         row.get::<_, Vec<u8>>(0)
                     })
                     .ok();
+                (position, users, data)
+            })
+            .par_bridge()
+            .map(|(position, users, data)| {
                 let chunk = match data {
                     Some(data) => {
                         let data: ChunkSaveData = serde_cbor::from_slice(data.as_slice()).unwrap();
@@ -558,7 +583,7 @@ pub struct User {
 impl User {
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
         let distance = 8;
-        let world_height = 4;
+        let world_height = 8;
         AABB {
             min: ChunkPos {
                 x: view_position.x - distance,
@@ -567,7 +592,7 @@ impl User {
             },
             max: ChunkPos {
                 x: view_position.x + distance,
-                y: world_height,
+                y: world_height - 1,
                 z: view_position.z + distance,
             },
         }
