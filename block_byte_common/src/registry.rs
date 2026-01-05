@@ -334,11 +334,14 @@ impl RegistryConfigLoadable for TextureData {
         })
     }
 }
-
 #[derive(Deserialize)]
 pub struct EntityData {
     #[cfg(feature = "server")]
     pub inventory_size: usize,
+    pub hitbox_size: f32,
+    pub hitbox_height: f32,
+    #[serde(default)]
+    pub eye_height: f32,
 }
 pub type EntityKey = Key<EntityData>;
 

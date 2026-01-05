@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
-    sync::OnceLock,
+    sync::{OnceLock, atomic::AtomicU32},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -138,7 +138,7 @@ fn main() {
                         client_id,
                         view_position: Mutex::new(spawn_position.to_chunk_pos()),
                         entity: None,
-                        teleport_id: 1,
+                        teleport_id: AtomicU32::new(1),
                     });
                     server.send_message(
                         user,
@@ -192,8 +192,42 @@ fn main() {
                         position,
                         teleport_id,
                     } => {
-                        if teleport_id != user.teleport_id {
+                        if teleport_id
+                            != user.teleport_id.load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             continue;
+                        }
+                        if let Some(entity) = user.entity {
+                            let mut blocked = false;
+                            let entity = server.entities.get(entity).unwrap();
+                            for block in entity
+                                .get_hitbox()
+                                .offset(position - entity.position)
+                                .to_block()
+                            {
+                                if match server.get_block(block) {
+                                    Some(block) => !block.data().selection.is_empty(), //todo: proper collisions
+                                    None => true,
+                                } {
+                                    blocked = true;
+                                    break;
+                                }
+                            }
+                            if blocked {
+                                let teleport_id = user
+                                    .teleport_id
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                    + 1;
+                                server.message_queue.send_message(
+                                    std::iter::once(user_id),
+                                    NetworkMessageS2C::TeleportPlayer {
+                                        position: entity.position,
+                                        teleport_id,
+                                    },
+                                    &server.users,
+                                );
+                                continue;
+                            }
                         }
                         let chunk_position = position.to_block_pos().to_chunk_pos();
                         let view_position = *user.view_position.lock();
@@ -398,30 +432,59 @@ impl Server {
         self.entity_add_queue.lock().push(entity);
         Ok(())
     }
-    pub fn place(&self, position: BlockPos, block: BlockKey) -> bool {
+    pub fn place(&self, position: BlockPos, block: BlockKey) -> Result<(), ()> {
         let (chunk, offset) = position.to_chunk_pos_offset();
         let chunk = match self.get_chunk(chunk) {
             Some(chunk) => chunk,
             None => {
-                return false;
+                return Err(());
             }
         };
         let mut blocks = chunk.blocks.write();
         if *blocks.get(offset.index()).unwrap() != air_block() {
-            return false;
+            return Err(());
+        }
+        for chunk in (AABB {
+            min: ChunkPos {
+                x: -1,
+                y: -1,
+                z: -1,
+            },
+            max: ChunkPos { x: 1, y: 0, z: 1 },
+        }
+        .offset(position.to_chunk_pos()))
+        {
+            if let Some(chunk) = self.get_chunk(chunk) {
+                for entity in &chunk.entities {
+                    let entity = self.entities.get(*entity).unwrap();
+                    if entity.get_hitbox().to_block().contains(position) {
+                        return Err(());
+                    }
+                }
+            }
         }
         blocks.set(offset.index(), &block);
         self.send_message_multiple(
             chunk.viewers.iter(),
             NetworkMessageS2C::SetBlock { position, block },
         );
-        true
+        Ok(())
     }
     pub fn schedule_block_event(&self, position: BlockPos, event: BlockEvent) {
         let (chunk, offset) = position.to_chunk_pos_offset();
         if let Some(chunk) = self.get_chunk(chunk) {
             chunk.block_events.lock().push((offset, event));
         }
+    }
+    pub fn get_block(&self, position: BlockPos) -> Option<BlockKey> {
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        let chunk = match self.get_chunk(chunk) {
+            Some(chunk) => chunk,
+            None => {
+                return None;
+            }
+        };
+        Some(*chunk.blocks.read().get(offset.index()).unwrap())
     }
     pub fn get_chunk(&self, position: ChunkPos) -> Option<&Chunk> {
         self.chunks.get(&position)
@@ -597,7 +660,7 @@ pub struct User {
     client_id: ClientId,
     view_position: Mutex<ChunkPos>,
     entity: Option<EntityIndex>,
-    teleport_id: u32,
+    teleport_id: AtomicU32,
 }
 impl User {
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {

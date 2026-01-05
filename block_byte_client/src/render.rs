@@ -1,5 +1,5 @@
 use block_byte_common::coord::Vec3;
-use block_byte_common::registry::{Key, TextureData, TextureKey};
+use block_byte_common::registry::{EntityData, Key, TextureData, TextureKey};
 use cgmath::{Matrix4, SquareMatrix};
 use image::RgbaImage;
 use std::f64::consts::PI;
@@ -301,8 +301,11 @@ impl RenderState {
             gui_mesh.add_quad(-crosshair_size / 2., crosshair_size, crosshair_texture);
         }
 
-        self.camera_uniform
-            .load_view_proj_matrix(camera, self.size.width as f32 / self.size.height as f32);
+        self.camera_uniform.load_view_proj_matrix(
+            camera,
+            self.size.width as f32 / self.size.height as f32,
+            world.get_player_data(),
+        );
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -479,10 +482,15 @@ impl CameraUniform {
             view_proj: cgmath::Matrix4::identity().into(),
         }
     }
-    fn load_view_proj_matrix(&mut self, camera: &ClientPlayer, aspect_ratio: f32) {
+    fn load_view_proj_matrix(
+        &mut self,
+        camera: &ClientPlayer,
+        aspect_ratio: f32,
+        player_entity_data: Option<&EntityData>,
+    ) {
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
             * ClientPlayer::create_projection_matrix(aspect_ratio)
-            * camera.create_view_matrix())
+            * camera.create_view_matrix(player_entity_data))
         .into();
     }
     #[rustfmt::skip]

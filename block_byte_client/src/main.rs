@@ -14,8 +14,8 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{
-        self, BlockPalette, BlockRenderData, EntityKey, Key, Registry, TextureData, TextureKey,
-        load_registries,
+        self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, Registry, TextureData,
+        TextureKey, load_registries,
     },
     world::{self, ClientChunkBlockComponents},
 };
@@ -158,7 +158,7 @@ impl ApplicationHandler for App {
             } => {
                 if state == ElementState::Pressed {
                     let ray = Ray {
-                        position: self.camera.get_eye(),
+                        position: self.camera.get_eye(self.world.get_player_data()),
                         direction: self.camera.make_front() * 10.,
                     };
                     let hit = ray.block_raycast(|block, _, face| {
@@ -248,6 +248,7 @@ impl ApplicationHandler for App {
                         dt,
                         &self.world,
                         &self.player_abilities,
+                        self.world.get_player_data(),
                     );
                     self.world.player_position = self.camera.position;
                     self.send_message(NetworkMessageC2S::PlayerPosition {
@@ -615,11 +616,11 @@ impl ClientPlayer {
         self.pitch_deg = (self.pitch_deg + d_pitch_deg).max(-89.0).min(89.0);
         self.yaw_deg = (self.yaw_deg + d_yaw_deg) % 360.0;
     }
-    pub fn get_eye(&self) -> Pos {
+    pub fn get_eye(&self, player_entity_data: Option<&EntityData>) -> Pos {
         self.position
             + Pos {
                 x: 0.,
-                y: self.eye_height_diff(),
+                y: player_entity_data.map(|data| data.eye_height).unwrap_or(0.),
                 z: 0.,
             }
     }
@@ -629,6 +630,7 @@ impl ClientPlayer {
         delta_time: f32,
         world: &ClientWorld,
         abilities: &PlayerAbilities,
+        player_entity_data: Option<&EntityData>,
     ) {
         let mut forward = cgmath::Vector3::new(
             f32::to_radians(self.yaw_deg).sin(),
@@ -690,6 +692,7 @@ impl ClientPlayer {
                             z: 0.,
                         },
                     world,
+                    player_entity_data,
                 ) {
                     self.position.x += total_move.x;
                 } else {
@@ -703,6 +706,7 @@ impl ClientPlayer {
                             z: 0.,
                         },
                     world,
+                    player_entity_data,
                 ) {
                     self.position.y += total_move.y;
                     self.on_ground = false;
@@ -718,6 +722,7 @@ impl ClientPlayer {
                             z: total_move.z,
                         },
                     world,
+                    player_entity_data,
                 ) {
                     self.position.z += total_move.z;
                 } else {
@@ -729,49 +734,58 @@ impl ClientPlayer {
             }
         }
     }
-    fn collides_at(position: Pos, world: &ClientWorld) -> bool {
-        let hitbox_size = 0.3;
-        let collider = AABB {
-            min: (position
-                - Pos {
-                    x: hitbox_size,
-                    y: 0.,
-                    z: hitbox_size,
-                })
-            .to_block_pos(),
-            max: (position
-                + Pos {
-                    x: hitbox_size,
-                    y: 2.,
-                    z: hitbox_size,
-                })
-            .to_block_pos(),
-        };
-        for block in collider {
-            let (chunk, offset) = block.to_chunk_pos_offset();
-            match world.chunks.get(&chunk) {
-                Some(chunk) => {
-                    if !chunk
-                        .blocks
-                        .get(offset.index())
-                        .unwrap()
-                        .data()
-                        .selection
-                        .is_empty()
-                    {
-                        return true;
+    fn collides_at(
+        position: Pos,
+        world: &ClientWorld,
+        player_entity_data: Option<&EntityData>,
+    ) -> bool {
+        match player_entity_data {
+            Some(player_entity_data) => {
+                let collider = AABB {
+                    min: Pos {
+                        x: -player_entity_data.hitbox_size,
+                        y: 0.,
+                        z: -player_entity_data.hitbox_size,
+                    },
+                    max: Pos {
+                        x: player_entity_data.hitbox_size,
+                        y: player_entity_data.hitbox_height,
+                        z: player_entity_data.hitbox_size,
+                    },
+                }
+                .offset(position)
+                .to_block();
+                for block in collider {
+                    let (chunk, offset) = block.to_chunk_pos_offset();
+                    match world.chunks.get(&chunk) {
+                        Some(chunk) => {
+                            if !chunk
+                                .blocks
+                                .get(offset.index())
+                                .unwrap()
+                                .data()
+                                .selection
+                                .is_empty()
+                            {
+                                return true;
+                            }
+                        }
+                        None => return true,
                     }
                 }
-                None => return true,
+                false
             }
+            None => true,
         }
-        false
     }
     fn eye_height_diff(&self) -> f32 {
         2. - 0.15
     }
-    pub fn create_view_matrix(&self) -> cgmath::Matrix4<f32> {
-        let eye = self.get_eye();
+    pub fn create_view_matrix(
+        &self,
+        player_entity_data: Option<&EntityData>,
+    ) -> cgmath::Matrix4<f32> {
+        let eye = self.get_eye(player_entity_data);
         let eye = cgmath::Point3 {
             x: eye.x as f32,
             y: eye.y as f32,
@@ -978,6 +992,9 @@ impl ClientWorld {
                     }
                 });
         }
+    }
+    pub fn get_player_data(&self) -> Option<&'static EntityData> {
+        Some(self.entities.get(&self.player_entity?)?.key.data())
     }
 }
 pub struct ClientEntity {

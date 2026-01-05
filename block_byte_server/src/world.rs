@@ -5,7 +5,7 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::{CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
+    coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{BiomeKey, BlockData, BlockKey, BlockPalette, EntityKey},
     world::{
@@ -228,6 +228,22 @@ impl Entity {
             removed: AtomicBool::new(false),
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
         }
+    }
+    pub fn get_hitbox(&self) -> AABB<f32> {
+        let entity_data = self.key.data();
+        AABB {
+            min: Pos {
+                x: -entity_data.hitbox_size,
+                y: 0.,
+                z: -entity_data.hitbox_size,
+            },
+            max: Pos {
+                x: entity_data.hitbox_size,
+                y: entity_data.hitbox_height,
+                z: entity_data.hitbox_size,
+            },
+        }
+        .offset(self.position)
     }
 }
 impl Entity {

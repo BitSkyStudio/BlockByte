@@ -342,6 +342,14 @@ macro_rules! implement_aabb_walkable {
     }
 }
 implement_aabb_walkable!(i32, i16);
+impl AABB<f32> {
+    pub fn to_block(self) -> AABB<i32> {
+        AABB {
+            min: self.min.to_block_pos(),
+            max: self.max.to_block_pos(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Face {
