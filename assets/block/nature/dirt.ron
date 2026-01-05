@@ -10,4 +10,5 @@
         ),
     ),
     health: Some((health: 5.)),
+    loot_table: Key("empty"),
 )

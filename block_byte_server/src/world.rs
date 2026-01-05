@@ -102,7 +102,7 @@ impl Chunk {
                             .iter()
                             .filter_map(|spawner| {
                                 if rng.random_bool(spawner.chance as f64) {
-                                    Some((spawner.entry, 0.))
+                                    Some((spawner.plant, 0.))
                                 } else {
                                     None
                                 }

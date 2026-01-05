@@ -110,13 +110,6 @@ fn main() {
             server.users.get_mut(user).unwrap().entity = Some(entity_index);
             server.send_message(
                 user,
-                NetworkMessageS2C::TeleportPlayer {
-                    position: spawn_position,
-                    teleport_id: 1,
-                },
-            );
-            server.send_message(
-                user,
                 NetworkMessageS2C::SetPlayerEntity {
                     uuid: Some(player_uuid),
                 },
@@ -147,6 +140,13 @@ fn main() {
                         entity: None,
                         teleport_id: 1,
                     });
+                    server.send_message(
+                        user,
+                        NetworkMessageS2C::TeleportPlayer {
+                            position: spawn_position,
+                            teleport_id: 1,
+                        },
+                    );
                     player_spawns.push((user, spawn_position));
                     net_users.insert(client_id, user);
                     for chunk_position in

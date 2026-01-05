@@ -231,7 +231,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table);
 
 impl<T> Key<T>
 where
@@ -253,9 +253,30 @@ impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
 }
 
 #[derive(Deserialize)]
+pub enum OwnOrKey<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+{
+    Own(T),
+    Key(Key<T>),
+}
+impl<T: 'static> OwnOrKey<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
+{
+    pub fn data(&self) -> &T {
+        match self {
+            OwnOrKey::Own(data) => &data,
+            OwnOrKey::Key(key) => key.data(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
 pub struct ItemData {
-    place: Option<BlockKey>,
-    stack_size: u16,
+    pub place: Option<BlockKey>,
+    pub stack_size: u16,
 }
 pub type ItemKey = Key<ItemData>;
 
@@ -284,6 +305,7 @@ pub struct BlockData {
     pub selection: Vec<crate::coord::AABB<f32>>,
     #[serde(default)]
     pub plantable: bool,
+    pub loot_table: OwnOrKey<LootTableData>,
 }
 #[derive(Deserialize)]
 pub struct BlockHealthData {
@@ -332,14 +354,22 @@ pub struct BiomeData {
     pub top_block: BlockKey,
     pub middle_block: BlockKey,
     pub bottom_block: BlockKey,
-    pub plants: Vec<Spawner<PlantData>>,
+    pub plants: Vec<PlantSpawner>,
 }
 #[derive(Deserialize)]
-pub struct Spawner<T>
-where
-    LoadRegistryStorage: LoadRegistryProvider<T>,
-{
+pub struct PlantSpawner {
     pub chance: f32,
-    pub entry: Key<T>,
+    pub plant: PlantKey,
 }
 pub type BiomeKey = Key<BiomeData>;
+
+#[derive(Deserialize)]
+pub struct LootTableData {
+    pub entries: Vec<LootTableEntry>,
+}
+pub type LootTableKey = Key<LootTableData>;
+#[derive(Deserialize)]
+pub struct LootTableEntry {
+    pub item: ItemKey,
+    pub chance: f32,
+}

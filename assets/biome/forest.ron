@@ -4,6 +4,6 @@
     bottom_block: "nature.dirt",
     plants: [(
         chance: 0.2,
-        entry: "grass",
+        plant: "grass",
     )],
 )

@@ -281,6 +281,14 @@ impl<T: Copy + Ord> AABB<T> {
             && self.max.z >= other.min.z
     }
 }
+impl<T: Copy + Add<T, Output = T>> AABB<T> {
+    pub fn offset(self, offset: Vec3<T>) -> Self {
+        AABB {
+            min: self.min + offset,
+            max: self.max + offset,
+        }
+    }
+}
 impl<T: Copy + Ord + AABBWalkable> IntoIterator for AABB<T> {
     type Item = Vec3<T>;
     type IntoIter = AABBIterator<T>;
