@@ -1,5 +1,6 @@
 use block_byte_common::coord::Vec3;
 use block_byte_common::registry::{EntityData, Key, TextureData, TextureKey};
+use block_byte_common::ui::UIScreen;
 use cgmath::{Matrix4, SquareMatrix};
 use image::RgbaImage;
 use std::f64::consts::PI;
@@ -290,6 +291,11 @@ impl RenderState {
             0.05,
             &mut gui_mesh,
         );
+        render_screen(
+            Key::<UIScreen>::id("hud").unwrap().data(),
+            self.size,
+            &mut gui_mesh,
+        );
 
         {
             let crosshair_size = Vec3 {
@@ -518,6 +524,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
+use crate::ui::render_screen;
 use crate::{ClientPlayer, ClientWorld, Mesh, TexCoordsExt, text_renderer};
 
 pub struct GPUTexture {

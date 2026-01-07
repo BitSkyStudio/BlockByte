@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub mod coord;
 pub mod net;
 pub mod registry;
+pub mod ui;
 pub mod world;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]

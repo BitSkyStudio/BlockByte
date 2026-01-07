@@ -354,8 +354,9 @@ fn main() {
                 if skipping_users.contains(user) {
                     return true;
                 }
+                //idk why it is broken and needs + 1000
                 if network_server.channel_available_memory(*user, DefaultChannel::ReliableOrdered)
-                    < message.len()
+                    < message.len() + 1000
                 {
                     skipping_users.insert(*user);
                     return true;

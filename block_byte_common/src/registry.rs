@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::coord::{FaceMap, Pos};
+use crate::ui::{UIScreen, UIStyleList};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
 impl<T> Key<T> {
@@ -231,17 +232,18 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style);
 
 impl<T> Key<T>
 where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
     RegistryStorage: RegistryProvider<T>,
 {
     pub fn data(self) -> &'static T {
         REGISTRIES.get().unwrap().get_registry().by_key(self)
     }
     pub fn id(id: &str) -> Option<Self> {
-        REGISTRIES.get().unwrap().get_registry().key(id)
+        LOAD_REGISTRIES.get().unwrap().get_load_registry().key(id)
     }
 }
 

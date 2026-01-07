@@ -16,6 +16,8 @@ image = { version = "0.24", default-features = false, features = [
 anyhow = "1.0.100"
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
 parking_lot = { version = "0.12.5", features = ["serde"], optional = true }
+roxmltree = "0.21.1"
+taffy = "0.9.2"
 
 [features]
 client = ["dep:image"]

@@ -1,4 +1,5 @@
 mod render;
+mod ui;
 
 use std::{
     collections::{HashMap, HashSet},

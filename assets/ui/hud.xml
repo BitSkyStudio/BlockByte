@@ -1,0 +1,14 @@
+<box class="root">
+    <box style="flex_direction: column;padding: 10;background: grass_block;">
+        <label>Ahoj</label>
+        <image texture="dirt" width="100" height="100" />
+        <label>Ahoj2</label>
+        <label>Ahoj3</label>
+    </box>
+    <box style="flex_direction: column;padding: 10;">
+        <label>Ahoj</label>
+        <image texture="dirt" width="100" height="100" style="size: 100 100;"/>
+        <label>Ahoj2</label>
+        <label>Ahoj3</label>
+    </box>
+</box>
