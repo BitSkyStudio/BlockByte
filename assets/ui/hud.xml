@@ -1,14 +1,13 @@
-<box class="root">
-    <box style="flex_direction: column;padding: 10;background: grass_block;">
-        <label>Ahoj</label>
-        <image texture="dirt" width="100" height="100" />
-        <label>Ahoj2</label>
-        <label>Ahoj3</label>
-    </box>
-    <box style="flex_direction: column;padding: 10;">
-        <label>Ahoj</label>
-        <image texture="dirt" width="100" height="100" style="size: 100 100;"/>
-        <label>Ahoj2</label>
-        <label>Ahoj3</label>
-    </box>
+<box style="position: absolute;inset_bottom: 10;width:100%;justify_content: center;gap_column: 10;">
+    <slot id="0"/>
+    <slot id="1"/>
+    <slot id="2"/>
+    <slot id="3"/>
+    <slot id="4"/>
+    <slot id="5"/>
+    <slot id="6"/>
+    <slot id="7"/>
+    <slot id="8"/>
+    <slot id="9"/>
+    <slot id="10"/>
 </box>

@@ -291,11 +291,11 @@ impl RenderState {
             0.05,
             &mut gui_mesh,
         );
-        render_screen(
-            Key::<UIScreen>::id("hud").unwrap().data(),
-            self.size,
-            &mut gui_mesh,
-        );
+        render_screen(&world.hud, self.size, &mut gui_mesh);
+
+        if let Some(screen) = &world.screen {
+            render_screen(screen, self.size, &mut gui_mesh);
+        }
 
         {
             let crosshair_size = Vec3 {
@@ -524,7 +524,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::ui::render_screen;
+use crate::ui::{ScreenData, render_screen};
 use crate::{ClientPlayer, ClientWorld, Mesh, TexCoordsExt, text_renderer};
 
 pub struct GPUTexture {

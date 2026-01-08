@@ -231,19 +231,7 @@ impl Entity {
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
         let entity_data = self.key.data();
-        AABB {
-            min: Pos {
-                x: -entity_data.hitbox_size,
-                y: 0.,
-                z: -entity_data.hitbox_size,
-            },
-            max: Pos {
-                x: entity_data.hitbox_size,
-                y: entity_data.hitbox_height,
-                z: entity_data.hitbox_size,
-            },
-        }
-        .offset(self.position)
+        entity_data.hitbox().offset(self.position)
     }
 }
 impl Entity {

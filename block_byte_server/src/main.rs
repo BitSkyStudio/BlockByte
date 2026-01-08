@@ -2,7 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
-    sync::{OnceLock, atomic::AtomicU32},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU32, AtomicUsize},
+    },
     time::{Duration, Instant, SystemTime},
 };
 
@@ -10,7 +13,8 @@ use block_byte_common::{
     MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
-    registry::{self, BlockData, BlockKey, load_registries},
+    registry::{self, BlockData, BlockKey, ItemKey, load_registries},
+    ui::UIScreenKey,
 };
 use palettevec::PaletteVec;
 use parking_lot::{Mutex, RwLock};
@@ -23,7 +27,7 @@ use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
 
 use crate::{
-    inventory::{ItemDurability, ItemStack},
+    inventory::{Inventory, InventoryView, ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{BlockEvent, Chunk, ChunkSaveData, Entity, EntityIndex, air_block},
 };
@@ -97,7 +101,11 @@ fn main() {
                 .unwrap();
         }
         for (user, spawn_position) in player_spawns.drain(..) {
-            let entity = Entity::new(Key::id("player").unwrap(), spawn_position);
+            let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
+            InventoryView::from_range(0..10).add_item(
+                &mut *entity.inventory.write(),
+                ItemStack::new(ItemKey::id("grass_item").unwrap(), 20),
+            );
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
@@ -139,6 +147,8 @@ fn main() {
                         view_position: Mutex::new(spawn_position.to_chunk_pos()),
                         entity: None,
                         teleport_id: AtomicU32::new(1),
+                        screen: Mutex::new(None),
+                        hotbar_slot: AtomicUsize::new(0),
                     });
                     server.send_message(
                         user,
@@ -200,11 +210,7 @@ fn main() {
                         if let Some(entity) = user.entity {
                             let mut blocked = false;
                             let entity = server.entities.get(entity).unwrap();
-                            for block in entity
-                                .get_hitbox()
-                                .offset(position - entity.position)
-                                .to_block()
-                            {
+                            for block in entity.key.data().hitbox().offset(position).to_block() {
                                 if match server.get_block(block) {
                                     Some(block) => !block.data().selection.is_empty(), //todo: proper collisions
                                     None => true,
@@ -247,12 +253,46 @@ fn main() {
                     NetworkMessageC2S::AttackBlock { position } => {
                         server.schedule_block_event(position, BlockEvent::Damage { damage: 1. });
                     }
-                    NetworkMessageC2S::InteractBlock { position, face } => {
-                        server.place(
-                            position + face.get_block_offset(),
-                            Key::id("nature.grass").unwrap(),
-                        );
+                    NetworkMessageC2S::PlaceBlock { position, face } => {
+                        if let Some(entity) = user.entity {
+                            let entity = server.entities.get(entity).unwrap();
+                            let hotbar_slot =
+                                user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed);
+                            let mut inventory = entity.inventory.write();
+                            if let Some(item) = &mut inventory.items[hotbar_slot] {
+                                if let Some(place) = item.item.data().place {
+                                    if let Ok(_) =
+                                        server.place(position + face.get_block_offset(), place)
+                                    {
+                                        item.count -= 1;
+                                        if item.count == 0 {
+                                            inventory.items[hotbar_slot] = None;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+                    NetworkMessageC2S::CloseUI => {
+                        if let Some(screen) = &mut *user.screen.lock() {
+                            screen.state = UserScreenState::Close;
+                        }
+                    }
+                    NetworkMessageC2S::HotbarSelect { slot, relative } => {
+                        let new_slot = if relative {
+                            user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed) as isize
+                                + slot
+                        } else {
+                            slot
+                        };
+                        let hotbar_size = 10;
+                        let new_slot =
+                            ((new_slot % hotbar_size + hotbar_size) % hotbar_size) as usize;
+                        user.hotbar_slot
+                            .store(new_slot, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    NetworkMessageC2S::InteractBlock { position } => {}
+                    NetworkMessageC2S::InteractEntity { entity } => {}
                 }
             }
         }
@@ -267,6 +307,93 @@ fn main() {
             for chunk_position in previous_loading {
                 if !new_loading.contains(chunk_position) {
                     chunk_viewing_manager.remove_viewer(chunk_position, user, &mut server);
+                }
+            }
+        }
+
+        for (user_index, user) in &server.users {
+            server.message_queue.send_message(
+                std::iter::once(user_index),
+                NetworkMessageS2C::HUDUpdate {
+                    items: match user
+                        .entity
+                        .as_ref()
+                        .and_then(|entity| server.entities.get(*entity))
+                    {
+                        Some(entity) => entity
+                            .inventory
+                            .read()
+                            .items
+                            .iter()
+                            .map(|item| item.as_ref().map(|item| item.client()))
+                            .collect(),
+                        None => vec![],
+                    },
+                },
+                &server.users,
+            );
+            let mut screen_lock = user.screen.lock();
+            if let Some(screen) = &mut *screen_lock {
+                match screen.state {
+                    UserScreenState::Open => {
+                        let inventory = match screen.inventory.get_inventory(&server) {
+                            Some(inventory) => inventory,
+                            None => {
+                                screen.state = UserScreenState::Close;
+                                continue;
+                            }
+                        };
+                        server.message_queue.send_message(
+                            std::iter::once(user_index),
+                            NetworkMessageS2C::UIOpen {
+                                screen: screen.screen,
+                                slots: inventory
+                                    .items
+                                    .iter()
+                                    .map(|item| item.as_ref().map(|item| item.client()))
+                                    .collect(),
+                            },
+                            &server.users,
+                        );
+                        screen.previous_inventory = inventory;
+                        screen.state = UserScreenState::Normal;
+                    }
+                    UserScreenState::Normal => {
+                        let new_inventory = match screen.inventory.get_inventory(&server) {
+                            Some(inventory) => inventory,
+                            None => {
+                                screen.state = UserScreenState::Close;
+                                continue;
+                            }
+                        };
+                        for (slot, (previous, new)) in screen
+                            .previous_inventory
+                            .items
+                            .iter()
+                            .zip(new_inventory.items.iter())
+                            .enumerate()
+                        {
+                            if previous != new {
+                                server.message_queue.send_message(
+                                    std::iter::once(user_index),
+                                    NetworkMessageS2C::UISetSlot {
+                                        slot,
+                                        item: new.as_ref().map(|item| item.client()),
+                                    },
+                                    &server.users,
+                                );
+                            }
+                        }
+                        screen.previous_inventory = new_inventory;
+                    }
+                    UserScreenState::Close => {
+                        server.message_queue.send_message(
+                            std::iter::once(user_index),
+                            NetworkMessageS2C::UIClose,
+                            &server.users,
+                        );
+                        *screen_lock = None;
+                    }
                 }
             }
         }
@@ -662,8 +789,49 @@ pub struct User {
     view_position: Mutex<ChunkPos>,
     entity: Option<EntityIndex>,
     teleport_id: AtomicU32,
+    screen: Mutex<Option<UserScreen>>,
+    hotbar_slot: AtomicUsize,
+}
+pub struct UserScreen {
+    pub screen: UIScreenKey,
+    pub inventory: InventoryProvider,
+    pub state: UserScreenState,
+    pub previous_inventory: Inventory,
+}
+pub enum UserScreenState {
+    Open,
+    Normal,
+    Close,
+}
+#[derive(Clone, Copy)]
+pub enum InventoryProvider {
+    Entity(EntityIndex),
+    Block(BlockPos),
+}
+impl InventoryProvider {
+    //todo: prevent copies?
+    pub fn get_inventory(self, server: &Server) -> Option<Inventory> {
+        match self {
+            InventoryProvider::Entity(entity) => {
+                Some(server.entities.get(entity)?.inventory.read().clone())
+            }
+            InventoryProvider::Block(block) => {
+                let (chunk, offset) = block.to_chunk_pos_offset();
+                //server.get_chunk(chunk)?.components.
+                None
+            }
+        }
+    }
 }
 impl User {
+    pub fn set_screen(&self, screen: UIScreenKey, inventory: InventoryProvider) {
+        *self.screen.lock() = Some(UserScreen {
+            inventory,
+            screen,
+            state: UserScreenState::Open,
+            previous_inventory: Inventory::new(0),
+        });
+    }
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
         let distance = 8;
         let world_height = 8;

@@ -1,6 +1,7 @@
 mod render;
 mod ui;
 
+use core::f32;
 use std::{
     collections::{HashMap, HashSet},
     net::{SocketAddr, UdpSocket},
@@ -34,7 +35,10 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
-use crate::render::{GUIVertex, RenderState, Vertex};
+use crate::{
+    render::{GUIVertex, RenderState, Vertex},
+    ui::ScreenData,
+};
 
 fn main() {
     load_registries(&Path::new("assets"));
@@ -146,11 +150,96 @@ impl ApplicationHandler for App {
                 winit::keyboard::PhysicalKey::Code(key_code) => {
                     if event.state == ElementState::Pressed {
                         self.keys.insert(key_code);
+                        for (slot, key) in [
+                            KeyCode::Digit1,
+                            KeyCode::Digit2,
+                            KeyCode::Digit3,
+                            KeyCode::Digit4,
+                            KeyCode::Digit5,
+                            KeyCode::Digit6,
+                            KeyCode::Digit7,
+                            KeyCode::Digit8,
+                            KeyCode::Digit9,
+                            KeyCode::Digit0,
+                        ]
+                        .iter()
+                        .enumerate()
+                        {
+                            if key_code == *key {
+                                self.send_message(NetworkMessageC2S::HotbarSelect {
+                                    slot: slot as isize,
+                                    relative: false,
+                                });
+                            }
+                        }
+                        if key_code == KeyCode::KeyE {
+                            let ray = Ray {
+                                position: self.camera.get_eye(self.world.get_player_data()),
+                                direction: self.camera.make_front() * 10.,
+                            };
+                            let mut min_distance = f32::INFINITY;
+                            let mut interact_message = None;
+
+                            if let Some((block, position)) =
+                                ray.block_raycast(|block, position, _| {
+                                    let (chunk, offset) = block.to_chunk_pos_offset();
+                                    if self
+                                        .world
+                                        .chunks
+                                        .get(&chunk)?
+                                        .blocks
+                                        .get(offset.index())
+                                        .unwrap()
+                                        .data()
+                                        .selection
+                                        .len()
+                                        > 0
+                                    {
+                                        Some((block, position))
+                                    } else {
+                                        None
+                                    }
+                                })
+                            {
+                                min_distance = ray.position.distance(position);
+                                interact_message =
+                                    Some(NetworkMessageC2S::InteractBlock { position: block });
+                            }
+                            for (id, entity) in &self.world.entities {
+                                let entity_data = entity.key.data();
+                                if let Some(result) =
+                                    ray.aabb_raycast(entity_data.hitbox().offset(entity.position))
+                                {
+                                    let distance = result.position.distance(ray.position);
+                                    if distance < min_distance {
+                                        min_distance = distance;
+                                        interact_message =
+                                            Some(NetworkMessageC2S::InteractEntity { entity: *id });
+                                    }
+                                }
+                            }
+                            if let Some(message) = interact_message {
+                                self.send_message(message);
+                            }
+                        }
                     } else {
                         self.keys.remove(&key_code);
                     }
                 }
                 winit::keyboard::PhysicalKey::Unidentified(native_key_code) => {}
+            },
+            WindowEvent::MouseWheel {
+                device_id,
+                delta,
+                phase,
+            } => match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, scroll) => {
+                    self.send_message(NetworkMessageC2S::HotbarSelect {
+                        slot: -scroll as isize,
+                        relative: true,
+                    });
+                }
+                winit::event::MouseScrollDelta::PixelDelta(physical_position) => {}
             },
             WindowEvent::MouseInput {
                 device_id,
@@ -191,7 +280,7 @@ impl ApplicationHandler for App {
                         }
                         MouseButton::Right => {
                             if let Some(hit) = hit {
-                                self.send_message(NetworkMessageC2S::InteractBlock {
+                                self.send_message(NetworkMessageC2S::PlaceBlock {
                                     position: hit.0,
                                     face: hit.1,
                                 });
@@ -362,6 +451,22 @@ impl ApplicationHandler for App {
                             }
                             NetworkMessageS2C::PlayerAbilities { abilities } => {
                                 self.player_abilities = abilities;
+                            }
+                            NetworkMessageS2C::UIOpen { screen, slots } => {
+                                self.world.screen = Some(ScreenData { screen, slots });
+                            }
+                            NetworkMessageS2C::UISetSlot { slot, item } => {
+                                if let Some(screen) = &mut self.world.screen {
+                                    if slot < screen.slots.len() {
+                                        screen.slots[slot] = item;
+                                    }
+                                }
+                            }
+                            NetworkMessageS2C::UIClose => {
+                                self.world.screen = None;
+                            }
+                            NetworkMessageS2C::HUDUpdate { items } => {
+                                self.world.hud.slots = items;
                             }
                         }
                     }
@@ -820,6 +925,8 @@ pub struct ClientWorld {
     pub modified_chunks: HashSet<ChunkPos>,
     pub entities: HashMap<Uuid, ClientEntity>,
     pub player_entity: Option<Uuid>,
+    pub screen: Option<ScreenData>,
+    pub hud: ScreenData,
 }
 impl Default for ClientWorld {
     fn default() -> Self {
@@ -833,6 +940,11 @@ impl Default for ClientWorld {
             modified_chunks: Default::default(),
             entities: Default::default(),
             player_entity: None,
+            screen: None,
+            hud: ScreenData {
+                screen: Key::id("hud").unwrap(),
+                slots: vec![],
+            },
         }
     }
 }

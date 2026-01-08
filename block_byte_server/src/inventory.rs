@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use block_byte_common::registry::{ItemKey, LootTableKey};
+use block_byte_common::{
+    ClientItem,
+    registry::{ItemKey, LootTableKey},
+};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
@@ -8,13 +11,20 @@ use crate::registry::{Key, RegistryConfigLoadable};
 
 pub type ItemCount = u16;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemStack {
     pub item: ItemKey,
     pub count: ItemCount,
     pub components: ItemComponentStorage,
 }
 impl ItemStack {
+    pub fn new(item: ItemKey, count: ItemCount) -> ItemStack {
+        ItemStack {
+            item,
+            count,
+            components: ItemComponentStorage::new(),
+        }
+    }
     pub fn copy(&self, new_count: ItemCount) -> ItemStack {
         ItemStack {
             item: self.item,
@@ -61,6 +71,13 @@ impl ItemStack {
                 components: second_components,
             },
         )
+    }
+    pub fn client(&self) -> ClientItem {
+        ClientItem {
+            item: self.item,
+            count: self.count,
+            description: self.components.description(),
+        }
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -147,6 +164,14 @@ impl ItemComponentStorage {
             .find(|(_, c)| c.is_component())
             .map(|(i, _)| i)
     }
+    fn description(&self) -> String {
+        self.0
+            .iter()
+            .map(|component| component.description())
+            .filter(|description| !description.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 macro_rules! create_component_enum{
@@ -184,6 +209,15 @@ macro_rules! create_component_enum{
                 ItemComponent::$type(component)
             }
         })*
+        impl ItemComponent{
+            pub fn description(&self) -> String{
+                match self{
+                    $(
+                        ItemComponent::$type(component) => <$type as ItemComponentManipulation>::description(component),
+                    )*
+                }
+            }
+        }
         fn merge_components(first: &ItemComponentStorage, second: &ItemComponentStorage) -> Option<ItemComponentStorage>{
             let mut storage = ItemComponentStorage::new();
             $(
@@ -211,6 +245,23 @@ macro_rules! create_component_enum{
             )*
             (first, second)
         }
+        impl PartialEq for ItemComponentStorage {
+            fn eq(&self, other: &Self) -> bool {
+                $(
+                    match (self.get_component::<$type>(), other.get_component::<$type>()){
+                        (Some(first), Some(second)) => {
+                            if first != second{
+                                return false;
+                            }
+                        }
+                        (None, None) => {}
+                        _ => return false,
+                    }
+                )*
+                true
+            }
+        }
+        impl Eq for ItemComponentStorage{}
     }
 }
 
@@ -219,9 +270,10 @@ create_component_enum!(ItemDurability, ItemMana);
 pub trait ItemComponentManipulation: Sized {
     fn merge(&self, other: &Self) -> Option<Self>;
     fn split(&self, first_count: ItemCount, second_count: ItemCount) -> (Self, Self);
+    fn description(&self) -> String;
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemDurability(pub u32);
 impl ItemComponentManipulation for ItemDurability {
     fn merge(&self, other: &Self) -> Option<Self> {
@@ -235,9 +287,12 @@ impl ItemComponentManipulation for ItemDurability {
             ItemDurability(self.0 - take_count),
         )
     }
+    fn description(&self) -> String {
+        format!("Durability: {}", self.0)
+    }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemMana(pub u32);
 impl ItemComponentManipulation for ItemMana {
     fn merge(&self, other: &Self) -> Option<Self> {
@@ -247,6 +302,9 @@ impl ItemComponentManipulation for ItemMana {
         let take_count = (self.0 as f32 * first_count as f32 / (first_count + second_count) as f32)
             .ceil() as u32;
         (ItemMana(take_count), ItemMana(self.0 - take_count))
+    }
+    fn description(&self) -> String {
+        format!("Mana: {}", self.0)
     }
 }
 
@@ -269,6 +327,11 @@ pub struct InventoryView {
     slots: Vec<usize>,
 }
 impl InventoryView {
+    pub fn from_range(range: std::ops::Range<usize>) -> Self {
+        InventoryView {
+            slots: range.collect(),
+        }
+    }
     pub fn size(&self) -> usize {
         self.slots.len()
     }
@@ -288,6 +351,74 @@ impl InventoryView {
             }
             None => Err(()),
         }
+    }
+    pub fn add_item(&self, inventory: &mut Inventory, mut item: ItemStack) -> Option<ItemStack> {
+        let stack_size = item.item.data().stack_size;
+        for slot in &self.slots {
+            let mut slot = &mut inventory.items[*slot];
+            if slot.is_none() {
+                if item.count > stack_size {
+                    let (first, second) = item.split(stack_size);
+                    *slot = Some(first);
+                    item = second;
+                } else {
+                    *slot = Some(item);
+                    return None;
+                }
+            } else {
+                let mut slot = slot.as_mut().unwrap();
+                if let Some((stack, rest)) = item.merge(&slot) {
+                    *slot = stack;
+                    match rest {
+                        Some(rest) => {
+                            item = rest;
+                        }
+                        None => return None,
+                    }
+                }
+            }
+        }
+        Some(item)
+    }
+    pub fn count_item(&self, inventory: &Inventory, item: ItemKey) -> ItemCount {
+        let mut count = 0;
+        for slot in &self.slots {
+            match &inventory.items[*slot] {
+                Some(stack) => {
+                    if stack.item == item {
+                        count += stack.count
+                    }
+                }
+                None => {}
+            }
+        }
+        count
+    }
+    pub fn remove_item(
+        &self,
+        inventory: &mut Inventory,
+        item: ItemKey,
+        mut count: ItemCount,
+    ) -> ItemCount {
+        for slot in &self.slots {
+            let mut slot = &mut inventory.items[*slot];
+            if slot.is_some() {
+                let mut item_slot = slot.as_mut().unwrap();
+                if item_slot.item != item {
+                    continue;
+                }
+                let take = count.min(item_slot.count);
+                item_slot.count -= take;
+                if item_slot.count == 0 {
+                    *slot = None;
+                }
+                count -= take;
+                if count == 0 {
+                    return 0;
+                }
+            }
+        }
+        count
     }
 }
 pub fn generate_loot_table(loot_table: LootTableKey) -> Vec<ItemStack> {

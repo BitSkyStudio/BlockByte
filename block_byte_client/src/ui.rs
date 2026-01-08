@@ -1,7 +1,8 @@
 use block_byte_common::{
+    ClientItem,
     coord::Pos,
-    registry::TextureKey,
-    ui::{StyleLength, UIElement, UIElementType, UIScreen, UIStyleRule},
+    registry::{BlockRenderData, ItemModel, TextureKey},
+    ui::{StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
 };
 use taffy::{
     AlignItems, AvailableSpace, Dimension, FlexDirection, JustifyContent, Layout, LengthPercentage,
@@ -11,12 +12,30 @@ use winit::dpi::PhysicalSize;
 
 use crate::{GUIMesh, TexCoordsExt, text_renderer};
 
-pub fn render_screen(screen: &UIScreen, size: PhysicalSize<u32>, mesh: &mut GUIMesh) {
+pub struct ScreenData {
+    pub screen: UIScreenKey,
+    pub slots: Vec<Option<ClientItem>>,
+}
+
+pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &mut GUIMesh) {
+    let screen = screen_data.screen.data();
     let mut taffy: TaffyTree<&UIElement> = TaffyTree::new();
     let root = add_element_to_taffy(&screen.root, &mut taffy);
+    let body = taffy
+        .new_with_children(
+            Style {
+                size: taffy::Size {
+                    width: Dimension::percent(1.),
+                    height: Dimension::percent(1.),
+                },
+                ..Style::DEFAULT
+            },
+            &[root],
+        )
+        .unwrap();
     taffy
         .compute_layout_with_measure(
-            root,
+            body,
             taffy::Size {
                 width: AvailableSpace::Definite(size.width as f32),
                 height: AvailableSpace::Definite(size.height as f32),
@@ -35,6 +54,7 @@ pub fn render_screen(screen: &UIScreen, size: PhysicalSize<u32>, mesh: &mut GUIM
             y: 0.,
             z: 0.,
         },
+        &screen_data,
         mesh,
     );
 }
@@ -53,6 +73,10 @@ pub fn measure_element(element: &UIElement) -> taffy::Size<f32> {
             width: *width,
             height: *height,
         },
+        UIElementType::ItemSlot(_) => taffy::Size {
+            width: 50.,
+            height: 50.,
+        },
     }
 }
 fn render_element(
@@ -60,6 +84,7 @@ fn render_element(
     taffy: &TaffyTree<&UIElement>,
     size: PhysicalSize<u32>,
     parent_offset: Pos,
+    data: &ScreenData,
     mesh: &mut GUIMesh,
 ) {
     let layout = taffy.layout(node).unwrap();
@@ -102,6 +127,7 @@ fn render_element(
                             y: layout.location.y + layout.border.top,
                             z: 0.,
                         },
+                    data,
                     mesh,
                 );
             }
@@ -134,12 +160,80 @@ fn render_element(
                     z: 0.,
                 },
                 Pos {
-                    x: layout.content_box_width() / size.height as f32 * 2.,
-                    y: layout.content_box_height() / size.height as f32 * 2.,
+                    x: width / size.height as f32 * 2.,
+                    y: height / size.height as f32 * 2.,
                     z: 0.,
                 },
                 key.tex_coords(),
             );
+        }
+        UIElementType::ItemSlot(slot) => {
+            mesh.add_quad(
+                Pos {
+                    x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
+                        - aspect_ratio,
+                    y: -((layout.content_box_y() + parent_offset.y + layout.content_box_height())
+                        / size.height as f32
+                        * 2.
+                        - 1.),
+                    z: 0.,
+                },
+                Pos {
+                    x: 50. / size.height as f32 * 2.,
+                    y: 50. / size.height as f32 * 2.,
+                    z: 0.,
+                },
+                TextureKey::id("slot").unwrap().tex_coords(),
+            );
+            if let Some(item) = data.slots.get(*slot).cloned().flatten() {
+                let border = 3.;
+                match &item.item.data().model {
+                    ItemModel::Block(key) => match &key.data().render_data {
+                        BlockRenderData::Air => {}
+                        BlockRenderData::Full { faces } => {
+                            let texture = faces.front.tex_coords();
+                            mesh.add_quad(
+                                Pos {
+                                    x: (layout.content_box_x() + border + parent_offset.x)
+                                        / size.height as f32
+                                        * 2.
+                                        - aspect_ratio,
+                                    y: -((layout.content_box_y() - border
+                                        + parent_offset.y
+                                        + layout.content_box_height())
+                                        / size.height as f32
+                                        * 2.
+                                        - 1.),
+                                    z: 0.,
+                                },
+                                Pos {
+                                    x: (50. - border * 2.) / size.height as f32 * 2.,
+                                    y: (50. - border * 2.) / size.height as f32 * 2.,
+                                    z: 0.,
+                                },
+                                texture,
+                            );
+                        }
+                    },
+                }
+                text_renderer().draw(
+                    Pos {
+                        x: (layout.content_box_x() + border + parent_offset.x) / size.height as f32
+                            * 2.
+                            - aspect_ratio,
+                        y: -((layout.content_box_y() - border
+                            + parent_offset.y
+                            + layout.content_box_height())
+                            / size.height as f32
+                            * 2.
+                            - 1.),
+                        z: 0.,
+                    },
+                    &format!("{}", item.count),
+                    20. / size.height as f32 * 2.,
+                    mesh,
+                );
+            }
         }
     }
 }

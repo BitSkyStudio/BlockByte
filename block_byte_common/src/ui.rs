@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use anyhow::anyhow;
 use roxmltree::Node;
 use taffy::{
     AlignContent, AlignItems, AlignSelf, Dimension, FlexDirection, FlexWrap, JustifyContent,
@@ -25,6 +26,7 @@ pub enum UIElementType {
     Box(Vec<UIElement>),
     Label(String),
     Image(TextureKey, f32, f32),
+    ItemSlot(usize),
 }
 impl UIElementType {
     pub fn parse(node: &Node) -> anyhow::Result<Self> {
@@ -49,6 +51,9 @@ impl UIElementType {
                     .and_then(|n| n.parse().ok())
                     .unwrap(),
             ),
+            "slot" => {
+                UIElementType::ItemSlot(node.attribute("id").and_then(|n| n.parse().ok()).unwrap())
+            }
             other => unimplemented!("{}", other),
         })
     }
@@ -149,6 +154,12 @@ impl UIStyleList {
                     rules.push(UIStyleRule::Width(parse_style_length(width)?));
                     rules.push(UIStyleRule::Height(parse_style_length(height)?));
                 }
+                "width" => {
+                    rules.push(UIStyleRule::Width(parse_style_length(value)?));
+                }
+                "height" => {
+                    rules.push(UIStyleRule::Height(parse_style_length(value)?));
+                }
                 "padding" => {
                     let length = parse_style_length(value)?;
                     rules.push(UIStyleRule::PaddingTop(length));
@@ -214,7 +225,7 @@ impl UIStyleList {
                 "gap_row" => {
                     rules.push(UIStyleRule::GapRow(parse_style_length(value)?));
                 }
-                _ => unimplemented!(),
+                rule => return Err(anyhow!("unknown style rule '{}'", rule)),
             }
         }
         Ok(UIStyleList(rules))

@@ -76,12 +76,30 @@ impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Vec3<T> {
         (self - other).length_squared()
     }
 }
-impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T> + Roots> Vec3<T> {
-    pub fn length(self) -> T {
-        self.length_squared().sqrt()
+trait Sqrtable {
+    fn square_root(self) -> f32;
+}
+impl Sqrtable for i32 {
+    fn square_root(self) -> f32 {
+        (self as f32).sqrt()
     }
-    pub fn distance(self, other: Self) -> T {
-        self.distance_squared(other).sqrt()
+}
+impl Sqrtable for i16 {
+    fn square_root(self) -> f32 {
+        (self as f32).sqrt()
+    }
+}
+impl Sqrtable for f32 {
+    fn square_root(self) -> f32 {
+        self.sqrt()
+    }
+}
+impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T> + Sqrtable> Vec3<T> {
+    pub fn length(self) -> f32 {
+        self.length_squared().square_root()
+    }
+    pub fn distance(self, other: Self) -> f32 {
+        self.distance_squared(other).square_root()
     }
 }
 

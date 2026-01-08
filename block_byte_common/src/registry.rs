@@ -13,7 +13,7 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{FaceMap, Pos};
+use crate::coord::{AABB, FaceMap, Pos};
 use crate::ui::{UIScreen, UIStyleList};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
@@ -278,7 +278,12 @@ where
 #[derive(Deserialize)]
 pub struct ItemData {
     pub place: Option<BlockKey>,
+    pub model: ItemModel,
     pub stack_size: u16,
+}
+#[derive(Deserialize)]
+pub enum ItemModel {
+    Block(BlockKey),
 }
 pub type ItemKey = Key<ItemData>;
 
@@ -344,6 +349,22 @@ pub struct EntityData {
     pub hitbox_height: f32,
     #[serde(default)]
     pub eye_height: f32,
+}
+impl EntityData {
+    pub fn hitbox(&self) -> AABB<f32> {
+        AABB {
+            min: Pos {
+                x: -self.hitbox_size,
+                y: 0.,
+                z: -self.hitbox_size,
+            },
+            max: Pos {
+                x: self.hitbox_size,
+                y: self.hitbox_height,
+                z: self.hitbox_size,
+            },
+        }
+    }
 }
 pub type EntityKey = Key<EntityData>;
 

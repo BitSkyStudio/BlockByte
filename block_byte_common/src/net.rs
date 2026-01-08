@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    PlayerAbilities,
+    ClientItem, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockKey, BlockPalette, EntityKey},
+    ui::UIScreenKey,
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
 
@@ -13,7 +14,11 @@ use crate::{
 pub enum NetworkMessageC2S {
     PlayerPosition { position: Pos, teleport_id: u32 },
     AttackBlock { position: BlockPos },
-    InteractBlock { position: BlockPos, face: Face },
+    PlaceBlock { position: BlockPos, face: Face },
+    CloseUI,
+    HotbarSelect { slot: isize, relative: bool },
+    InteractBlock { position: BlockPos },
+    InteractEntity { entity: Uuid },
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {
@@ -59,5 +64,17 @@ pub enum NetworkMessageS2C {
     },
     PlayerAbilities {
         abilities: PlayerAbilities,
+    },
+    UIOpen {
+        screen: UIScreenKey,
+        slots: Vec<Option<ClientItem>>,
+    },
+    UISetSlot {
+        slot: usize,
+        item: Option<ClientItem>,
+    },
+    UIClose,
+    HUDUpdate {
+        items: Vec<Option<ClientItem>>,
     },
 }
