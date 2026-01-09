@@ -29,7 +29,9 @@ use slotmap::{SlotMap, new_key_type};
 use crate::{
     inventory::{Inventory, InventoryView, ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
-    world::{BlockEvent, Chunk, ChunkSaveData, Entity, EntityIndex, air_block},
+    world::{
+        BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex, air_block,
+    },
 };
 
 mod inventory;
@@ -106,6 +108,10 @@ fn main() {
                 &mut *entity.inventory.write(),
                 ItemStack::new(ItemKey::id("grass_item").unwrap(), 20),
             );
+            InventoryView::from_range(0..10).add_item(
+                &mut *entity.inventory.write(),
+                ItemStack::new(ItemKey::id("barrel").unwrap(), 20),
+            );
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
@@ -114,7 +120,7 @@ fn main() {
             chunk.entities.push(entity_index);
             server
                 .message_queue
-                .send_message(chunk.viewers.iter(), add_message, &server.users);
+                .send_message(chunk.viewers.iter(), add_message);
             server.users.get_mut(user).unwrap().entity = Some(entity_index);
             server.send_message(
                 user,
@@ -230,7 +236,6 @@ fn main() {
                                         position: entity.position,
                                         teleport_id,
                                     },
-                                    &server.users,
                                 );
                                 continue;
                             }
@@ -291,8 +296,37 @@ fn main() {
                         user.hotbar_slot
                             .store(new_slot, std::sync::atomic::Ordering::Relaxed);
                     }
-                    NetworkMessageC2S::InteractBlock { position } => {}
-                    NetworkMessageC2S::InteractEntity { entity } => {}
+                    NetworkMessageC2S::InteractBlock { position } => {
+                        server.schedule_block_event(
+                            position,
+                            BlockEvent::PlayerInteract {
+                                user: user_id.into(),
+                            },
+                        );
+                    }
+                    NetworkMessageC2S::InteractEntity { entity: entity_id } => {
+                        for chunk in (AABB::<i16> {
+                            min: ChunkPos {
+                                x: -1,
+                                y: -1,
+                                z: -1,
+                            },
+                            max: ChunkPos { x: 1, y: 1, z: 1 },
+                        }
+                        .offset(*user.view_position.lock()))
+                        {
+                            if let Some(chunk) = server.get_chunk(chunk) {
+                                for entity in &chunk.entities {
+                                    let entity = server.get_entity(*entity).unwrap();
+                                    if entity.uuid == entity_id {
+                                        entity.events.lock().push(EntityEvent::PlayerInteract {
+                                            user: user_id.into(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -330,16 +364,16 @@ fn main() {
                         None => vec![],
                     },
                 },
-                &server.users,
             );
             let mut screen_lock = user.screen.lock();
             if let Some(screen) = &mut *screen_lock {
                 match screen.state {
                     UserScreenState::Open => {
+                        println!("open inventory");
                         let inventory = match screen.inventory.get_inventory(&server) {
                             Some(inventory) => inventory,
                             None => {
-                                screen.state = UserScreenState::Close;
+                                *screen_lock = None;
                                 continue;
                             }
                         };
@@ -353,7 +387,6 @@ fn main() {
                                     .map(|item| item.as_ref().map(|item| item.client()))
                                     .collect(),
                             },
-                            &server.users,
                         );
                         screen.previous_inventory = inventory;
                         screen.state = UserScreenState::Normal;
@@ -380,18 +413,15 @@ fn main() {
                                         slot,
                                         item: new.as_ref().map(|item| item.client()),
                                     },
-                                    &server.users,
                                 );
                             }
                         }
                         screen.previous_inventory = new_inventory;
                     }
                     UserScreenState::Close => {
-                        server.message_queue.send_message(
-                            std::iter::once(user_index),
-                            NetworkMessageS2C::UIClose,
-                            &server.users,
-                        );
+                        server
+                            .message_queue
+                            .send_message(std::iter::once(user_index), NetworkMessageS2C::UIClose);
                         *screen_lock = None;
                     }
                 }
@@ -410,7 +440,7 @@ fn main() {
             chunk.entities.push(entity_index);
             server
                 .message_queue
-                .send_message(chunk.viewers.iter(), add_message, &server.users);
+                .send_message(chunk.viewers.iter(), add_message);
         }
 
         server.entities.retain(|index, entity| {
@@ -430,17 +460,14 @@ fn main() {
                         server.message_queue.send_message(
                             previous_chunk.viewers.difference(&new_chunk.viewers),
                             entity.create_remove_message(),
-                            &server.users,
                         );
                         server.message_queue.send_message(
                             new_chunk.viewers.difference(&previous_chunk.viewers),
                             entity.create_add_message(),
-                            &server.users,
                         );
                         server.message_queue.send_message(
                             new_chunk.viewers.intersection(&previous_chunk.viewers),
                             entity.create_move_message(),
-                            &server.users,
                         );
                     } else {
                         entity.position = teleport;
@@ -452,7 +479,6 @@ fn main() {
                                 .viewers
                                 .iter(),
                             entity.create_move_message(),
-                            &server.users,
                         );
                     }
                 }
@@ -467,7 +493,6 @@ fn main() {
                         .viewers
                         .iter(),
                     entity.create_remove_message(),
-                    &server.users,
                 );
             }
             !removed
@@ -481,15 +506,20 @@ fn main() {
                 if skipping_users.contains(user) {
                     return true;
                 }
+                let client_id = match server.users.get(*user) {
+                    Some(user) => user.client_id,
+                    None => return false,
+                };
                 //idk why it is broken and needs + 1000
-                if network_server.channel_available_memory(*user, DefaultChannel::ReliableOrdered)
+                if network_server
+                    .channel_available_memory(client_id, DefaultChannel::ReliableOrdered)
                     < message.len() + 1000
                 {
                     skipping_users.insert(*user);
                     return true;
                 }
                 network_server.send_message(
-                    *user,
+                    client_id,
                     DefaultChannel::ReliableOrdered,
                     message.clone(),
                 );
@@ -522,21 +552,18 @@ fn main() {
     }
 }
 #[derive(Default)]
-pub struct MessageQueue(Mutex<Vec<(ClientId, renet::Bytes)>>);
+pub struct MessageQueue(Mutex<Vec<(UserIndex, renet::Bytes)>>);
 impl MessageQueue {
     pub fn send_message<T: std::borrow::Borrow<UserIndex>>(
         &self,
         users: impl Iterator<Item = T>,
         message: NetworkMessageS2C,
-        user_map: &SlotMap<UserIndex, User>,
     ) {
         let message = bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap();
         let message: renet::Bytes = message.into();
         let mut message_queue = self.0.lock();
         for user in users {
-            if let Some(user) = user_map.get(*user.borrow()) {
-                message_queue.push((user.client_id, message.clone()));
-            }
+            message_queue.push((*user.borrow(), message.clone()));
         }
     }
 }
@@ -561,6 +588,7 @@ impl Server {
         Ok(())
     }
     pub fn place(&self, position: BlockPos, block: BlockKey) -> Result<(), ()> {
+        let block_data = block.data();
         let (chunk, offset) = position.to_chunk_pos_offset();
         let chunk = match self.get_chunk(chunk) {
             Some(chunk) => chunk,
@@ -568,10 +596,6 @@ impl Server {
                 return Err(());
             }
         };
-        let mut blocks = chunk.blocks.write();
-        if *blocks.get(offset.index()).unwrap() != air_block() {
-            return Err(());
-        }
         for chunk in (AABB {
             min: ChunkPos {
                 x: -1,
@@ -591,11 +615,25 @@ impl Server {
                 }
             }
         }
-        blocks.set(offset.index(), &block);
+        {
+            let mut blocks = chunk.blocks.write();
+            if *blocks.get(offset.index()).unwrap() != air_block() {
+                return Err(());
+            }
+            blocks.set(offset.index(), &block);
+        }
         self.send_message_multiple(
             chunk.viewers.iter(),
             NetworkMessageS2C::SetBlock { position, block },
         );
+        if let Some(machine_data) = &block_data.machine {
+            chunk.components.machine.write().set(
+                offset,
+                BlockMachine {
+                    inventory: RwLock::new(Inventory::new(machine_data.inventory_size)),
+                },
+            );
+        }
         Ok(())
     }
     pub fn schedule_block_event(&self, position: BlockPos, event: BlockEvent) {
@@ -620,16 +658,19 @@ impl Server {
     pub fn get_user(&self, user: UserIndex) -> Option<&User> {
         self.users.get(user)
     }
+    pub fn get_entity(&self, entity: EntityIndex) -> Option<&Entity> {
+        self.entities.get(entity)
+    }
     pub fn send_message(&self, user: UserIndex, message: NetworkMessageS2C) {
         self.message_queue
-            .send_message(std::iter::once(user), message, &self.users);
+            .send_message(std::iter::once(user), message);
     }
     pub fn send_message_multiple<T: std::borrow::Borrow<UserIndex>>(
         &self,
         users: impl Iterator<Item = T>,
         message: NetworkMessageS2C,
     ) {
-        self.message_queue.send_message(users, message, &self.users);
+        self.message_queue.send_message(users, message);
     }
 }
 
@@ -657,11 +698,9 @@ impl ChunkViewingManager {
             };
             for entity in &chunk.entities {
                 let add_message = server.entities.get(*entity).unwrap().create_add_message();
-                server.message_queue.send_message(
-                    std::iter::once(user),
-                    add_message,
-                    &server.users,
-                );
+                server
+                    .message_queue
+                    .send_message(std::iter::once(user), add_message);
             }
             server.send_message(user, message);
         } else {
@@ -817,8 +856,17 @@ impl InventoryProvider {
             }
             InventoryProvider::Block(block) => {
                 let (chunk, offset) = block.to_chunk_pos_offset();
-                //server.get_chunk(chunk)?.components.
-                None
+                Some(
+                    server
+                        .get_chunk(chunk)?
+                        .components
+                        .machine
+                        .read()
+                        .get(offset)?
+                        .inventory
+                        .read()
+                        .clone(),
+                )
             }
         }
     }

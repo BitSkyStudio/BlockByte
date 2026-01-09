@@ -297,7 +297,7 @@ impl RenderState {
             render_screen(screen, self.size, &mut gui_mesh);
         }
 
-        {
+        if world.screen.is_none() {
             let crosshair_size = Vec3 {
                 x: 0.02,
                 y: 0.02,

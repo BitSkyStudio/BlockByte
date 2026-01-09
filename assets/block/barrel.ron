@@ -1,0 +1,18 @@
+(
+    render_data: Full(
+        faces: (
+            front: "grass_block",
+            back: "grass_block",
+            left: "grass_block",
+            right: "grass_block",
+            down: "grass_block",
+            up: "grass_block",
+        ),
+    ),
+    health: Some((health: 5.)),
+    loot_table: Key("empty"),
+    interact_action: OpenInventory("barrel"),
+    machine: Some((
+        inventory_size: 10,
+    )),
+)

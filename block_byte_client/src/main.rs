@@ -126,8 +126,10 @@ impl ApplicationHandler for App {
     ) {
         match event {
             DeviceEvent::MouseMotion { delta } => {
-                self.camera
-                    .update_orientation(-delta.1 as f32, -delta.0 as f32);
+                if self.world.screen.is_none() {
+                    self.camera
+                        .update_orientation(-delta.1 as f32, -delta.0 as f32);
+                }
             }
             _ => {}
         }
@@ -172,7 +174,7 @@ impl ApplicationHandler for App {
                                 });
                             }
                         }
-                        if key_code == KeyCode::KeyE {
+                        if key_code == KeyCode::KeyE && self.world.screen.is_none() {
                             let ray = Ray {
                                 position: self.camera.get_eye(self.world.get_player_data()),
                                 direction: self.camera.make_front() * 10.,
@@ -222,6 +224,9 @@ impl ApplicationHandler for App {
                                 self.send_message(message);
                             }
                         }
+                        if key_code == KeyCode::Escape {
+                            self.send_message(NetworkMessageC2S::CloseUI);
+                        }
                     } else {
                         self.keys.remove(&key_code);
                     }
@@ -246,7 +251,7 @@ impl ApplicationHandler for App {
                 state,
                 button,
             } => {
-                if state == ElementState::Pressed {
+                if state == ElementState::Pressed && self.world.screen.is_none() {
                     let ray = Ray {
                         position: self.camera.get_eye(self.world.get_player_data()),
                         direction: self.camera.make_front() * 10.,
@@ -385,7 +390,6 @@ impl ApplicationHandler for App {
                                 {
                                     let chunk = self.world.chunks.get_mut(&chunk).unwrap();
                                     chunk.blocks.set(offset.index(), &block);
-                                    chunk.components.remove_block(offset);
                                 }
                                 self.world.modified_chunks.insert(chunk);
                                 let offset_xyz = offset.xyz();

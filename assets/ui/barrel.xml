@@ -1,0 +1,13 @@
+<box style="height: 100%;width:100%;justify_content: center;align_items: center;gap_column: 10;">
+    <slot id="0"/>
+    <slot id="1"/>
+    <slot id="2"/>
+    <slot id="3"/>
+    <slot id="4"/>
+    <slot id="5"/>
+    <slot id="6"/>
+    <slot id="7"/>
+    <slot id="8"/>
+    <slot id="9"/>
+    <slot id="10"/>
+</box>

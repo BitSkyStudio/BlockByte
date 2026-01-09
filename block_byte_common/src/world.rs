@@ -1,3 +1,4 @@
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::{coord::ChunkOffset, registry::PlantKey};
@@ -38,16 +39,17 @@ impl<T> BlockComponentStorage<T> {
             false
         }
     }
-    #[cfg(feature = "server")]
-    pub fn client<U>(&self) -> BlockComponentStorage<U>
-    where
-        U: ComponentClientFromServer<T>,
-    {
+}
+impl<T, U> Into<BlockComponentStorage<U>> for &BlockComponentStorage<T>
+where
+    for<'a> &'a T: Into<U>,
+{
+    fn into(self) -> BlockComponentStorage<U> {
         BlockComponentStorage {
             components: self
                 .components
                 .iter()
-                .map(|(offset, data)| (*offset, U::from_server(data)))
+                .map(|(offset, data)| (*offset, data.into()))
                 .collect(),
         }
     }
@@ -59,47 +61,23 @@ impl<T> Default for BlockComponentStorage<T> {
         }
     }
 }
-pub fn skip_serializing_component_storage<T>(components: &BlockComponentStorage<T>) -> bool {
-    components.components.is_empty()
-}
-#[cfg(feature = "server")]
-pub fn skip_serializing_component_storage_rwlock<T>(
-    components: &parking_lot::RwLock<BlockComponentStorage<T>>,
-) -> bool {
-    components.read().components.is_empty()
-}
-macro_rules! create_chunk_block_components{
-    ($($type:tt, $ctype:ty, $id:ident);*) => {
-        #[derive(Default, Serialize, Deserialize)]
-        #[cfg(feature="server")]
-        pub struct ChunkBlockComponents{
-            $(
-                #[serde(skip_serializing_if = "skip_serializing_component_storage_rwlock", default)]
-                pub $id: parking_lot::RwLock<BlockComponentStorage<$type>>,
-            )*
-        }
+macro_rules! create_client_chunk_block_components{
+    ($($type:tt, $id:ident);*) => {
         #[derive(Serialize, Deserialize)]
         pub struct ClientChunkBlockComponents{
-            //#[serde(skip_serializing_if = "skip_serializing_component_storage")]
-            $(pub $id: BlockComponentStorage<$ctype>,)*
-        }
-        impl ClientChunkBlockComponents{
-            pub fn remove_block(&mut self, offset: ChunkOffset){
-                $(self.$id.remove(offset);)*
-            }
-        }
-        #[cfg(feature="server")]
-        impl ChunkBlockComponents{
-            pub fn client(&self) -> ClientChunkBlockComponents{
-                ClientChunkBlockComponents{
-                    $($id: (&*self.$id.read()).client(),)*
-                }
-            }
+            $(pub $id: BlockComponentStorage<$type>,)*
         }
         #[derive(Serialize, Deserialize)]
         pub enum ClientBlockComponentUpdate{
-            $($type(Option<$ctype>),)*
+            $($type(Option<$type>),)*
         }
+        $(
+            impl From<Option<$type>> for ClientBlockComponentUpdate{
+                fn from(value: Option<$type>) -> ClientBlockComponentUpdate{
+                    ClientBlockComponentUpdate::$type(value)
+                }
+            }
+        )*
         impl ClientBlockComponentUpdate{
             pub fn update(self, offset: ChunkOffset, components: &mut ClientChunkBlockComponents){
                 match self{
@@ -119,45 +97,13 @@ macro_rules! create_chunk_block_components{
     }
 }
 
-create_chunk_block_components!(BlockDamage, ClientBlockDamage, damage; BlockPlants, ClientBlockPlants, plant);
+create_client_chunk_block_components!(ClientBlockDamage, damage; ClientBlockPlants, plant);
 
-pub trait ComponentClientFromServer<T> {
-    fn from_server(server: &T) -> Self;
-}
-
-#[derive(Serialize, Deserialize)]
-#[cfg(feature = "server")]
-pub struct BlockDamage {
-    pub damage: f32,
-}
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockDamage {
     pub damage: f32,
 }
-impl ComponentClientFromServer<BlockDamage> for ClientBlockDamage {
-    fn from_server(value: &BlockDamage) -> Self {
-        ClientBlockDamage {
-            damage: value.damage,
-        }
-    }
-}
-impl<T> ComponentClientFromServer<T> for () {
-    fn from_server(server: &T) -> Self {
-        ()
-    }
-}
-#[derive(Serialize, Deserialize)]
-pub struct BlockPlants {
-    pub plants: Vec<(PlantKey, f32)>,
-}
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockPlants {
     pub plants: Vec<PlantKey>,
-}
-impl ComponentClientFromServer<BlockPlants> for ClientBlockPlants {
-    fn from_server(server: &BlockPlants) -> Self {
-        ClientBlockPlants {
-            plants: server.plants.iter().map(|(plant, _)| *plant).collect(),
-        }
-    }
 }

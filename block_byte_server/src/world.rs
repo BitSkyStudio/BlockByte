@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     path::Path,
     sync::{OnceLock, atomic::AtomicBool},
 };
@@ -7,10 +8,12 @@ use std::{
 use block_byte_common::{
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
-    registry::{BiomeKey, BlockData, BlockKey, BlockPalette, EntityKey},
+    registry::{
+        BiomeKey, BlockData, BlockInteractAction, BlockKey, BlockPalette, EntityKey, PlantKey,
+    },
     world::{
-        BlockDamage, BlockPlants, ChunkBlockComponents, ClientBlockComponentUpdate,
-        ClientBlockDamage, ComponentClientFromServer,
+        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
+        ClientChunkBlockComponents,
     },
 };
 use noise::{BasicMulti, NoiseFn, Perlin};
@@ -24,7 +27,7 @@ use splines::{Interpolation, Spline};
 use uuid::Uuid;
 
 use crate::{
-    Server, UserIndex,
+    InventoryProvider, Server, UserIndex,
     inventory::Inventory,
     registry::{Key, RegistryConfigLoadable},
 };
@@ -140,7 +143,7 @@ impl Chunk {
         for (block, event) in processing_events {
             match event {
                 BlockEvent::Damage { damage } => {
-                    let block_data = &self.blocks.read().get(block.index()).unwrap().data();
+                    let block_data = self.blocks.read().get(block.index()).unwrap().data();
                     if let Some(health) = &block_data.health {
                         let mut damage_component = self.components.damage.write();
                         let mut destroy = false;
@@ -159,7 +162,20 @@ impl Chunk {
                             damage_component.remove(block);
                             self.blocks.write().set(block.index(), &air_block());
                             if block_data.plantable {
-                                self.components.plant.write().remove(block);
+                                if self.components.plant.write().remove(block) {
+                                    server.send_message_multiple(
+                                        self.viewers.iter(),
+                                        NetworkMessageS2C::UpdateBlockComponents {
+                                            chunk: self.position,
+                                            offset: block,
+                                            data: Option::<ClientBlockPlants>::None.into(),
+                                        },
+                                    );
+                                }
+                            }
+                            if let Some(_) = &block_data.machine {
+                                self.components.machine.write().remove(block);
+                                //todo: drop items
                             }
                             server.send_message_multiple(
                                 self.viewers.iter(),
@@ -174,13 +190,28 @@ impl Chunk {
                             NetworkMessageS2C::UpdateBlockComponents {
                                 chunk: self.position,
                                 offset: block,
-                                data: ClientBlockComponentUpdate::BlockDamage(
-                                    damage_component
-                                        .get(block)
-                                        .map(ClientBlockDamage::from_server),
-                                ),
+                                data: damage_component
+                                    .get(block)
+                                    .map(|component| Into::<ClientBlockDamage>::into(component))
+                                    .into(),
                             },
                         );
+                    }
+                }
+                BlockEvent::PlayerInteract { user } => {
+                    let block_data = self.blocks.read().get(block.index()).unwrap().data();
+                    match &block_data.interact_action {
+                        BlockInteractAction::Ignore => {}
+                        BlockInteractAction::OpenInventory(key) => {
+                            if let Some(user) = server.get_user(user.0) {
+                                user.set_screen(
+                                    *key,
+                                    InventoryProvider::Block(
+                                        self.position.to_block_pos() + block.xyz(),
+                                    ),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -197,14 +228,64 @@ impl Chunk {
         }
     }
 }
+
+pub struct UserIndexSave(UserIndex);
+impl Serialize for UserIndexSave {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_unit()
+    }
+}
+impl<'de> Deserialize<'de> for UserIndexSave {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct DefaultVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for DefaultVisitor {
+            type Value = UserIndexSave;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("unit")
+            }
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(UserIndexSave(slotmap::Key::null()))
+            }
+        }
+        deserializer.deserialize_unit(DefaultVisitor)
+    }
+}
+impl Into<UserIndex> for UserIndexSave {
+    fn into(self) -> UserIndex {
+        self.0
+    }
+}
+impl From<UserIndex> for UserIndexSave {
+    fn from(value: UserIndex) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum BlockEvent {
     Damage { damage: f32 },
+    PlayerInteract { user: UserIndexSave },
 }
 
 static AIR_BLOCK: OnceLock<BlockKey> = OnceLock::new();
 pub fn air_block() -> BlockKey {
-    *AIR_BLOCK.get_or_init(|| Key::id("air").unwrap())
+    *AIR_BLOCK.get_or_init(|| BlockKey::id("air").unwrap())
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum EntityEvent {
+    Damage { damage: f32 },
+    PlayerInteract { user: UserIndexSave },
 }
 
 new_key_type! {pub struct EntityIndex;}
@@ -216,6 +297,7 @@ pub struct Entity {
     pub teleport: Mutex<Option<Pos>>,
     pub removed: AtomicBool,
     pub inventory: RwLock<Inventory>,
+    pub events: Mutex<Vec<EntityEvent>>,
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
@@ -227,6 +309,17 @@ impl Entity {
             teleport: Mutex::new(None),
             removed: AtomicBool::new(false),
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
+            events: Mutex::new(Vec::new()),
+        }
+    }
+    pub fn tick(&self) {
+        let mut processing_events = Vec::new();
+        std::mem::swap(&mut processing_events, &mut *self.events.lock());
+        for event in processing_events {
+            match event {
+                EntityEvent::Damage { damage } => {}
+                EntityEvent::PlayerInteract { user } => {}
+            }
         }
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
@@ -251,4 +344,65 @@ impl Entity {
     pub fn create_remove_message(&self) -> NetworkMessageS2C {
         NetworkMessageS2C::RemoveEntity { uuid: self.uuid }
     }
+}
+
+macro_rules! create_chunk_block_components{
+    ($($type:tt, $id:ident);*) => {
+        #[derive(Default, Serialize, Deserialize)]
+        pub struct ChunkBlockComponents{
+            $(
+                #[serde(skip_serializing_if = "skip_serializing_component_storage", default)]
+                pub $id: parking_lot::RwLock<BlockComponentStorage<$type>>,
+            )*
+        }
+    }
+}
+pub fn skip_serializing_component_storage<T>(
+    components: &parking_lot::RwLock<BlockComponentStorage<T>>,
+) -> bool {
+    components.read().components.is_empty()
+}
+
+macro_rules! create_chunk_block_components_client_mapping {
+    ($($id:ident),*) => {
+        impl ChunkBlockComponents {
+            pub fn client(&self) -> ClientChunkBlockComponents {
+                ClientChunkBlockComponents {
+                    $(
+                        $id: (&*self.$id.read()).into(),
+                    )*
+                }
+            }
+        }
+    };
+}
+
+create_chunk_block_components!(BlockDamage, damage; BlockPlants, plant; BlockMachine, machine);
+create_chunk_block_components_client_mapping!(damage, plant);
+
+#[derive(Serialize, Deserialize)]
+pub struct BlockDamage {
+    pub damage: f32,
+}
+impl Into<ClientBlockDamage> for &BlockDamage {
+    fn into(self) -> ClientBlockDamage {
+        ClientBlockDamage {
+            damage: self.damage,
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub struct BlockPlants {
+    pub plants: Vec<(PlantKey, f32)>,
+}
+impl Into<ClientBlockPlants> for &BlockPlants {
+    fn into(self) -> ClientBlockPlants {
+        ClientBlockPlants {
+            plants: self.plants.iter().map(|(plant, _)| *plant).collect(),
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub struct BlockMachine {
+    pub inventory: RwLock<Inventory>,
 }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::coord::{AABB, FaceMap, Pos};
-use crate::ui::{UIScreen, UIStyleList};
+use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
 impl<T> Key<T> {
@@ -313,10 +313,28 @@ pub struct BlockData {
     #[serde(default)]
     pub plantable: bool,
     pub loot_table: OwnOrKey<LootTableData>,
+    #[serde(default)]
+    pub interact_action: BlockInteractAction,
+    #[serde(default)]
+    pub machine: Option<BlockMachine>,
 }
 #[derive(Deserialize)]
 pub struct BlockHealthData {
     pub health: f32,
+}
+#[derive(Deserialize)]
+pub enum BlockInteractAction {
+    Ignore,
+    OpenInventory(UIScreenKey),
+}
+impl Default for BlockInteractAction {
+    fn default() -> Self {
+        Self::Ignore
+    }
+}
+#[derive(Deserialize)]
+pub struct BlockMachine {
+    pub inventory_size: usize,
 }
 #[derive(Deserialize)]
 #[cfg(feature = "client")]
