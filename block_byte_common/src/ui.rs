@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::{cmp::Ordering, collections::HashMap, path::Path};
 
 use anyhow::anyhow;
 use roxmltree::Node;
+use serde::{Deserialize, Serialize};
 use taffy::{
-    AlignContent, AlignItems, AlignSelf, Dimension, FlexDirection, FlexWrap, JustifyContent,
-    LengthPercentage, LengthPercentageAuto, Position, Size,
+    AlignContent, AlignItems, AlignSelf, Dimension, Display, FlexDirection, FlexWrap,
+    JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Size,
 };
 
 use crate::registry::{Key, RegistryConfigLoadable, TextureKey};
@@ -82,7 +83,7 @@ impl UIElement {
     }
 }
 #[derive(Default)]
-pub struct UIStyleList(pub Vec<UIStyleRule>);
+pub struct UIStyleList(pub Vec<(UIStyleRule, Option<PropertyCondition>)>);
 impl UIStyleList {
     pub fn parse(input: &str) -> anyhow::Result<Self> {
         let mut rules = Vec::new();
@@ -92,7 +93,33 @@ impl UIStyleList {
                 continue;
             }
             let (rule, value) = rule.split_once(":").unwrap();
-            let rule = rule.trim();
+            let mut rule = rule.trim();
+            let mut condition = None;
+            if rule.starts_with("[") {
+                let (c, r) = rule.split_once("]").unwrap();
+                rule = r.trim();
+                let comparator = if c.contains("<") {
+                    Ordering::Less
+                } else if c.contains(">") {
+                    Ordering::Greater
+                } else if c.contains("=") {
+                    Ordering::Equal
+                } else {
+                    panic!()
+                };
+                let (l, r) = c
+                    .split_once(match comparator {
+                        Ordering::Less => "<",
+                        Ordering::Equal => "=",
+                        Ordering::Greater => ">",
+                    })
+                    .unwrap();
+                condition = Some(PropertyCondition {
+                    property: l[1..].trim().to_string(),
+                    comparator,
+                    value: r.parse::<f32>().unwrap(),
+                });
+            }
             let value = value.trim();
             fn parse_style_length(input: &str) -> anyhow::Result<StyleLength> {
                 if input == "auto" {
@@ -132,98 +159,173 @@ impl UIStyleList {
                 })
             }
             match rule {
-                "flex_direction" => rules.push(UIStyleRule::FlexDirection(match value {
-                    "row" => FlexDirection::Row,
-                    "row_reverse" => FlexDirection::RowReverse,
-                    "column" => FlexDirection::Column,
-                    "column_reverse" => FlexDirection::ColumnReverse,
-                    _ => unimplemented!(),
-                })),
-                "justify_content" => {
-                    rules.push(UIStyleRule::JustifyContent(parse_align_content(value)?))
+                "flex_direction" => rules.push((
+                    UIStyleRule::FlexDirection(match value {
+                        "row" => FlexDirection::Row,
+                        "row_reverse" => FlexDirection::RowReverse,
+                        "column" => FlexDirection::Column,
+                        "column_reverse" => FlexDirection::ColumnReverse,
+                        _ => unimplemented!(),
+                    }),
+                    condition,
+                )),
+                "justify_content" => rules.push((
+                    UIStyleRule::JustifyContent(parse_align_content(value)?),
+                    condition,
+                )),
+                "justify_items" => rules.push((
+                    UIStyleRule::JustifyItems(parse_align_items(value)?),
+                    condition,
+                )),
+                "justify_self" => rules.push((
+                    UIStyleRule::JustifySelf(parse_align_items(value)?),
+                    condition,
+                )),
+                "align_content" => rules.push((
+                    UIStyleRule::AlignContent(parse_align_content(value)?),
+                    condition,
+                )),
+                "align_items" => rules.push((
+                    UIStyleRule::AlignItems(parse_align_items(value)?),
+                    condition,
+                )),
+                "align_self" => {
+                    rules.push((UIStyleRule::AlignSelf(parse_align_items(value)?), condition))
                 }
-                "justify_items" => rules.push(UIStyleRule::JustifyItems(parse_align_items(value)?)),
-                "justify_self" => rules.push(UIStyleRule::JustifySelf(parse_align_items(value)?)),
-                "align_content" => {
-                    rules.push(UIStyleRule::AlignContent(parse_align_content(value)?))
-                }
-                "align_items" => rules.push(UIStyleRule::AlignItems(parse_align_items(value)?)),
-                "align_self" => rules.push(UIStyleRule::AlignSelf(parse_align_items(value)?)),
                 "size" => {
                     let (width, height) = value.split_once(" ").unwrap();
-                    rules.push(UIStyleRule::Width(parse_style_length(width)?));
-                    rules.push(UIStyleRule::Height(parse_style_length(height)?));
+                    rules.push((
+                        UIStyleRule::Width(parse_style_length(width)?),
+                        condition.clone(),
+                    ));
+                    rules.push((UIStyleRule::Height(parse_style_length(height)?), condition));
                 }
                 "width" => {
-                    rules.push(UIStyleRule::Width(parse_style_length(value)?));
+                    rules.push((UIStyleRule::Width(parse_style_length(value)?), condition));
                 }
                 "height" => {
-                    rules.push(UIStyleRule::Height(parse_style_length(value)?));
+                    rules.push((UIStyleRule::Height(parse_style_length(value)?), condition));
                 }
                 "padding" => {
                     let length = parse_style_length(value)?;
-                    rules.push(UIStyleRule::PaddingTop(length));
-                    rules.push(UIStyleRule::PaddingBottom(length));
-                    rules.push(UIStyleRule::PaddingLeft(length));
-                    rules.push(UIStyleRule::PaddingRight(length));
+                    rules.push((UIStyleRule::PaddingTop(length), condition.clone()));
+                    rules.push((UIStyleRule::PaddingBottom(length), condition.clone()));
+                    rules.push((UIStyleRule::PaddingLeft(length), condition.clone()));
+                    rules.push((UIStyleRule::PaddingRight(length), condition));
                 }
-                "padding_left" => rules.push(UIStyleRule::PaddingLeft(parse_style_length(value)?)),
-                "padding_right" => {
-                    rules.push(UIStyleRule::PaddingRight(parse_style_length(value)?))
-                }
-                "padding_top" => rules.push(UIStyleRule::PaddingTop(parse_style_length(value)?)),
-                "padding_bottom" => {
-                    rules.push(UIStyleRule::PaddingBottom(parse_style_length(value)?))
-                }
+                "padding_left" => rules.push((
+                    UIStyleRule::PaddingLeft(parse_style_length(value)?),
+                    condition,
+                )),
+                "padding_right" => rules.push((
+                    UIStyleRule::PaddingRight(parse_style_length(value)?),
+                    condition,
+                )),
+                "padding_top" => rules.push((
+                    UIStyleRule::PaddingTop(parse_style_length(value)?),
+                    condition,
+                )),
+                "padding_bottom" => rules.push((
+                    UIStyleRule::PaddingBottom(parse_style_length(value)?),
+                    condition,
+                )),
 
                 "margin" => {
                     let length = parse_style_length(value)?;
-                    rules.push(UIStyleRule::MarginTop(length));
-                    rules.push(UIStyleRule::MarginBottom(length));
-                    rules.push(UIStyleRule::MarginLeft(length));
-                    rules.push(UIStyleRule::MarginRight(length));
+                    rules.push((UIStyleRule::MarginTop(length), condition.clone()));
+                    rules.push((UIStyleRule::MarginBottom(length), condition.clone()));
+                    rules.push((UIStyleRule::MarginLeft(length), condition.clone()));
+                    rules.push((UIStyleRule::MarginRight(length), condition));
                 }
-                "margin_left" => rules.push(UIStyleRule::MarginLeft(parse_style_length(value)?)),
-                "margin_right" => rules.push(UIStyleRule::MarginRight(parse_style_length(value)?)),
-                "margin_top" => rules.push(UIStyleRule::MarginTop(parse_style_length(value)?)),
-                "margin_bottom" => {
-                    rules.push(UIStyleRule::MarginBottom(parse_style_length(value)?))
-                }
-                "position" => rules.push(UIStyleRule::Position(match value {
-                    "relative" => Position::Relative,
-                    "absolute" => Position::Absolute,
-                    _ => panic!(),
-                })),
+                "margin_left" => rules.push((
+                    UIStyleRule::MarginLeft(parse_style_length(value)?),
+                    condition,
+                )),
+                "margin_right" => rules.push((
+                    UIStyleRule::MarginRight(parse_style_length(value)?),
+                    condition,
+                )),
+                "margin_top" => rules.push((
+                    UIStyleRule::MarginTop(parse_style_length(value)?),
+                    condition,
+                )),
+                "margin_bottom" => rules.push((
+                    UIStyleRule::MarginBottom(parse_style_length(value)?),
+                    condition,
+                )),
+                "position" => rules.push((
+                    UIStyleRule::Position(match value {
+                        "relative" => Position::Relative,
+                        "absolute" => Position::Absolute,
+                        _ => panic!(),
+                    }),
+                    condition,
+                )),
                 "inset" => {
                     let length = parse_style_length(value)?;
-                    rules.push(UIStyleRule::InsetTop(length));
-                    rules.push(UIStyleRule::InsetBottom(length));
-                    rules.push(UIStyleRule::InsetLeft(length));
-                    rules.push(UIStyleRule::InsetRight(length));
+                    rules.push((UIStyleRule::InsetTop(length), condition.clone()));
+                    rules.push((UIStyleRule::InsetBottom(length), condition.clone()));
+                    rules.push((UIStyleRule::InsetLeft(length), condition.clone()));
+                    rules.push((UIStyleRule::InsetRight(length), condition));
                 }
-                "inset_left" => rules.push(UIStyleRule::InsetLeft(parse_style_length(value)?)),
-                "inset_right" => rules.push(UIStyleRule::InsetRight(parse_style_length(value)?)),
-                "inset_top" => rules.push(UIStyleRule::InsetTop(parse_style_length(value)?)),
-                "inset_bottom" => rules.push(UIStyleRule::InsetBottom(parse_style_length(value)?)),
+                "inset_left" => rules.push((
+                    UIStyleRule::InsetLeft(parse_style_length(value)?),
+                    condition,
+                )),
+                "inset_right" => rules.push((
+                    UIStyleRule::InsetRight(parse_style_length(value)?),
+                    condition,
+                )),
+                "inset_top" => {
+                    rules.push((UIStyleRule::InsetTop(parse_style_length(value)?), condition))
+                }
+                "inset_bottom" => rules.push((
+                    UIStyleRule::InsetBottom(parse_style_length(value)?),
+                    condition,
+                )),
                 "font_size" => {
-                    rules.push(UIStyleRule::FontSize(value.parse::<f32>().unwrap()));
+                    rules.push((
+                        UIStyleRule::FontSize(value.parse::<f32>().unwrap()),
+                        condition,
+                    ));
                 }
                 "background" => {
-                    rules.push(UIStyleRule::Background(TextureKey::id(value).unwrap()));
+                    rules.push((
+                        UIStyleRule::Background(TextureKey::id(value).unwrap()),
+                        condition,
+                    ));
                 }
                 "flex_wrap" => {
-                    rules.push(UIStyleRule::FlexWrap(match value {
-                        "no_wrap" => FlexWrap::NoWrap,
-                        "wrap" => FlexWrap::Wrap,
-                        "wrap_reverse" => FlexWrap::WrapReverse,
-                        _ => panic!(),
-                    }));
+                    rules.push((
+                        UIStyleRule::FlexWrap(match value {
+                            "no_wrap" => FlexWrap::NoWrap,
+                            "wrap" => FlexWrap::Wrap,
+                            "wrap_reverse" => FlexWrap::WrapReverse,
+                            _ => panic!(),
+                        }),
+                        condition,
+                    ));
                 }
                 "gap_column" => {
-                    rules.push(UIStyleRule::GapColumn(parse_style_length(value)?));
+                    rules.push((
+                        UIStyleRule::GapColumn(parse_style_length(value)?),
+                        condition,
+                    ));
                 }
                 "gap_row" => {
-                    rules.push(UIStyleRule::GapRow(parse_style_length(value)?));
+                    rules.push((UIStyleRule::GapRow(parse_style_length(value)?), condition));
+                }
+                "display" => {
+                    rules.push((
+                        UIStyleRule::Display(match value {
+                            "block" => Display::Block,
+                            "flex" => Display::Flex,
+                            "grid" => Display::Grid,
+                            "none" => Display::None,
+                            _ => panic!(),
+                        }),
+                        condition,
+                    ));
                 }
                 rule => return Err(anyhow!("unknown style rule '{}'", rule)),
             }
@@ -265,6 +367,7 @@ pub enum UIStyleRule {
     FlexWrap(FlexWrap),
     GapColumn(StyleLength),
     GapRow(StyleLength),
+    Display(Display),
 }
 #[derive(Clone, Copy)]
 pub enum StyleLength {
@@ -296,6 +399,25 @@ impl Into<Dimension> for StyleLength {
             StyleLength::Length(value) => Dimension::length(value),
             StyleLength::Percent(value) => Dimension::percent(value),
             StyleLength::Auto => Dimension::auto(),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PropertyMap(pub HashMap<String, f32>);
+#[derive(Clone, Debug)]
+pub struct PropertyCondition {
+    pub property: String,
+    pub comparator: std::cmp::Ordering,
+    pub value: f32,
+}
+impl PropertyCondition {
+    pub fn satisfies(&self, map: &PropertyMap) -> bool {
+        let property_value = map.0.get(&self.property).cloned().unwrap_or(0.);
+        match self.comparator {
+            std::cmp::Ordering::Less => property_value < self.value,
+            std::cmp::Ordering::Equal => property_value == self.value,
+            std::cmp::Ordering::Greater => property_value > self.value,
         }
     }
 }

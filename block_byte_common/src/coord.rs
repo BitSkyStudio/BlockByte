@@ -187,6 +187,21 @@ pub type BlockPos = Vec3<i32>;
 pub type ChunkPos = Vec3<i16>;
 
 impl Pos {
+    pub const X: Pos = Pos {
+        x: 1.,
+        y: 0.,
+        z: 0.,
+    };
+    pub const Y: Pos = Pos {
+        x: 0.,
+        y: 1.,
+        z: 0.,
+    };
+    pub const Z: Pos = Pos {
+        x: 0.,
+        y: 0.,
+        z: 1.,
+    };
     pub fn to_block_pos(self) -> BlockPos {
         BlockPos {
             x: self.x.floor() as i32,

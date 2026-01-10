@@ -19,6 +19,7 @@ use block_byte_common::{
         self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, Registry, TextureData,
         TextureKey, load_registries,
     },
+    ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
 };
 use image::{DynamicImage, RgbaImage};
@@ -457,7 +458,11 @@ impl ApplicationHandler for App {
                                 self.player_abilities = abilities;
                             }
                             NetworkMessageS2C::UIOpen { screen, slots } => {
-                                self.world.screen = Some(ScreenData { screen, slots });
+                                self.world.screen = Some(ScreenData {
+                                    screen,
+                                    slots,
+                                    properties: PropertyMap(HashMap::new()),
+                                });
                             }
                             NetworkMessageS2C::UISetSlot { slot, item } => {
                                 if let Some(screen) = &mut self.world.screen {
@@ -469,8 +474,9 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::UIClose => {
                                 self.world.screen = None;
                             }
-                            NetworkMessageS2C::HUDUpdate { items } => {
+                            NetworkMessageS2C::HUDUpdate { items, properties } => {
                                 self.world.hud.slots = items;
+                                self.world.hud.properties = properties;
                             }
                         }
                     }
@@ -948,6 +954,7 @@ impl Default for ClientWorld {
             hud: ScreenData {
                 screen: Key::id("hud").unwrap(),
                 slots: vec![],
+                properties: PropertyMap(HashMap::new()),
             },
         }
     }
@@ -1068,25 +1075,53 @@ impl ClientWorld {
                     }
                     for plant in &plants.plants {
                         let plant = plant.data();
-                        for shift in [0., 1.] {
-                            for face in [Face::Front, Face::Back] {
-                                ClientChunk::add_vertices(
-                                    face,
-                                    plant.texture.tex_coords(),
-                                    |position, coords| {
-                                        let vt_pos = base_position
-                                            + Pos {
-                                                x: (shift - position.x).abs(),
-                                                y: position.y + 1.,
-                                                z: (1. - position.x).abs(),
-                                            };
-                                        entity_mesh.vertices.push(Vertex {
-                                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
-                                            tex_coords: [coords.0, coords.1],
-                                        });
-                                    },
-                                );
-                            }
+                        let position = base_position
+                            + Pos {
+                                x: 0.5,
+                                y: 1.,
+                                z: 0.5,
+                            };
+                        for blade in 0..plant.blades * 2 {
+                            let first_angle =
+                                f32::consts::PI * (blade as f32 / plant.blades as f32 + 0.25);
+                            let second_angle = f32::consts::PI + first_angle;
+                            let first = Pos {
+                                x: first_angle.cos(),
+                                y: 0.,
+                                z: first_angle.sin(),
+                            } * (plant.size / 2.)
+                                + position;
+                            let second = Pos {
+                                x: second_angle.cos(),
+                                y: 0.,
+                                z: second_angle.sin(),
+                            } * (plant.size / 2.)
+                                + position;
+                            let texture = plant.texture.tex_coords();
+                            let vertices = [
+                                Vertex {
+                                    position: [first.x, first.y, first.z],
+                                    tex_coords: [texture.u1, texture.v2],
+                                },
+                                Vertex {
+                                    position: [second.x, second.y, second.z],
+                                    tex_coords: [texture.u2, texture.v2],
+                                },
+                                Vertex {
+                                    position: [first.x, first.y + plant.height, first.z],
+                                    tex_coords: [texture.u1, texture.v1],
+                                },
+                                Vertex {
+                                    position: [second.x, second.y + plant.height, second.z],
+                                    tex_coords: [texture.u2, texture.v1],
+                                },
+                            ];
+                            entity_mesh.vertices.push(vertices[0]);
+                            entity_mesh.vertices.push(vertices[3]);
+                            entity_mesh.vertices.push(vertices[2]);
+                            entity_mesh.vertices.push(vertices[2]);
+                            entity_mesh.vertices.push(vertices[1]);
+                            entity_mesh.vertices.push(vertices[0]);
                         }
                     }
                 }

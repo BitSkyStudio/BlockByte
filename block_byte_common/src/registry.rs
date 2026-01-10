@@ -390,6 +390,14 @@ pub type EntityKey = Key<EntityData>;
 pub struct PlantData {
     #[cfg(feature = "client")]
     pub texture: TextureKey,
+    #[cfg(feature = "client")]
+    pub size: f32,
+    #[cfg(feature = "client")]
+    pub height: f32,
+    #[cfg(feature = "client")]
+    pub blades: u32,
+    #[cfg(feature = "client")]
+    pub translation: f32,
 }
 pub type PlantKey = Key<PlantData>;
 

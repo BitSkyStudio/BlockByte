@@ -14,7 +14,7 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{self, BlockData, BlockKey, ItemKey, load_registries},
-    ui::UIScreenKey,
+    ui::{PropertyMap, UIScreenKey},
 };
 use palettevec::PaletteVec;
 use parking_lot::{Mutex, RwLock};
@@ -362,6 +362,14 @@ fn main() {
                             .map(|item| item.as_ref().map(|item| item.client()))
                             .collect(),
                         None => vec![],
+                    },
+                    properties: {
+                        let mut properties = HashMap::new();
+                        properties.insert(
+                            "hotbar_slot".to_string(),
+                            user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed) as f32,
+                        );
+                        PropertyMap(properties)
                     },
                 },
             );

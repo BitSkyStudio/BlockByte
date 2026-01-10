@@ -6,7 +6,7 @@ use crate::{
     ClientItem, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockKey, BlockPalette, EntityKey},
-    ui::UIScreenKey,
+    ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
 
@@ -76,5 +76,6 @@ pub enum NetworkMessageS2C {
     UIClose,
     HUDUpdate {
         items: Vec<Option<ClientItem>>,
+        properties: PropertyMap,
     },
 }

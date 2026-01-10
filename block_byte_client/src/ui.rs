@@ -2,7 +2,7 @@ use block_byte_common::{
     ClientItem,
     coord::Pos,
     registry::{BlockRenderData, ItemModel, TextureKey},
-    ui::{StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
+    ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
 };
 use taffy::{
     AlignItems, AvailableSpace, Dimension, FlexDirection, JustifyContent, Layout, LengthPercentage,
@@ -15,12 +15,13 @@ use crate::{GUIMesh, TexCoordsExt, text_renderer};
 pub struct ScreenData {
     pub screen: UIScreenKey,
     pub slots: Vec<Option<ClientItem>>,
+    pub properties: PropertyMap,
 }
 
 pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &mut GUIMesh) {
     let screen = screen_data.screen.data();
     let mut taffy: TaffyTree<&UIElement> = TaffyTree::new();
-    let root = add_element_to_taffy(&screen.root, &mut taffy);
+    let root = add_element_to_taffy(&screen.root, &mut taffy, &screen_data.properties);
     let body = taffy
         .new_with_children(
             Style {
@@ -41,7 +42,7 @@ pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &m
                 height: AvailableSpace::Definite(size.height as f32),
             },
             |_known_dimensions, _available_space, _node_id, node_context, _style| {
-                measure_element(node_context.unwrap())
+                measure_element(node_context.unwrap(), &screen_data.properties)
             },
         )
         .unwrap();
@@ -58,8 +59,8 @@ pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &m
         mesh,
     );
 }
-pub fn measure_element(element: &UIElement) -> taffy::Size<f32> {
-    let style = get_element_style(element);
+pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::Size<f32> {
+    let style = get_element_style(element, properties);
     match &element.element_type {
         UIElementType::Box(uielements) => taffy::Size::ZERO,
         UIElementType::Label(text) => {
@@ -90,7 +91,7 @@ fn render_element(
     let layout = taffy.layout(node).unwrap();
     let element = *taffy.get_node_context(node).unwrap();
     let aspect_ratio = size.width as f32 / size.height as f32;
-    let style = get_element_style(element);
+    let style = get_element_style(element, &data.properties);
     if let Some(background) = style.background {
         let width = layout.size.width - layout.border.left - layout.border.right;
         let height = layout.size.height - layout.border.top - layout.border.bottom;
@@ -185,6 +186,27 @@ fn render_element(
                 },
                 TextureKey::id("slot").unwrap().tex_coords(),
             );
+            if let Some(background) = style.background {
+                mesh.add_quad(
+                    Pos {
+                        x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
+                            - aspect_ratio,
+                        y: -((layout.content_box_y()
+                            + parent_offset.y
+                            + layout.content_box_height())
+                            / size.height as f32
+                            * 2.
+                            - 1.),
+                        z: 0.,
+                    },
+                    Pos {
+                        x: 50. / size.height as f32 * 2.,
+                        y: 50. / size.height as f32 * 2.,
+                        z: 0.,
+                    },
+                    background.tex_coords(),
+                );
+            }
             if let Some(item) = data.slots.get(*slot).cloned().flatten() {
                 let border = 3.;
                 match &item.item.data().model {
@@ -240,13 +262,14 @@ fn render_element(
 fn add_element_to_taffy<'a>(
     element: &'a UIElement,
     taffy: &mut TaffyTree<&'a UIElement>,
+    properties: &PropertyMap,
 ) -> NodeId {
-    let style = get_element_style(element);
+    let style = get_element_style(element, properties);
     match &element.element_type {
         UIElementType::Box(children) => {
             let children = children
                 .iter()
-                .map(|child| add_element_to_taffy(child, taffy))
+                .map(|child| add_element_to_taffy(child, taffy, properties))
                 .collect::<Vec<_>>();
             let node = taffy.new_with_children(style.taffy, &children[..]).unwrap();
             taffy.set_node_context(node, Some(element));
@@ -258,15 +281,25 @@ fn add_element_to_taffy<'a>(
         }
     }
 }
-fn get_element_style(element: &UIElement) -> BBStyle {
+fn get_element_style(element: &UIElement, properties: &PropertyMap) -> BBStyle {
     //todo: this should be precomputed
     let mut style = BBStyle::default();
     for style_list in &element.style_classes {
-        for rule in &style_list.data().0 {
+        for (rule, condition) in &style_list.data().0 {
+            if let Some(condition) = &condition {
+                if !condition.satisfies(properties) {
+                    continue;
+                }
+            }
             style.patch(rule);
         }
     }
-    for rule in &element.style.0 {
+    for (rule, condition) in &element.style.0 {
+        if let Some(condition) = &condition {
+            if !condition.satisfies(properties) {
+                continue;
+            }
+        }
         style.patch(rule);
     }
     style
@@ -368,6 +401,9 @@ impl BBStyle {
             }
             UIStyleRule::GapRow(style_length) => {
                 self.taffy.gap.height = (*style_length).into();
+            }
+            UIStyleRule::Display(display) => {
+                self.taffy.display = *display;
             }
         }
     }

@@ -1,13 +1,12 @@
 <box style="position: absolute;inset_bottom: 10;width:100%;justify_content: center;gap_column: 10;">
-    <slot id="0"/>
-    <slot id="1"/>
-    <slot id="2"/>
-    <slot id="3"/>
-    <slot id="4"/>
-    <slot id="5"/>
-    <slot id="6"/>
-    <slot id="7"/>
-    <slot id="8"/>
-    <slot id="9"/>
-    <slot id="10"/>
+    <slot id="0" style="[hotbar_slot=0]background:slot_selected;"/>
+    <slot id="1" style="[hotbar_slot=1]background:slot_selected;"/>
+    <slot id="2" style="[hotbar_slot=2]background:slot_selected;"/>
+    <slot id="3" style="[hotbar_slot=3]background:slot_selected;"/>
+    <slot id="4" style="[hotbar_slot=4]background:slot_selected;"/>
+    <slot id="5" style="[hotbar_slot=5]background:slot_selected;"/>
+    <slot id="6" style="[hotbar_slot=6]background:slot_selected;"/>
+    <slot id="7" style="[hotbar_slot=7]background:slot_selected;"/>
+    <slot id="8" style="[hotbar_slot=8]background:slot_selected;"/>
+    <slot id="9" style="[hotbar_slot=9]background:slot_selected;"/>
 </box>

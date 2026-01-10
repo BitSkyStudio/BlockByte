@@ -1,3 +1,7 @@
 (
-    texture: "grass_plant"
+    texture: "grass_plant",
+    size: 1.4,
+    height: 1.,
+    blades: 3,
+    translation: 0.2,
 )

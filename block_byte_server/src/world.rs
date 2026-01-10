@@ -216,6 +216,10 @@ impl Chunk {
                 }
             }
         }
+        for entity in &self.entities {
+            let entity = server.entities.get(*entity).unwrap();
+            entity.tick(server);
+        }
         {
             self.components
                 .damage
@@ -312,7 +316,7 @@ impl Entity {
             events: Mutex::new(Vec::new()),
         }
     }
-    pub fn tick(&self) {
+    pub fn tick(&self, server: &Server) {
         let mut processing_events = Vec::new();
         std::mem::swap(&mut processing_events, &mut *self.events.lock());
         for event in processing_events {
