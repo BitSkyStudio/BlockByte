@@ -3,4 +3,5 @@
     hitbox_size: 0.3,
     hitbox_height: 2,
     eye_height: 1.7,
+    model: "player",
 )

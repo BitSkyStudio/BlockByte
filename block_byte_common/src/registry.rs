@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::coord::{AABB, FaceMap, Pos};
+use crate::model::BBModel;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
@@ -232,7 +233,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model);
 
 impl<T> Key<T>
 where
@@ -367,6 +368,7 @@ pub struct EntityData {
     pub hitbox_height: f32,
     #[serde(default)]
     pub eye_height: f32,
+    pub model: ModelKey,
 }
 impl EntityData {
     pub fn hitbox(&self) -> AABB<f32> {
@@ -424,4 +426,17 @@ pub type LootTableKey = Key<LootTableData>;
 pub struct LootTableEntry {
     pub item: ItemKey,
     pub chance: f32,
+}
+pub struct ModelData {
+    pub bbmodel: BBModel,
+}
+pub type ModelKey = Key<ModelData>;
+impl RegistryConfigLoadable for ModelData {
+    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+        let json = std::fs::read_to_string(config).map_err(|_| anyhow!("error loading"))?;
+        Ok(ModelData {
+            bbmodel: serde_json::from_str(&json)
+                .map_err(|err| anyhow!("error loading {:?}", err))?,
+        })
+    }
 }

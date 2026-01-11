@@ -1,4 +1,4 @@
-<box style="height: 100%;width:100%;justify_content: center;align_items: center;gap_column: 10;">
+<box style="height: 100%;width:100%;justify-content: center;align-items: center;gap-column: 10;">
     <slot id="0"/>
     <slot id="1"/>
     <slot id="2"/>

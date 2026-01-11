@@ -1,14 +1,16 @@
-use block_byte_common::coord::Vec3;
-use block_byte_common::registry::{EntityData, Key, TextureData, TextureKey};
+use block_byte_common::Color;
+use block_byte_common::coord::{Pos, Vec3};
+use block_byte_common::registry::{EntityData, Key, ModelData, ModelKey, TextureData, TextureKey};
 use block_byte_common::ui::UIScreen;
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
 use std::f64::consts::PI;
 use std::iter;
 use std::mem::size_of;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{
     BindGroup, BindGroupLayout, BlendState, Buffer, BufferUsages, CommandEncoder, Device, LoadOp,
@@ -289,6 +291,7 @@ impl RenderState {
             },
             &format!("{:?} {}", world.player_position, 1. / dt),
             0.05,
+            Color::WHITE,
             &mut gui_mesh,
         );
         render_screen(&world.hud, self.size, &mut gui_mesh);
@@ -304,7 +307,12 @@ impl RenderState {
                 z: 0.,
             };
             let crosshair_texture = TextureKey::id("crosshair").unwrap().tex_coords();
-            gui_mesh.add_quad(-crosshair_size / 2., crosshair_size, crosshair_texture);
+            gui_mesh.add_quad(
+                -crosshair_size / 2.,
+                crosshair_size,
+                crosshair_texture,
+                Color::WHITE,
+            );
         }
 
         self.camera_uniform.load_view_proj_matrix(
@@ -461,10 +469,11 @@ impl Vertex {
 pub struct GUIVertex {
     pub position: [f32; 2],
     pub tex_coords: [f32; 2],
+    pub color: [u8; 4],
 }
 impl GUIVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+    const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4];
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
@@ -525,7 +534,9 @@ use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
 use crate::ui::{ScreenData, render_screen};
-use crate::{ClientPlayer, ClientWorld, Mesh, TexCoordsExt, text_renderer};
+use crate::{
+    BaseMesh, ClientPlayer, ClientWorld, Mesh, TEXTURE_ATLAS, TexCoordsExt, text_renderer,
+};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,
@@ -671,4 +682,27 @@ pub fn create_depth_texture(
     });
 
     (texture, sampler, view)
+}
+pub fn draw_model(model_key: ModelKey, position: Pos, rotation: f32, mesh: &mut BaseMesh) {
+    let model = &model_key.data().bbmodel;
+    let matrix = Matrix4::from_translation(Vector3 {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+    }) * Matrix4::from_angle_y(Rad(rotation));
+    for triangle in block_byte_common::model::draw(model, None, 0.) {
+        let texture = TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()][triangle.texture];
+        let texture_data = &model.textures[triangle.texture];
+        for v in [triangle.c, triangle.b, triangle.a] {
+            let tc = texture.map((
+                v.uv.x / texture_data.uv_width,
+                v.uv.y / texture_data.uv_height,
+            ));
+            let vertex = matrix.transform_point(Point3::from_vec(v.position) / 16.);
+            mesh.vertices.push(Vertex {
+                position: [vertex.x, vertex.y, vertex.z],
+                tex_coords: [tc.0, tc.1],
+            });
+        }
+    }
 }

@@ -6,6 +6,7 @@ use std::{
 };
 
 use block_byte_common::{
+    LookDirection,
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{
@@ -298,6 +299,7 @@ pub struct Entity {
     pub key: EntityKey,
     pub uuid: Uuid,
     pub position: Pos,
+    pub direction: Mutex<LookDirection>,
     pub teleport: Mutex<Option<Pos>>,
     pub removed: AtomicBool,
     pub inventory: RwLock<Inventory>,
@@ -310,6 +312,7 @@ impl Entity {
             key,
             uuid: Uuid::new_v4(),
             position,
+            direction: Mutex::new(LookDirection { pitch: 0., yaw: 0. }),
             teleport: Mutex::new(None),
             removed: AtomicBool::new(false),
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
@@ -337,12 +340,14 @@ impl Entity {
             uuid: self.uuid,
             key: self.key,
             position: self.position,
+            direction: *self.direction.lock(),
         }
     }
     pub fn create_move_message(&self) -> NetworkMessageS2C {
         NetworkMessageS2C::MoveEntity {
             uuid: self.uuid,
             position: self.position,
+            direction: *self.direction.lock(),
         }
     }
     pub fn create_remove_message(&self) -> NetworkMessageS2C {

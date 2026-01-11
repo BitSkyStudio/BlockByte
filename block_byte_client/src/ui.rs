@@ -1,5 +1,5 @@
 use block_byte_common::{
-    ClientItem,
+    ClientItem, Color,
     coord::Pos,
     registry::{BlockRenderData, ItemModel, TextureKey},
     ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
@@ -113,6 +113,7 @@ fn render_element(
                 z: 0.,
             },
             background.tex_coords(),
+            Color::WHITE,
         );
     }
     match &element.element_type {
@@ -146,6 +147,7 @@ fn render_element(
                 },
                 &text,
                 style.font_size / size.height as f32 * 2.,
+                Color::WHITE,
                 mesh,
             );
         }
@@ -166,6 +168,7 @@ fn render_element(
                     z: 0.,
                 },
                 key.tex_coords(),
+                Color::WHITE,
             );
         }
         UIElementType::ItemSlot(slot) => {
@@ -185,6 +188,7 @@ fn render_element(
                     z: 0.,
                 },
                 TextureKey::id("slot").unwrap().tex_coords(),
+                Color::WHITE,
             );
             if let Some(background) = style.background {
                 mesh.add_quad(
@@ -205,6 +209,7 @@ fn render_element(
                         z: 0.,
                     },
                     background.tex_coords(),
+                    Color::WHITE,
                 );
             }
             if let Some(item) = data.slots.get(*slot).cloned().flatten() {
@@ -234,6 +239,7 @@ fn render_element(
                                     z: 0.,
                                 },
                                 texture,
+                                Color::WHITE,
                             );
                         }
                     },
@@ -253,6 +259,7 @@ fn render_element(
                     },
                     &format!("{}", item.count),
                     20. / size.height as f32 * 2.,
+                    Color::WHITE,
                     mesh,
                 );
             }

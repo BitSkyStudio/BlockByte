@@ -136,11 +136,11 @@ impl UIStyleList {
                 Ok(match input {
                     "center" => AlignContent::Center,
                     "end" => AlignContent::End,
-                    "flex_end" => AlignContent::FlexEnd,
-                    "flex_start" => AlignContent::FlexStart,
-                    "space_around" => AlignContent::SpaceAround,
-                    "space_between" => AlignContent::SpaceBetween,
-                    "space_evenly" => AlignContent::SpaceEvenly,
+                    "flex-end" => AlignContent::FlexEnd,
+                    "flex-start" => AlignContent::FlexStart,
+                    "space-around" => AlignContent::SpaceAround,
+                    "space-between" => AlignContent::SpaceBetween,
+                    "space-evenly" => AlignContent::SpaceEvenly,
                     "start" => AlignContent::Start,
                     "stretch" => AlignContent::Stretch,
                     _ => panic!(),
@@ -150,8 +150,8 @@ impl UIStyleList {
                 Ok(match input {
                     "center" => AlignItems::Center,
                     "end" => AlignItems::End,
-                    "flex_end" => AlignItems::FlexEnd,
-                    "flex_start" => AlignItems::FlexStart,
+                    "flex-end" => AlignItems::FlexEnd,
+                    "flex-start" => AlignItems::FlexStart,
                     "start" => AlignItems::Start,
                     "stretch" => AlignItems::Stretch,
                     "baseline" => AlignItems::Baseline,
@@ -159,37 +159,37 @@ impl UIStyleList {
                 })
             }
             match rule {
-                "flex_direction" => rules.push((
+                "flex-direction" => rules.push((
                     UIStyleRule::FlexDirection(match value {
                         "row" => FlexDirection::Row,
-                        "row_reverse" => FlexDirection::RowReverse,
+                        "row-reverse" => FlexDirection::RowReverse,
                         "column" => FlexDirection::Column,
-                        "column_reverse" => FlexDirection::ColumnReverse,
+                        "column-reverse" => FlexDirection::ColumnReverse,
                         _ => unimplemented!(),
                     }),
                     condition,
                 )),
-                "justify_content" => rules.push((
+                "justify-content" => rules.push((
                     UIStyleRule::JustifyContent(parse_align_content(value)?),
                     condition,
                 )),
-                "justify_items" => rules.push((
+                "justify-items" => rules.push((
                     UIStyleRule::JustifyItems(parse_align_items(value)?),
                     condition,
                 )),
-                "justify_self" => rules.push((
+                "justify-self" => rules.push((
                     UIStyleRule::JustifySelf(parse_align_items(value)?),
                     condition,
                 )),
-                "align_content" => rules.push((
+                "align-content" => rules.push((
                     UIStyleRule::AlignContent(parse_align_content(value)?),
                     condition,
                 )),
-                "align_items" => rules.push((
+                "align-items" => rules.push((
                     UIStyleRule::AlignItems(parse_align_items(value)?),
                     condition,
                 )),
-                "align_self" => {
+                "align-self" => {
                     rules.push((UIStyleRule::AlignSelf(parse_align_items(value)?), condition))
                 }
                 "size" => {
@@ -213,19 +213,19 @@ impl UIStyleList {
                     rules.push((UIStyleRule::PaddingLeft(length), condition.clone()));
                     rules.push((UIStyleRule::PaddingRight(length), condition));
                 }
-                "padding_left" => rules.push((
+                "padding-left" => rules.push((
                     UIStyleRule::PaddingLeft(parse_style_length(value)?),
                     condition,
                 )),
-                "padding_right" => rules.push((
+                "padding-right" => rules.push((
                     UIStyleRule::PaddingRight(parse_style_length(value)?),
                     condition,
                 )),
-                "padding_top" => rules.push((
+                "padding-top" => rules.push((
                     UIStyleRule::PaddingTop(parse_style_length(value)?),
                     condition,
                 )),
-                "padding_bottom" => rules.push((
+                "padding-bottom" => rules.push((
                     UIStyleRule::PaddingBottom(parse_style_length(value)?),
                     condition,
                 )),
@@ -237,19 +237,19 @@ impl UIStyleList {
                     rules.push((UIStyleRule::MarginLeft(length), condition.clone()));
                     rules.push((UIStyleRule::MarginRight(length), condition));
                 }
-                "margin_left" => rules.push((
+                "margin-left" => rules.push((
                     UIStyleRule::MarginLeft(parse_style_length(value)?),
                     condition,
                 )),
-                "margin_right" => rules.push((
+                "margin-right" => rules.push((
                     UIStyleRule::MarginRight(parse_style_length(value)?),
                     condition,
                 )),
-                "margin_top" => rules.push((
+                "margin-top" => rules.push((
                     UIStyleRule::MarginTop(parse_style_length(value)?),
                     condition,
                 )),
-                "margin_bottom" => rules.push((
+                "margin-bottom" => rules.push((
                     UIStyleRule::MarginBottom(parse_style_length(value)?),
                     condition,
                 )),
@@ -268,22 +268,22 @@ impl UIStyleList {
                     rules.push((UIStyleRule::InsetLeft(length), condition.clone()));
                     rules.push((UIStyleRule::InsetRight(length), condition));
                 }
-                "inset_left" => rules.push((
+                "inset-left" => rules.push((
                     UIStyleRule::InsetLeft(parse_style_length(value)?),
                     condition,
                 )),
-                "inset_right" => rules.push((
+                "inset-right" => rules.push((
                     UIStyleRule::InsetRight(parse_style_length(value)?),
                     condition,
                 )),
-                "inset_top" => {
+                "inset-top" => {
                     rules.push((UIStyleRule::InsetTop(parse_style_length(value)?), condition))
                 }
-                "inset_bottom" => rules.push((
+                "inset-bottom" => rules.push((
                     UIStyleRule::InsetBottom(parse_style_length(value)?),
                     condition,
                 )),
-                "font_size" => {
+                "font-size" => {
                     rules.push((
                         UIStyleRule::FontSize(value.parse::<f32>().unwrap()),
                         condition,
@@ -295,24 +295,24 @@ impl UIStyleList {
                         condition,
                     ));
                 }
-                "flex_wrap" => {
+                "flex-wrap" => {
                     rules.push((
                         UIStyleRule::FlexWrap(match value {
-                            "no_wrap" => FlexWrap::NoWrap,
+                            "no-wrap" => FlexWrap::NoWrap,
                             "wrap" => FlexWrap::Wrap,
-                            "wrap_reverse" => FlexWrap::WrapReverse,
+                            "wrap-reverse" => FlexWrap::WrapReverse,
                             _ => panic!(),
                         }),
                         condition,
                     ));
                 }
-                "gap_column" => {
+                "gap-column" => {
                     rules.push((
                         UIStyleRule::GapColumn(parse_style_length(value)?),
                         condition,
                     ));
                 }
-                "gap_row" => {
+                "gap-row" => {
                     rules.push((UIStyleRule::GapRow(parse_style_length(value)?), condition));
                 }
                 "display" => {

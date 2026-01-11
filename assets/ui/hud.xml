@@ -1,4 +1,4 @@
-<box style="position: absolute;inset_bottom: 10;width:100%;justify_content: center;gap_column: 10;">
+<box style="position: absolute;inset-bottom: 10;width:100%;justify-content: center;gap-column: 10;">
     <slot id="0" style="[hotbar_slot=0]background:slot_selected;"/>
     <slot id="1" style="[hotbar_slot=1]background:slot_selected;"/>
     <slot id="2" style="[hotbar_slot=2]background:slot_selected;"/>

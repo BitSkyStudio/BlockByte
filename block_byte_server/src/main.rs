@@ -206,6 +206,7 @@ fn main() {
                 match message {
                     NetworkMessageC2S::PlayerPosition {
                         position,
+                        direction,
                         teleport_id,
                     } => {
                         if teleport_id
@@ -216,6 +217,7 @@ fn main() {
                         if let Some(entity) = user.entity {
                             let mut blocked = false;
                             let entity = server.entities.get(entity).unwrap();
+                            *entity.direction.lock() = direction;
                             for block in entity.key.data().hitbox().offset(position).to_block() {
                                 if match server.get_block(block) {
                                     Some(block) => !block.data().selection.is_empty(), //todo: proper collisions
@@ -322,6 +324,30 @@ fn main() {
                                         entity.events.lock().push(EntityEvent::PlayerInteract {
                                             user: user_id.into(),
                                         });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    NetworkMessageC2S::AttackEntity { entity: entity_id } => {
+                        for chunk in (AABB::<i16> {
+                            min: ChunkPos {
+                                x: -1,
+                                y: -1,
+                                z: -1,
+                            },
+                            max: ChunkPos { x: 1, y: 1, z: 1 },
+                        }
+                        .offset(*user.view_position.lock()))
+                        {
+                            if let Some(chunk) = server.get_chunk(chunk) {
+                                for entity in &chunk.entities {
+                                    let entity = server.get_entity(*entity).unwrap();
+                                    if entity.uuid == entity_id {
+                                        entity
+                                            .events
+                                            .lock()
+                                            .push(EntityEvent::Damage { damage: 1. });
                                     }
                                 }
                             }
@@ -452,6 +478,27 @@ fn main() {
         }
 
         server.entities.retain(|index, entity| {
+            if entity.removed.load(std::sync::atomic::Ordering::Relaxed) {
+                {
+                    let mut chunk_entities = &mut server
+                        .chunks
+                        .get_mut(&entity.position.to_chunk_pos())
+                        .unwrap()
+                        .entities;
+                    chunk_entities
+                        .remove(chunk_entities.iter().position(|ce| *ce == index).unwrap());
+                }
+                server.message_queue.send_message(
+                    server
+                        .chunks
+                        .get(&entity.position.to_chunk_pos())
+                        .unwrap()
+                        .viewers
+                        .iter(),
+                    entity.create_remove_message(),
+                );
+                return false;
+            }
             if let Some(teleport) = entity.teleport.lock().take() {
                 if server.chunks.contains_key(&teleport.to_chunk_pos()) {
                     if entity.position.to_chunk_pos() != teleport.to_chunk_pos() {
@@ -491,19 +538,7 @@ fn main() {
                     }
                 }
             }
-            let removed = entity.removed.load(std::sync::atomic::Ordering::Relaxed);
-            if removed {
-                server.message_queue.send_message(
-                    server
-                        .chunks
-                        .get(&entity.position.to_chunk_pos())
-                        .unwrap()
-                        .viewers
-                        .iter(),
-                    entity.create_remove_message(),
-                );
-            }
-            !removed
+            true
         });
 
         chunk_viewing_manager.manage(&mut server, &database);

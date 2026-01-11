@@ -11,13 +11,14 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    MoveMode, PlayerAbilities,
+    Color, LookDirection, MoveMode, PlayerAbilities, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{
-        self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, Registry, TextureData,
-        TextureKey, load_registries,
+        self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, ModelData, Registry,
+        TextureData, TextureKey, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -44,8 +45,9 @@ use crate::{
 fn main() {
     load_registries(&Path::new("assets"));
     use block_byte_common::registry::RegistryProvider;
+    let registries = &registry::REGISTRIES.get().unwrap();
     let (atlas, text_renderer, image) =
-        TextureAtlas::pack(registry::REGISTRIES.get().unwrap().get_registry());
+        TextureAtlas::pack(registries.get_registry(), registries.get_registry());
     TEXTURE_ATLAS.set(atlas);
     TEXT_RENDERER.set(text_renderer);
     let mut client = RenetClient::new(ConnectionConfig::default());
@@ -176,53 +178,16 @@ impl ApplicationHandler for App {
                             }
                         }
                         if key_code == KeyCode::KeyE && self.world.screen.is_none() {
-                            let ray = Ray {
-                                position: self.camera.get_eye(self.world.get_player_data()),
-                                direction: self.camera.make_front() * 10.,
-                            };
-                            let mut min_distance = f32::INFINITY;
-                            let mut interact_message = None;
-
-                            if let Some((block, position)) =
-                                ray.block_raycast(|block, position, _| {
-                                    let (chunk, offset) = block.to_chunk_pos_offset();
-                                    if self
-                                        .world
-                                        .chunks
-                                        .get(&chunk)?
-                                        .blocks
-                                        .get(offset.index())
-                                        .unwrap()
-                                        .data()
-                                        .selection
-                                        .len()
-                                        > 0
-                                    {
-                                        Some((block, position))
-                                    } else {
-                                        None
-                                    }
-                                })
-                            {
-                                min_distance = ray.position.distance(position);
-                                interact_message =
-                                    Some(NetworkMessageC2S::InteractBlock { position: block });
-                            }
-                            for (id, entity) in &self.world.entities {
-                                let entity_data = entity.key.data();
-                                if let Some(result) =
-                                    ray.aabb_raycast(entity_data.hitbox().offset(entity.position))
-                                {
-                                    let distance = result.position.distance(ray.position);
-                                    if distance < min_distance {
-                                        min_distance = distance;
-                                        interact_message =
-                                            Some(NetworkMessageC2S::InteractEntity { entity: *id });
-                                    }
+                            match self.camera.raycast(&self.world) {
+                                RayCastResult::Empty => {}
+                                RayCastResult::Block(position, _) => {
+                                    self.send_message(NetworkMessageC2S::InteractBlock {
+                                        position,
+                                    });
                                 }
-                            }
-                            if let Some(message) = interact_message {
-                                self.send_message(message);
+                                RayCastResult::Entity(entity) => {
+                                    self.send_message(NetworkMessageC2S::InteractEntity { entity });
+                                }
                             }
                         }
                         if key_code == KeyCode::Escape {
@@ -253,6 +218,18 @@ impl ApplicationHandler for App {
                 button,
             } => {
                 if state == ElementState::Pressed && self.world.screen.is_none() {
+                    match (self.camera.raycast(&self.world), button) {
+                        (RayCastResult::Block(position, _), MouseButton::Left) => {
+                            self.send_message(NetworkMessageC2S::AttackBlock { position });
+                        }
+                        (RayCastResult::Block(position, face), MouseButton::Right) => {
+                            self.send_message(NetworkMessageC2S::PlaceBlock { position, face });
+                        }
+                        (RayCastResult::Entity(entity), MouseButton::Left) => {
+                            self.send_message(NetworkMessageC2S::InteractEntity { entity });
+                        }
+                        _ => {}
+                    }
                     let ray = Ray {
                         position: self.camera.get_eye(self.world.get_player_data()),
                         direction: self.camera.make_front() * 10.,
@@ -350,6 +327,7 @@ impl ApplicationHandler for App {
                     self.send_message(NetworkMessageC2S::PlayerPosition {
                         position: self.camera.position,
                         teleport_id: self.teleport_id,
+                        direction: self.camera.direction,
                     });
                     while let Some(message) = self
                         .network_client
@@ -422,14 +400,31 @@ impl ApplicationHandler for App {
                                 uuid,
                                 key,
                                 position,
+                                direction,
                             } => {
-                                self.world
-                                    .entities
-                                    .insert(uuid, ClientEntity { key, position });
+                                self.world.entities.insert(
+                                    uuid,
+                                    ClientEntity {
+                                        key,
+                                        position,
+                                        direction,
+                                        previous_position: position,
+                                        previous_direction: direction,
+                                        update_timestamp: Instant::now(),
+                                    },
+                                );
                             }
-                            NetworkMessageS2C::MoveEntity { uuid, position } => {
+                            NetworkMessageS2C::MoveEntity {
+                                uuid,
+                                position,
+                                direction,
+                            } => {
                                 if let Some(entity) = self.world.entities.get_mut(&uuid) {
+                                    entity.previous_position = entity.position;
+                                    entity.previous_direction = entity.direction;
+                                    entity.update_timestamp = Instant::now();
                                     entity.position = position;
+                                    entity.direction = direction;
                                 }
                             }
                             NetworkMessageS2C::RemoveEntity { uuid } => {
@@ -496,6 +491,7 @@ impl ApplicationHandler for App {
 
 pub struct TextureAtlas {
     textures: Vec<TexCoords>,
+    models: Vec<Vec<TexCoords>>,
 }
 pub struct TextRenderer {
     font: rusttype::Font<'static>,
@@ -530,7 +526,7 @@ impl TextRenderer {
             z: 0.,
         }
     }
-    pub fn draw(&self, position: Pos, text: &str, size: f32, mesh: &mut GUIMesh) {
+    pub fn draw(&self, position: Pos, text: &str, size: f32, color: Color, mesh: &mut GUIMesh) {
         let layout = self.font.layout(
             text,
             rusttype::Scale::uniform(size),
@@ -571,14 +567,24 @@ impl TextRenderer {
                         z: 0.,
                     },
                     texture,
+                    color,
                 );
             }
         }
     }
 }
+
 impl TextureAtlas {
-    pub fn pack(texture_registry: &Registry<TextureData>) -> (Self, TextRenderer, RgbaImage) {
-        let texture_count = texture_registry.data_entries().count();
+    pub fn pack(
+        texture_registry: &Registry<TextureData>,
+        model_registry: &Registry<ModelData>,
+    ) -> (Self, TextRenderer, RgbaImage) {
+        #[derive(Hash, PartialEq, Eq, Clone)]
+        enum TextureAtlasEntry {
+            Texture(usize),
+            Model(usize, usize),
+            Glyph(usize),
+        }
         let mut packer =
             texture_packer::TexturePacker::new_skyline(texture_packer::TexturePackerConfig {
                 max_width: 2048,
@@ -591,7 +597,25 @@ impl TextureAtlas {
                 texture_extrusion: 0,
             });
         for (i, texture) in texture_registry.data_entries().enumerate() {
-            packer.pack_ref(i, &texture.texture).unwrap();
+            packer
+                .pack_ref(TextureAtlasEntry::Texture(i), &texture.texture)
+                .unwrap();
+        }
+        for (i, model) in model_registry.data_entries().enumerate() {
+            for (j, texture) in model.bbmodel.textures.iter().enumerate() {
+                let image = image::load_from_memory_with_format(
+                    BASE64_STANDARD
+                        .decode(&texture.source["data:image/png;base64,".len()..])
+                        .unwrap()
+                        .as_slice(),
+                    image::ImageFormat::Png,
+                )
+                .unwrap();
+
+                packer
+                    .pack_own(TextureAtlasEntry::Model(i, j), image)
+                    .unwrap();
+            }
         }
         let font = rusttype::Font::try_from_vec(std::fs::read("assets/font.ttf").unwrap()).unwrap();
         {
@@ -613,7 +637,9 @@ impl TextureAtlas {
                     g.draw(|x, y, v| {
                         font_buffer.put_pixel(x, y, image::Rgba([255, 255, 255, (255. * v) as u8]));
                     });
-                    packer.pack_own(texture_count + i, font_texture).unwrap();
+                    packer
+                        .pack_own(TextureAtlasEntry::Glyph(i), font_texture)
+                        .unwrap();
                 }
             }
         }
@@ -625,9 +651,11 @@ impl TextureAtlas {
         }
         (
             TextureAtlas {
-                textures: (0..texture_count)
-                    .map(|i| {
-                        let frame = packer.get_frame(&i).unwrap();
+                textures: texture_registry
+                    .data_entries()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        let frame = packer.get_frame(&TextureAtlasEntry::Texture(i)).unwrap();
                         TexCoords {
                             u1: frame.frame.x as f32 / packer.width() as f32,
                             v1: frame.frame.y as f32 / packer.height() as f32,
@@ -636,10 +664,34 @@ impl TextureAtlas {
                         }
                     })
                     .collect(),
+                models: model_registry
+                    .data_entries()
+                    .enumerate()
+                    .map(|(i, model)| {
+                        model
+                            .bbmodel
+                            .textures
+                            .iter()
+                            .enumerate()
+                            .map(|(j, _)| {
+                                let frame =
+                                    packer.get_frame(&TextureAtlasEntry::Model(i, j)).unwrap();
+                                TexCoords {
+                                    u1: frame.frame.x as f32 / packer.width() as f32,
+                                    v1: frame.frame.y as f32 / packer.height() as f32,
+                                    u2: (frame.frame.x + frame.frame.w) as f32
+                                        / packer.width() as f32,
+                                    v2: (frame.frame.y + frame.frame.h) as f32
+                                        / packer.height() as f32,
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect(),
             },
             TextRenderer {
                 glyphs: (0..font.glyph_count())
-                    .map(|i| match packer.get_frame(&(i + texture_count)) {
+                    .map(|i| match packer.get_frame(&TextureAtlasEntry::Glyph(i)) {
                         Some(frame) => TexCoords {
                             u1: frame.frame.x as f32 / packer.width() as f32,
                             v1: frame.frame.y as f32 / packer.height() as f32,
@@ -666,13 +718,7 @@ impl std::ops::Index<TextureKey> for TextureAtlas {
         &self.textures[texture.numeric_id()]
     }
 }
-#[derive(Clone, Copy)]
-pub struct TexCoords {
-    pub u1: f32,
-    pub v1: f32,
-    pub u2: f32,
-    pub v2: f32,
-}
+
 static TEXT_RENDERER: OnceLock<TextRenderer> = OnceLock::new();
 pub fn text_renderer() -> &'static TextRenderer {
     TEXT_RENDERER.get().unwrap()
@@ -686,12 +732,15 @@ impl TexCoordsExt for TextureKey {
         TEXTURE_ATLAS.get().unwrap()[self]
     }
 }
-#[derive(Debug)]
+pub enum RayCastResult {
+    Empty,
+    Block(BlockPos, Face),
+    Entity(Uuid),
+}
 pub struct ClientPlayer {
     pub position: Pos,
     pub velocity: Pos,
-    pub pitch_deg: f32,
-    pub yaw_deg: f32,
+    pub direction: LookDirection,
     pub on_ground: bool,
 }
 impl Default for ClientPlayer {
@@ -707,8 +756,7 @@ impl Default for ClientPlayer {
                 y: 0.,
                 z: 0.,
             },
-            pitch_deg: 0.,
-            yaw_deg: 0.,
+            direction: LookDirection { pitch: 0., yaw: 0. },
             on_ground: false,
         }
     }
@@ -720,17 +768,20 @@ impl ClientPlayer {
         z: 0.0,
     };
     pub fn make_front(&self) -> Vec3<f32> {
-        let pitch_rad = f32::to_radians(self.pitch_deg);
-        let yaw_rad = f32::to_radians(self.yaw_deg);
         Vec3 {
-            x: yaw_rad.sin() * pitch_rad.cos(),
-            y: pitch_rad.sin(),
-            z: yaw_rad.cos() * pitch_rad.cos(),
+            x: self.direction.yaw.sin() * self.direction.pitch.cos(),
+            y: self.direction.pitch.sin(),
+            z: self.direction.yaw.cos() * self.direction.pitch.cos(),
         }
     }
     pub fn update_orientation(&mut self, d_pitch_deg: f32, d_yaw_deg: f32) {
-        self.pitch_deg = (self.pitch_deg + d_pitch_deg).max(-89.0).min(89.0);
-        self.yaw_deg = (self.yaw_deg + d_yaw_deg) % 360.0;
+        let d_pitch = d_pitch_deg.to_radians();
+        let d_yaw = d_yaw_deg.to_radians();
+        use std::f32::consts::*;
+        self.direction.pitch = (self.direction.pitch + d_pitch)
+            .max(-PI / 2. + 0.01)
+            .min(PI / 2. - 0.01);
+        self.direction.yaw = (self.direction.yaw + d_yaw) % (PI * 2.);
     }
     pub fn get_eye(&self, player_entity_data: Option<&EntityData>) -> Pos {
         self.position
@@ -740,6 +791,47 @@ impl ClientPlayer {
                 z: 0.,
             }
     }
+    pub fn raycast(&self, world: &ClientWorld) -> RayCastResult {
+        let ray = Ray {
+            position: self.get_eye(world.get_player_data()),
+            direction: self.make_front() * 10.,
+        };
+        let mut min_distance = f32::INFINITY;
+        let mut raycast_result = RayCastResult::Empty;
+
+        if let Some((block, position, face)) = ray.block_raycast(|block, position, face| {
+            let (chunk, offset) = block.to_chunk_pos_offset();
+            if world
+                .chunks
+                .get(&chunk)?
+                .blocks
+                .get(offset.index())
+                .unwrap()
+                .data()
+                .selection
+                .len()
+                > 0
+            {
+                Some((block, position, face))
+            } else {
+                None
+            }
+        }) {
+            min_distance = ray.position.distance(position);
+            raycast_result = RayCastResult::Block(block, face);
+        }
+        for (id, entity) in &world.entities {
+            let entity_data = entity.key.data();
+            if let Some(result) = ray.aabb_raycast(entity_data.hitbox().offset(entity.position)) {
+                let distance = result.position.distance(ray.position);
+                if distance < min_distance {
+                    min_distance = distance;
+                    raycast_result = RayCastResult::Entity(*id);
+                }
+            }
+        }
+        raycast_result
+    }
     pub fn update_position(
         &mut self,
         keys: &HashSet<KeyCode>,
@@ -748,11 +840,8 @@ impl ClientPlayer {
         abilities: &PlayerAbilities,
         player_entity_data: Option<&EntityData>,
     ) {
-        let mut forward = cgmath::Vector3::new(
-            f32::to_radians(self.yaw_deg).sin(),
-            0.,
-            f32::to_radians(self.yaw_deg).cos(),
-        );
+        let mut forward =
+            cgmath::Vector3::new(self.direction.yaw.sin(), 0., self.direction.yaw.cos());
         use cgmath::InnerSpace;
         let cross_normalized = forward.cross(Self::UP).normalize();
         let move_vector = keys.iter().copied().fold(
@@ -1002,26 +1091,14 @@ impl ClientWorld {
             if Some(*id) == self.player_entity {
                 continue;
             }
-            let base_position = entity.position;
-            for face in Face::all() {
-                ClientChunk::add_vertices(
-                    *face,
-                    TextureKey::id("dirt").unwrap().tex_coords(),
-                    |position, coords| {
-                        let border = 0.01;
-                        let vt_pos = base_position + position * (1. + border * 2.)
-                            - Pos {
-                                x: border,
-                                y: border,
-                                z: border,
-                            };
-                        entity_mesh.vertices.push(Vertex {
-                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
-                            tex_coords: [coords.0, coords.1],
-                        });
-                    },
-                );
-            }
+            let lerp_time = (entity.update_timestamp.elapsed().as_secs_f32() / (1. / 40.)).min(1.);
+            let position = entity.previous_position.lerp(entity.position, lerp_time);
+            let rotation = block_byte_common::coord::lerp_number(
+                entity.previous_direction.yaw,
+                entity.direction.yaw,
+                lerp_time,
+            );
+            render::draw_model(entity.key.data().model, position, rotation, entity_mesh);
         }
         let crack_texture = TextureKey::id("block_damage.0").unwrap().tex_coords();
         let player_chunk = self.player_position.to_chunk_pos();
@@ -1152,9 +1229,10 @@ impl ClientWorld {
 pub struct ClientEntity {
     key: EntityKey,
     position: Pos,
-    //previous_position: Pos,
-    //previous_timestamp: Instant,
-    //current_timestamp: Instant,
+    direction: LookDirection,
+    previous_position: Pos,
+    previous_direction: LookDirection,
+    update_timestamp: Instant,
 }
 pub struct ClientChunk {
     pub position: ChunkPos,
@@ -1175,22 +1253,27 @@ impl<T> Default for Mesh<T> {
 pub type BaseMesh = Mesh<Vertex>;
 pub type GUIMesh = Mesh<GUIVertex>;
 impl GUIMesh {
-    pub fn add_quad(&mut self, position: Pos, size: Pos, texture: TexCoords) {
+    pub fn add_quad(&mut self, position: Pos, size: Pos, texture: TexCoords, color: Color) {
+        let color = [color.r, color.g, color.b, color.a];
         let a = GUIVertex {
             position: [position.x, position.y],
             tex_coords: [texture.u1, texture.v2],
+            color,
         };
         let b = GUIVertex {
             position: [position.x + size.x, position.y],
             tex_coords: [texture.u2, texture.v2],
+            color,
         };
         let c = GUIVertex {
             position: [position.x, position.y + size.y],
             tex_coords: [texture.u1, texture.v1],
+            color,
         };
         let d = GUIVertex {
             position: [position.x + size.x, position.y + size.y],
             tex_coords: [texture.u2, texture.v1],
+            color,
         };
         self.vertices.push(a);
         self.vertices.push(b);

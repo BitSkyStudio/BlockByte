@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ClientItem, PlayerAbilities,
+    ClientItem, LookDirection, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockKey, BlockPalette, EntityKey},
     ui::{PropertyMap, UIScreenKey},
@@ -12,13 +12,32 @@ use crate::{
 
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageC2S {
-    PlayerPosition { position: Pos, teleport_id: u32 },
-    AttackBlock { position: BlockPos },
-    PlaceBlock { position: BlockPos, face: Face },
+    PlayerPosition {
+        position: Pos,
+        direction: LookDirection,
+        teleport_id: u32,
+    },
+    AttackBlock {
+        position: BlockPos,
+    },
+    PlaceBlock {
+        position: BlockPos,
+        face: Face,
+    },
     CloseUI,
-    HotbarSelect { slot: isize, relative: bool },
-    InteractBlock { position: BlockPos },
-    InteractEntity { entity: Uuid },
+    HotbarSelect {
+        slot: isize,
+        relative: bool,
+    },
+    InteractBlock {
+        position: BlockPos,
+    },
+    InteractEntity {
+        entity: Uuid,
+    },
+    AttackEntity {
+        entity: Uuid,
+    },
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {
@@ -47,10 +66,12 @@ pub enum NetworkMessageS2C {
         uuid: Uuid,
         key: EntityKey,
         position: Pos,
+        direction: LookDirection,
     },
     MoveEntity {
         uuid: Uuid,
         position: Pos,
+        direction: LookDirection,
     },
     RemoveEntity {
         uuid: Uuid,

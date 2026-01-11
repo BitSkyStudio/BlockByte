@@ -1,4 +1,3 @@
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::{coord::ChunkOffset, registry::PlantKey};

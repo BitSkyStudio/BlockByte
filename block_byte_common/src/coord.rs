@@ -212,6 +212,16 @@ impl Pos {
     pub fn to_chunk_pos(self) -> ChunkPos {
         self.to_block_pos().to_chunk_pos()
     }
+    pub fn lerp(self, other: Pos, v: f32) -> Pos {
+        Pos {
+            x: lerp_number(self.x, other.x, v),
+            y: lerp_number(self.y, other.y, v),
+            z: lerp_number(self.z, other.z, v),
+        }
+    }
+}
+pub fn lerp_number(a: f32, b: f32, v: f32) -> f32 {
+    a * (1. - v) + b * v
 }
 impl BlockPos {
     pub fn to_chunk_pos(self) -> ChunkPos {
