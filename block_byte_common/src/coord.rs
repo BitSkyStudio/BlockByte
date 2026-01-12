@@ -611,8 +611,9 @@ impl Ray {
         let origin = self.position;
         let dir = self.direction;
 
-        let max_distance = (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z).sqrt();
-        if max_distance == 0.0 {
+        // Max ray length comes from direction magnitude
+        let max_dist = (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z).sqrt();
+        if max_dist == 0.0 {
             return None;
         }
 
@@ -635,101 +636,132 @@ impl Ray {
         };
 
         let mut t_min = 0.0;
-        let mut t_max = max_distance;
+        let mut t_max = max_dist;
+        let mut enter_face: Option<Face> = None;
+        let mut exit_face: Option<Face> = None;
 
-        let mut hit_face = None;
-
-        // X slab
+        // --- X slab ---
         {
-            let mut t1 = (aabb.min.x - origin.x) * inv_dir.x;
-            let mut t2 = (aabb.max.x - origin.x) * inv_dir.x;
-
-            let face1 = if inv_dir.x >= 0.0 {
-                Face::Left
+            let (t1, t2, face_enter, face_exit) = if inv_dir.x >= 0.0 {
+                (
+                    (aabb.min.x - origin.x) * inv_dir.x,
+                    (aabb.max.x - origin.x) * inv_dir.x,
+                    Face::Left,
+                    Face::Right,
+                )
             } else {
-                Face::Right
+                (
+                    (aabb.max.x - origin.x) * inv_dir.x,
+                    (aabb.min.x - origin.x) * inv_dir.x,
+                    Face::Right,
+                    Face::Left,
+                )
             };
-
-            if t1 > t2 {
-                std::mem::swap(&mut t1, &mut t2);
-            }
 
             if t1 > t_min {
                 t_min = t1;
-                hit_face = Some(face1);
+                enter_face = Some(face_enter);
             }
 
-            t_max = t_max.min(t2);
+            if t2 < t_max {
+                t_max = t2;
+                exit_face = Some(face_exit);
+            }
+
             if t_min > t_max {
                 return None;
             }
         }
 
-        // Y slab
+        // --- Y slab ---
         {
-            let mut t1 = (aabb.min.y - origin.y) * inv_dir.y;
-            let mut t2 = (aabb.max.y - origin.y) * inv_dir.y;
-
-            let face1 = if inv_dir.y >= 0.0 {
-                Face::Down
+            let (t1, t2, face_enter, face_exit) = if inv_dir.y >= 0.0 {
+                (
+                    (aabb.min.y - origin.y) * inv_dir.y,
+                    (aabb.max.y - origin.y) * inv_dir.y,
+                    Face::Down,
+                    Face::Up,
+                )
             } else {
-                Face::Up
+                (
+                    (aabb.max.y - origin.y) * inv_dir.y,
+                    (aabb.min.y - origin.y) * inv_dir.y,
+                    Face::Up,
+                    Face::Down,
+                )
             };
-
-            if t1 > t2 {
-                std::mem::swap(&mut t1, &mut t2);
-            }
 
             if t1 > t_min {
                 t_min = t1;
-                hit_face = Some(face1);
+                enter_face = Some(face_enter);
             }
 
-            t_max = t_max.min(t2);
+            if t2 < t_max {
+                t_max = t2;
+                exit_face = Some(face_exit);
+            }
+
             if t_min > t_max {
                 return None;
             }
         }
 
-        // Z slab
+        // --- Z slab ---
         {
-            let mut t1 = (aabb.min.z - origin.z) * inv_dir.z;
-            let mut t2 = (aabb.max.z - origin.z) * inv_dir.z;
-
-            let face1 = if inv_dir.z >= 0.0 {
-                Face::Front
+            let (t1, t2, face_enter, face_exit) = if inv_dir.z >= 0.0 {
+                (
+                    (aabb.min.z - origin.z) * inv_dir.z,
+                    (aabb.max.z - origin.z) * inv_dir.z,
+                    Face::Front,
+                    Face::Back,
+                )
             } else {
-                Face::Back
+                (
+                    (aabb.max.z - origin.z) * inv_dir.z,
+                    (aabb.min.z - origin.z) * inv_dir.z,
+                    Face::Back,
+                    Face::Front,
+                )
             };
-
-            if t1 > t2 {
-                std::mem::swap(&mut t1, &mut t2);
-            }
 
             if t1 > t_min {
                 t_min = t1;
-                hit_face = Some(face1);
+                enter_face = Some(face_enter);
             }
 
-            t_max = t_max.min(t2);
+            if t2 < t_max {
+                t_max = t2;
+                exit_face = Some(face_exit);
+            }
+
             if t_min > t_max {
                 return None;
             }
         }
 
-        if t_min < 0.0 || t_min > max_distance {
+        // Determine whether we hit entering or exiting
+        let (t_hit, face) = if t_min >= 0.0 {
+            // Ray starts outside → first hit is entering
+            (t_min, enter_face)
+        } else {
+            // Ray starts inside → first hit is exiting
+            (t_max, exit_face)
+        };
+
+        // Clamp to ray length
+        if t_hit < 0.0 || t_hit > max_dist {
             return None;
         }
 
         let hit_pos = Pos {
-            x: origin.x + dir.x * (t_min / max_distance),
-            y: origin.y + dir.y * (t_min / max_distance),
-            z: origin.z + dir.z * (t_min / max_distance),
+            x: origin.x + dir.x * t_hit,
+            y: origin.y + dir.y * t_hit,
+            z: origin.z + dir.z * t_hit,
         };
 
         Some(AABBRaycastResult {
             position: hit_pos,
-            face: hit_face?,
+            face: face?,
         })
     }
 }

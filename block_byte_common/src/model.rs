@@ -271,6 +271,7 @@ fn collect_triangles(
 ) {
     // Get rotation from animator (UUID)
     let mut rot = Matrix4::identity();
+    let mut transl = Matrix4::identity();
     if let Some(anim) = anim {
         if let Some(animator) = anim.animators.get(&bone.uuid) {
             if let Some(frames) = &animator.keyframes {
@@ -287,6 +288,15 @@ fn collect_triangles(
                         z: Deg(r.z),
                     });
                 }
+                let translation_frames: Vec<_> = frames
+                    .iter()
+                    .filter(|k| k.channel == "position")
+                    .cloned()
+                    .collect();
+                if !translation_frames.is_empty() {
+                    let r = sample_keyframes(&translation_frames, time);
+                    rot = Matrix4::from_translation(r);
+                }
             }
         }
     }
@@ -294,7 +304,7 @@ fn collect_triangles(
     // Apply rotation around origin pivot
     let o = Matrix4::from_translation(bone.origin);
     let io = Matrix4::from_translation(-bone.origin);
-    let world = parent * o * rot * io;
+    let world = parent * transl * o * rot * io;
 
     // Transform elements
     for elem in &bone.elements {

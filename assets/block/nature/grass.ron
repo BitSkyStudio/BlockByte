@@ -9,7 +9,7 @@
             up: "grass_block",
         ),
     ),
-    health: Some((health: 5.)),
+    health: Some((health: 5., health_regen: 0.05)),
     loot_table: Key("empty"),
     plantable: true,
 )

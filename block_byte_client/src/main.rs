@@ -17,8 +17,8 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{
-        self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, ModelData, Registry,
-        TextureData, TextureKey, load_registries,
+        self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, ModelData, ModelKey,
+        Registry, TextureData, TextureKey, ToolData, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -38,8 +38,8 @@ use winit::{
 };
 
 use crate::{
-    render::{GUIVertex, RenderState, Vertex},
-    ui::ScreenData,
+    render::{DamageVertex, GUIVertex, RenderState, Vertex},
+    ui::{ScreenData, TEXT_RENDERER, TextRenderer, text_renderer},
 };
 
 fn main() {
@@ -75,6 +75,7 @@ fn main() {
             network_client: client,
             network_transport: transport,
             keys: HashSet::new(),
+            buttons: HashSet::new(),
             last_update: Instant::now(),
             teleport_id: 0,
             player_abilities: PlayerAbilities {
@@ -93,6 +94,7 @@ struct App {
     network_client: RenetClient,
     network_transport: NetcodeClientTransport,
     keys: HashSet<KeyCode>,
+    buttons: HashSet<MouseButton>,
     last_update: Instant,
     teleport_id: u32,
     player_abilities: PlayerAbilities,
@@ -217,57 +219,18 @@ impl ApplicationHandler for App {
                 state,
                 button,
             } => {
+                match state {
+                    ElementState::Pressed => {
+                        self.buttons.insert(button);
+                    }
+                    ElementState::Released => {
+                        self.buttons.remove(&button);
+                    }
+                }
                 if state == ElementState::Pressed && self.world.screen.is_none() {
                     match (self.camera.raycast(&self.world), button) {
-                        (RayCastResult::Block(position, _), MouseButton::Left) => {
-                            self.send_message(NetworkMessageC2S::AttackBlock { position });
-                        }
                         (RayCastResult::Block(position, face), MouseButton::Right) => {
                             self.send_message(NetworkMessageC2S::PlaceBlock { position, face });
-                        }
-                        (RayCastResult::Entity(entity), MouseButton::Left) => {
-                            self.send_message(NetworkMessageC2S::InteractEntity { entity });
-                        }
-                        _ => {}
-                    }
-                    let ray = Ray {
-                        position: self.camera.get_eye(self.world.get_player_data()),
-                        direction: self.camera.make_front() * 10.,
-                    };
-                    let hit = ray.block_raycast(|block, _, face| {
-                        let (chunk, offset) = block.to_chunk_pos_offset();
-                        if self
-                            .world
-                            .chunks
-                            .get(&chunk)?
-                            .blocks
-                            .get(offset.index())
-                            .unwrap()
-                            .data()
-                            .selection
-                            .len()
-                            > 0
-                        {
-                            Some((block, face))
-                        } else {
-                            None
-                        }
-                    });
-                    match button {
-                        MouseButton::Left => {
-                            if let Some(hit) = hit {
-                                self.send_message(NetworkMessageC2S::AttackBlock {
-                                    position: hit.0,
-                                });
-                            }
-                        }
-                        MouseButton::Right => {
-                            if let Some(hit) = hit {
-                                self.send_message(NetworkMessageC2S::PlaceBlock {
-                                    position: hit.0,
-                                    face: hit.1,
-                                });
-                            }
                         }
                         _ => {}
                     }
@@ -316,6 +279,9 @@ impl ApplicationHandler for App {
                         .unwrap();
                 }
                 if self.network_client.is_connected() {
+                    if self.buttons.contains(&MouseButton::Left) && self.world.hit_timer.is_none() {
+                        self.world.hit_timer = Some(0.);
+                    }
                     self.camera.update_position(
                         &self.keys,
                         dt,
@@ -395,6 +361,30 @@ impl ApplicationHandler for App {
                             }
                             NetworkMessageS2C::GameTick { ticks_passed, dt } => {
                                 self.world.tick_server(dt);
+                                if let Some(hit_timer) = self.world.hit_timer {
+                                    let new_hit_timer = hit_timer + dt;
+                                    if hit_timer < self.world.active_tool.hit_time
+                                        && new_hit_timer >= self.world.active_tool.hit_time
+                                    {
+                                        match self.camera.raycast(&self.world) {
+                                            RayCastResult::Block(position, _) => {
+                                                self.send_message(NetworkMessageC2S::AttackBlock {
+                                                    position,
+                                                });
+                                            }
+                                            RayCastResult::Entity(entity) => {
+                                                self.send_message(
+                                                    NetworkMessageC2S::AttackEntity { entity },
+                                                );
+                                            }
+                                            RayCastResult::Empty => {}
+                                        }
+                                    }
+                                    self.world.hit_timer = Some(new_hit_timer);
+                                    if new_hit_timer > self.world.active_tool.swing_time {
+                                        self.world.hit_timer = None;
+                                    }
+                                }
                             }
                             NetworkMessageS2C::AddEntity {
                                 uuid,
@@ -469,9 +459,17 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::UIClose => {
                                 self.world.screen = None;
                             }
-                            NetworkMessageS2C::HUDUpdate { items, properties } => {
+                            NetworkMessageS2C::HUDUpdate {
+                                items,
+                                properties,
+                                active_tool,
+                            } => {
                                 self.world.hud.slots = items;
                                 self.world.hud.properties = properties;
+                                if self.world.active_tool != active_tool {
+                                    self.world.hit_timer = None;
+                                }
+                                self.world.active_tool = active_tool;
                             }
                         }
                     }
@@ -492,86 +490,6 @@ impl ApplicationHandler for App {
 pub struct TextureAtlas {
     textures: Vec<TexCoords>,
     models: Vec<Vec<TexCoords>>,
-}
-pub struct TextRenderer {
-    font: rusttype::Font<'static>,
-    glyphs: Vec<TexCoords>,
-}
-impl TextRenderer {
-    pub fn get_size(&self, text: &str, size: f32) -> Pos {
-        let layout = self.font.layout(
-            text,
-            rusttype::Scale::uniform(size),
-            rusttype::Point { x: 0., y: 0. },
-        );
-        let glyphs: Vec<_> = layout.collect();
-        let width: f32 = glyphs
-            .iter()
-            .map(|glyph| glyph.unpositioned().h_metrics().advance_width)
-            .sum();
-        let height = glyphs
-            .iter()
-            .map(|glyph| {
-                glyph
-                    .unpositioned()
-                    .exact_bounding_box()
-                    .map(|bb| -bb.min.y + bb.max.y)
-                    .unwrap_or(0.)
-            })
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(0.);
-        Pos {
-            x: width,
-            y: height,
-            z: 0.,
-        }
-    }
-    pub fn draw(&self, position: Pos, text: &str, size: f32, color: Color, mesh: &mut GUIMesh) {
-        let layout = self.font.layout(
-            text,
-            rusttype::Scale::uniform(size),
-            rusttype::Point { x: 0., y: 0. },
-        );
-        let glyphs: Vec<_> = layout.collect();
-        let width: f32 = glyphs
-            .iter()
-            .map(|glyph| glyph.unpositioned().h_metrics().advance_width)
-            .sum();
-        let height = glyphs
-            .iter()
-            .map(|glyph| {
-                glyph
-                    .unpositioned()
-                    .exact_bounding_box()
-                    .map(|bb| -bb.min.y + bb.max.y)
-                    .unwrap_or(0.)
-            })
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(0.);
-        for glyph in glyphs {
-            if let Some(bb) = glyph.unpositioned().exact_bounding_box() {
-                let bb = rusttype::Rect {
-                    min: rusttype::point(bb.min.x, -bb.max.y),
-                    max: rusttype::point(bb.max.x, -bb.min.y),
-                };
-                let texture = self.glyphs[glyph.id().0 as usize];
-                let size_x = -bb.min.x + bb.max.x;
-                let size_y = -bb.min.y + bb.max.y;
-                let x = glyph.position().x + bb.min.x + position.x;
-                let y = glyph.position().y + bb.min.y + position.y;
-                mesh.add_quad(
-                    Pos { x: x, y: y, z: 0. },
-                    Pos {
-                        x: size_x,
-                        y: size_y,
-                        z: 0.,
-                    },
-                    texture,
-                    color,
-                );
-            }
-        }
-    }
 }
 
 impl TextureAtlas {
@@ -719,10 +637,6 @@ impl std::ops::Index<TextureKey> for TextureAtlas {
     }
 }
 
-static TEXT_RENDERER: OnceLock<TextRenderer> = OnceLock::new();
-pub fn text_renderer() -> &'static TextRenderer {
-    TEXT_RENDERER.get().unwrap()
-}
 static TEXTURE_ATLAS: OnceLock<TextureAtlas> = OnceLock::new();
 trait TexCoordsExt {
     fn tex_coords(self) -> TexCoords;
@@ -821,6 +735,9 @@ impl ClientPlayer {
             raycast_result = RayCastResult::Block(block, face);
         }
         for (id, entity) in &world.entities {
+            if Some(*id) == world.player_entity {
+                continue;
+            }
             let entity_data = entity.key.data();
             if let Some(result) = ray.aabb_raycast(entity_data.hitbox().offset(entity.position)) {
                 let distance = result.position.distance(ray.position);
@@ -1026,6 +943,8 @@ pub struct ClientWorld {
     pub player_entity: Option<Uuid>,
     pub screen: Option<ScreenData>,
     pub hud: ScreenData,
+    pub hit_timer: Option<f32>,
+    pub active_tool: ToolData,
 }
 impl Default for ClientWorld {
     fn default() -> Self {
@@ -1045,6 +964,8 @@ impl Default for ClientWorld {
                 slots: vec![],
                 properties: PropertyMap(HashMap::new()),
             },
+            hit_timer: None,
+            active_tool: ToolData::hand(),
         }
     }
 }
@@ -1054,7 +975,21 @@ impl ClientWorld {
         device: &Device,
         entity_mesh: &mut BaseMesh,
         gui_mesh: &mut GUIMesh,
+        viewmodel_mesh: &mut BaseMesh,
+        damage_mesh: &mut DamageMesh,
     ) {
+        render::draw_model(
+            ModelKey::id("viewmodel").unwrap(),
+            Pos {
+                x: 0.,
+                y: 0.,
+                z: 0.,
+            },
+            0.,
+            viewmodel_mesh,
+            Some("hit"),
+            self.hit_timer.unwrap_or(0.) / self.active_tool.swing_time,
+        );
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
             .modified_chunks
@@ -1098,9 +1033,22 @@ impl ClientWorld {
                 entity.direction.yaw,
                 lerp_time,
             );
-            render::draw_model(entity.key.data().model, position, rotation, entity_mesh);
+            render::draw_model(
+                entity.key.data().model,
+                position,
+                rotation,
+                entity_mesh,
+                None,
+                0.,
+            );
         }
-        let crack_texture = TextureKey::id("block_damage.0").unwrap().tex_coords();
+        /*let crack_textures: Vec<_> = (0..=3)
+        .map(|i| {
+            TextureKey::id(&format!("block_damage.{i}"))
+                .unwrap()
+                .tex_coords()
+        })
+        .collect();*/
         let player_chunk = self.player_position.to_chunk_pos();
         let view_distance = 2;
         for chunk_position in AABB::new(
@@ -1125,20 +1073,44 @@ impl ClientWorld {
                     {
                         continue;
                     }
+                    let block = chunk.blocks.get(offset.index()).unwrap().data();
+                    let progress = (damage.damage
+                        / block
+                            .health
+                            .as_ref()
+                            .map(|health| health.health)
+                            .unwrap_or(1.));
+                    /*let crack_texture = *crack_textures
+                    .get(
+                        ((progress * crack_textures.len() as f32) as usize)
+                            .min(crack_textures.len()),
+                    )
+                    .unwrap();*/
+
                     for face in Face::all() {
-                        ClientChunk::add_vertices(*face, crack_texture, |position, coords| {
-                            let border = 0.01;
-                            let vt_pos = base_position + position * (1. + border * 2.)
-                                - Pos {
-                                    x: border,
-                                    y: border,
-                                    z: border,
-                                };
-                            entity_mesh.vertices.push(Vertex {
-                                position: [vt_pos.x, vt_pos.y, vt_pos.z],
-                                tex_coords: [coords.0, coords.1],
-                            });
-                        });
+                        ClientChunk::add_vertices(
+                            *face,
+                            TexCoords {
+                                u1: 0.,
+                                v1: 0.,
+                                u2: 32.,
+                                v2: 32.,
+                            },
+                            |position, coords| {
+                                let border = 0.;
+                                let vt_pos = base_position + position * (1. + border * 2.)
+                                    - Pos {
+                                        x: border,
+                                        y: border,
+                                        z: border,
+                                    };
+                                damage_mesh.vertices.push(DamageVertex {
+                                    position: [vt_pos.x, vt_pos.y, vt_pos.z],
+                                    tex_coords: [coords.0, coords.1],
+                                    progress,
+                                });
+                            },
+                        );
                     }
                 }
                 for (offset, plants) in &chunk.components.plant.components {
@@ -1214,7 +1186,16 @@ impl ClientWorld {
                 .retain_mut(|(offset, health)| {
                     let data = chunk.blocks.get(offset.index()).unwrap().data();
                     if let Some(health_data) = &data.health {
-                        health.damage -= dt;
+                        health.damage -= dt
+                            * chunk
+                                .blocks
+                                .get(offset.index())
+                                .unwrap()
+                                .data()
+                                .health
+                                .as_ref()
+                                .map(|health| health.health_regen)
+                                .unwrap_or(1.);
                         health.damage > 0.
                     } else {
                         false
@@ -1252,6 +1233,8 @@ impl<T> Default for Mesh<T> {
 }
 pub type BaseMesh = Mesh<Vertex>;
 pub type GUIMesh = Mesh<GUIVertex>;
+pub type DamageMesh = Mesh<DamageVertex>;
+
 impl GUIMesh {
     pub fn add_quad(&mut self, position: Pos, size: Pos, texture: TexCoords, color: Color) {
         let color = [color.r, color.g, color.b, color.a];
@@ -1285,7 +1268,9 @@ impl GUIMesh {
 }
 impl ClientChunk {
     pub fn rebuild_chunk_mesh(&self, neighbor_chunks: FaceMap<Option<&ClientChunk>>) -> BaseMesh {
-        let mut vertices: Vec<Vertex> = Vec::new();
+        let mut mesh: BaseMesh = Mesh {
+            vertices: Vec::new(),
+        };
 
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {
@@ -1293,8 +1278,8 @@ impl ClientChunk {
                     let block = *self.blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = block.data();
                     match &block_data.render_data {
-                        registry::BlockRenderData::Air => {}
-                        registry::BlockRenderData::Full { faces } => {
+                        BlockRenderData::Air => {}
+                        BlockRenderData::Full { faces } => {
                             let base_position = Pos {
                                 x: (self.position.x as f32 * CHUNK_SIZE as f32) + x as f32,
                                 y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32,
@@ -1322,7 +1307,7 @@ impl ClientChunk {
                                         .unwrap()
                                         .data();
                                     match &neighbor_block_data.render_data {
-                                        BlockRenderData::Air => {}
+                                        BlockRenderData::Air | BlockRenderData::Model(_) => {}
                                         BlockRenderData::Full { faces } => {
                                             continue;
                                         }
@@ -1332,19 +1317,27 @@ impl ClientChunk {
                                 let texture = faces.by_face(*face).tex_coords();
                                 Self::add_vertices(*face, texture, |position, coords| {
                                     let vt_pos = base_position + position;
-                                    vertices.push(Vertex {
+                                    mesh.vertices.push(Vertex {
                                         position: [vt_pos.x, vt_pos.y, vt_pos.z],
                                         tex_coords: [coords.0, coords.1],
                                     });
                                 });
                             }
                         }
+                        BlockRenderData::Model(model) => {
+                            let position = Pos {
+                                x: (self.position.x as f32 * CHUNK_SIZE as f32) + x as f32 + 0.5,
+                                y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32,
+                                z: (self.position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
+                            };
+                            render::draw_model(*model, position, 0., &mut mesh, None, 0.);
+                        }
                     }
                 }
             }
         }
 
-        Mesh { vertices }
+        mesh
     }
     fn add_vertices(
         face: Face,

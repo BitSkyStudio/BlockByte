@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     ClientItem, LookDirection, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
-    registry::{BlockKey, BlockPalette, EntityKey},
+    registry::{BlockKey, BlockPalette, EntityKey, ToolData},
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
@@ -98,5 +98,6 @@ pub enum NetworkMessageS2C {
     HUDUpdate {
         items: Vec<Option<ClientItem>>,
         properties: PropertyMap,
+        active_tool: ToolData,
     },
 }

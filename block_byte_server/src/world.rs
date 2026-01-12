@@ -222,12 +222,21 @@ impl Chunk {
             entity.tick(server);
         }
         {
+            let blocks = self.blocks.read();
             self.components
                 .damage
                 .write()
                 .components
-                .retain_mut(|(_, damage)| {
-                    damage.damage -= 1. / server.tps as f32;
+                .retain_mut(|(offset, damage)| {
+                    damage.damage -= 1. / server.tps as f32
+                        * blocks
+                            .get(offset.index())
+                            .unwrap()
+                            .data()
+                            .health
+                            .as_ref()
+                            .map(|health| health.health_regen)
+                            .unwrap();
                     damage.damage > 0.
                 });
         }

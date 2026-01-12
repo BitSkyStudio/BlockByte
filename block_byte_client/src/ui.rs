@@ -1,5 +1,7 @@
+use std::sync::OnceLock;
+
 use block_byte_common::{
-    ClientItem, Color,
+    ClientItem, Color, TexCoords,
     coord::Pos,
     registry::{BlockRenderData, ItemModel, TextureKey},
     ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
@@ -10,7 +12,7 @@ use taffy::{
 };
 use winit::dpi::PhysicalSize;
 
-use crate::{GUIMesh, TexCoordsExt, text_renderer};
+use crate::{GUIMesh, TexCoordsExt};
 
 pub struct ScreenData {
     pub screen: UIScreenKey,
@@ -242,7 +244,11 @@ fn render_element(
                                 Color::WHITE,
                             );
                         }
+                        BlockRenderData::Model(key) => {
+                            todo!()
+                        }
                     },
+                    ItemModel::Model(key) => todo!(),
                 }
                 text_renderer().draw(
                     Pos {
@@ -414,4 +420,88 @@ impl BBStyle {
             }
         }
     }
+}
+pub struct TextRenderer {
+    pub font: rusttype::Font<'static>,
+    pub glyphs: Vec<TexCoords>,
+}
+impl TextRenderer {
+    pub fn get_size(&self, text: &str, size: f32) -> Pos {
+        let layout = self.font.layout(
+            text,
+            rusttype::Scale::uniform(size),
+            rusttype::Point { x: 0., y: 0. },
+        );
+        let glyphs: Vec<_> = layout.collect();
+        let width: f32 = glyphs
+            .iter()
+            .map(|glyph| glyph.unpositioned().h_metrics().advance_width)
+            .sum();
+        let height = glyphs
+            .iter()
+            .map(|glyph| {
+                glyph
+                    .unpositioned()
+                    .exact_bounding_box()
+                    .map(|bb| -bb.min.y + bb.max.y)
+                    .unwrap_or(0.)
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.);
+        Pos {
+            x: width,
+            y: height,
+            z: 0.,
+        }
+    }
+    pub fn draw(&self, position: Pos, text: &str, size: f32, color: Color, mesh: &mut GUIMesh) {
+        let layout = self.font.layout(
+            text,
+            rusttype::Scale::uniform(size),
+            rusttype::Point { x: 0., y: 0. },
+        );
+        let glyphs: Vec<_> = layout.collect();
+        let width: f32 = glyphs
+            .iter()
+            .map(|glyph| glyph.unpositioned().h_metrics().advance_width)
+            .sum();
+        let height = glyphs
+            .iter()
+            .map(|glyph| {
+                glyph
+                    .unpositioned()
+                    .exact_bounding_box()
+                    .map(|bb| -bb.min.y + bb.max.y)
+                    .unwrap_or(0.)
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.);
+        for glyph in glyphs {
+            if let Some(bb) = glyph.unpositioned().exact_bounding_box() {
+                let bb = rusttype::Rect {
+                    min: rusttype::point(bb.min.x, -bb.max.y),
+                    max: rusttype::point(bb.max.x, -bb.min.y),
+                };
+                let texture = self.glyphs[glyph.id().0 as usize];
+                let size_x = -bb.min.x + bb.max.x;
+                let size_y = -bb.min.y + bb.max.y;
+                let x = glyph.position().x + bb.min.x + position.x;
+                let y = glyph.position().y + bb.min.y + position.y;
+                mesh.add_quad(
+                    Pos { x: x, y: y, z: 0. },
+                    Pos {
+                        x: size_x,
+                        y: size_y,
+                        z: 0.,
+                    },
+                    texture,
+                    color,
+                );
+            }
+        }
+    }
+}
+pub static TEXT_RENDERER: OnceLock<TextRenderer> = OnceLock::new();
+pub fn text_renderer() -> &'static TextRenderer {
+    TEXT_RENDERER.get().unwrap()
 }

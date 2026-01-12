@@ -1,5 +1,5 @@
 (
-    place: Some("barrel"),
+    action: Place("barrel"),
     model: Block("barrel"),
     stack_size: 20,
 )

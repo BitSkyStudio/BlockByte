@@ -278,13 +278,42 @@ where
 
 #[derive(Deserialize)]
 pub struct ItemData {
-    pub place: Option<BlockKey>,
     pub model: ItemModel,
     pub stack_size: u16,
+    #[serde(default)]
+    pub tool: Option<ToolData>,
+    #[serde(default)]
+    pub action: ItemAction,
+}
+#[derive(Deserialize)]
+pub enum ItemAction {
+    Ignore,
+    Place(BlockKey),
+}
+impl Default for ItemAction {
+    fn default() -> Self {
+        Self::Ignore
+    }
 }
 #[derive(Deserialize)]
 pub enum ItemModel {
     Block(BlockKey),
+    Model(ModelKey),
+}
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolData {
+    pub damage: f32,
+    pub swing_time: f32,
+    pub hit_time: f32,
+}
+impl ToolData {
+    pub fn hand() -> ToolData {
+        ToolData {
+            damage: 1.,
+            swing_time: 0.5,
+            hit_time: 0.25,
+        }
+    }
 }
 pub type ItemKey = Key<ItemData>;
 
@@ -322,6 +351,7 @@ pub struct BlockData {
 #[derive(Deserialize)]
 pub struct BlockHealthData {
     pub health: f32,
+    pub health_regen: f32,
 }
 #[derive(Deserialize)]
 pub enum BlockInteractAction {
@@ -342,6 +372,7 @@ pub struct BlockMachine {
 pub enum BlockRenderData {
     Air,
     Full { faces: FaceMap<TextureKey> },
+    Model(ModelKey),
 }
 
 pub type BlockKey = Key<BlockData>;

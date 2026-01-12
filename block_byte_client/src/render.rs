@@ -28,11 +28,14 @@ pub struct RenderState {
     window: Arc<Window>,
     chunk_render_pipeline: wgpu::RenderPipeline,
     gui_render_pipeline: wgpu::RenderPipeline,
+    damage_render_pipeline: wgpu::RenderPipeline,
     texture: GPUTexture,
     camera_uniform: CameraUniform,
     camera_buffer: Buffer,
+    viewmodel_camera_buffer: Buffer,
     gui_camera_buffer: Buffer,
     camera_bind_group: wgpu::BindGroup,
+    viewmodel_camera_bind_group: wgpu::BindGroup,
     gui_camera_bind_group: wgpu::BindGroup,
     depth_texture: (wgpu::Texture, Sampler, TextureView),
 }
@@ -93,12 +96,22 @@ impl RenderState {
             label: Some("GUI Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gui_shader.wgsl").into()),
         });
+        let damage_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Damage Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/damage_shader.wgsl").into()),
+        });
         let camera_uniform = CameraUniform::new();
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let viewmodel_camera_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Viewmodel Camera Buffer"),
+                contents: bytemuck::cast_slice(&[camera_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
         let gui_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GUI Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
@@ -125,6 +138,14 @@ impl RenderState {
                 resource: camera_buffer.as_entire_binding(),
             }],
             label: Some("camera_bind_group"),
+        });
+        let viewmodel_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: viewmodel_camera_buffer.as_entire_binding(),
+            }],
+            label: Some("viewmodel_camera_bind_group"),
         });
         let gui_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &camera_bind_group_layout,
@@ -234,6 +255,56 @@ impl RenderState {
             multiview: None,
             cache: None,
         });
+        let damage_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Damage Render Pipeline Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let damage_render_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Damage Render Pipeline"),
+                layout: Some(&damage_render_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &damage_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[DamageVertex::desc()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &damage_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
         Self {
             window,
             surface,
@@ -250,6 +321,9 @@ impl RenderState {
             depth_texture,
             device,
             gui_camera_buffer,
+            viewmodel_camera_bind_group,
+            viewmodel_camera_buffer,
+            damage_render_pipeline,
         }
     }
 
@@ -281,7 +355,16 @@ impl RenderState {
     ) -> Result<(), wgpu::SurfaceError> {
         let mut entity_mesh = Mesh::default();
         let mut gui_mesh = Mesh::default();
-        world.tick_client(&self.device, &mut entity_mesh, &mut gui_mesh);
+        let mut viewmodel_mesh = Mesh::default();
+        let mut damage_mesh = Mesh::default();
+
+        world.tick_client(
+            &self.device,
+            &mut entity_mesh,
+            &mut gui_mesh,
+            &mut viewmodel_mesh,
+            &mut damage_mesh,
+        );
         let aspect_ratio = self.size.width as f32 / self.size.height as f32;
         text_renderer().draw(
             Vec3 {
@@ -315,13 +398,32 @@ impl RenderState {
             );
         }
 
-        self.camera_uniform.load_view_proj_matrix(
+        self.camera_uniform.load_camera_proj_matrix(
             camera,
             self.size.width as f32 / self.size.height as f32,
             world.get_player_data(),
         );
         self.queue.write_buffer(
             &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
+
+        self.camera_uniform.load_view_proj_matrix(
+            aspect_ratio,
+            Pos {
+                x: 0.,
+                y: 0.,
+                z: 0.,
+            },
+            Pos {
+                x: 0.,
+                y: 0.,
+                z: -1.,
+            },
+        );
+        self.queue.write_buffer(
+            &self.viewmodel_camera_buffer,
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
@@ -395,8 +497,80 @@ impl RenderState {
                 render_pass.draw(0..entity_mesh.vertices.len() as u32, 0..1);
             }
         }
+        if !damage_mesh.vertices.is_empty() {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Damage Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.2,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.damage_render_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            let damage_buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Damage Vertex Buffer"),
+                    contents: bytemuck::cast_slice(damage_mesh.vertices.as_slice()),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                });
+            render_pass.set_vertex_buffer(0, damage_buffer.slice(..));
+            render_pass.draw(0..damage_mesh.vertices.len() as u32, 0..1);
+        }
+        if !viewmodel_mesh.vertices.is_empty() {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Chunk Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.2,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.chunk_render_pipeline);
+            render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
 
-        {
+            render_pass.set_bind_group(1, &self.viewmodel_camera_bind_group, &[]);
+            let viewmodel_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Viewmodel Vertex Buffer"),
+                        contents: bytemuck::cast_slice(viewmodel_mesh.vertices.as_slice()),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    });
+            render_pass.set_vertex_buffer(0, viewmodel_buffer.slice(..));
+            render_pass.draw(0..viewmodel_mesh.vertices.len() as u32, 0..1);
+        }
+
+        if !gui_mesh.vertices.is_empty() {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("GUI Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -416,17 +590,15 @@ impl RenderState {
             render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.gui_camera_bind_group, &[]);
 
-            if !gui_mesh.vertices.is_empty() {
-                let gui_buffer =
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Entity Vertex Buffer"),
-                            contents: bytemuck::cast_slice(gui_mesh.vertices.as_slice()),
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        });
-                render_pass.set_vertex_buffer(0, gui_buffer.slice(..));
-                render_pass.draw(0..gui_mesh.vertices.len() as u32, 0..1);
-            }
+            let gui_buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Gui Vertex Buffer"),
+                    contents: bytemuck::cast_slice(gui_mesh.vertices.as_slice()),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                });
+            render_pass.set_vertex_buffer(0, gui_buffer.slice(..));
+            render_pass.draw(0..gui_mesh.vertices.len() as u32, 0..1);
         }
 
         self.queue.submit(iter::once(encoder.finish()));
@@ -487,6 +659,28 @@ impl GUIVertex {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DamageVertex {
+    pub position: [f32; 3],
+    pub tex_coords: [f32; 2],
+    pub progress: f32,
+}
+impl DamageVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
@@ -497,15 +691,35 @@ impl CameraUniform {
             view_proj: cgmath::Matrix4::identity().into(),
         }
     }
-    fn load_view_proj_matrix(
+    fn load_camera_proj_matrix(
         &mut self,
         camera: &ClientPlayer,
         aspect_ratio: f32,
         player_entity_data: Option<&EntityData>,
     ) {
+        self.load_view_proj_matrix(
+            aspect_ratio,
+            camera.get_eye(player_entity_data),
+            camera.make_front(),
+        );
+    }
+    fn load_view_proj_matrix(&mut self, aspect_ratio: f32, eye: Pos, front: Pos) {
+        let eye = Point3 {
+            x: eye.x,
+            y: eye.y,
+            z: eye.z,
+        };
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
             * ClientPlayer::create_projection_matrix(aspect_ratio)
-            * camera.create_view_matrix(player_entity_data))
+            * cgmath::Matrix4::look_at_rh(
+                eye,
+                eye + cgmath::Vector3 {
+                    x: front.x,
+                    y: front.y,
+                    z: front.z,
+                },
+                Vector3::unit_y(),
+            ))
         .into();
     }
     #[rustfmt::skip]
@@ -533,10 +747,8 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::ui::{ScreenData, render_screen};
-use crate::{
-    BaseMesh, ClientPlayer, ClientWorld, Mesh, TEXTURE_ATLAS, TexCoordsExt, text_renderer,
-};
+use crate::ui::{ScreenData, render_screen, text_renderer};
+use crate::{BaseMesh, ClientPlayer, ClientWorld, Mesh, TEXTURE_ATLAS, TexCoordsExt};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,
@@ -683,14 +895,21 @@ pub fn create_depth_texture(
 
     (texture, sampler, view)
 }
-pub fn draw_model(model_key: ModelKey, position: Pos, rotation: f32, mesh: &mut BaseMesh) {
+pub fn draw_model(
+    model_key: ModelKey,
+    position: Pos,
+    rotation: f32,
+    mesh: &mut BaseMesh,
+    animation: Option<&str>,
+    time: f32,
+) {
     let model = &model_key.data().bbmodel;
     let matrix = Matrix4::from_translation(Vector3 {
         x: position.x,
         y: position.y,
         z: position.z,
     }) * Matrix4::from_angle_y(Rad(rotation));
-    for triangle in block_byte_common::model::draw(model, None, 0.) {
+    for triangle in block_byte_common::model::draw(model, animation, time) {
         let texture = TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()][triangle.texture];
         let texture_data = &model.textures[triangle.texture];
         for v in [triangle.c, triangle.b, triangle.a] {

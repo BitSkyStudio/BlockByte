@@ -13,7 +13,7 @@ use block_byte_common::{
     MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C},
-    registry::{self, BlockData, BlockKey, ItemKey, load_registries},
+    registry::{self, BlockData, BlockKey, ItemAction, ItemKey, ToolData, load_registries},
     ui::{PropertyMap, UIScreenKey},
 };
 use palettevec::PaletteVec;
@@ -267,13 +267,16 @@ fn main() {
                                 user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed);
                             let mut inventory = entity.inventory.write();
                             if let Some(item) = &mut inventory.items[hotbar_slot] {
-                                if let Some(place) = item.item.data().place {
-                                    if let Ok(_) =
-                                        server.place(position + face.get_block_offset(), place)
-                                    {
-                                        item.count -= 1;
-                                        if item.count == 0 {
-                                            inventory.items[hotbar_slot] = None;
+                                match item.item.data().action {
+                                    ItemAction::Ignore => {}
+                                    ItemAction::Place(place) => {
+                                        if let Ok(_) =
+                                            server.place(position + face.get_block_offset(), place)
+                                        {
+                                            item.count -= 1;
+                                            if item.count == 0 {
+                                                inventory.items[hotbar_slot] = None;
+                                            }
                                         }
                                     }
                                 }
@@ -372,44 +375,48 @@ fn main() {
         }
 
         for (user_index, user) in &server.users {
-            server.message_queue.send_message(
-                std::iter::once(user_index),
-                NetworkMessageS2C::HUDUpdate {
-                    items: match user
-                        .entity
-                        .as_ref()
-                        .and_then(|entity| server.entities.get(*entity))
-                    {
-                        Some(entity) => entity
-                            .inventory
-                            .read()
-                            .items
-                            .iter()
-                            .map(|item| item.as_ref().map(|item| item.client()))
-                            .collect(),
-                        None => vec![],
+            {
+                let inventory = match user
+                    .entity
+                    .as_ref()
+                    .and_then(|entity| server.entities.get(*entity))
+                {
+                    Some(entity) => entity
+                        .inventory
+                        .read()
+                        .items
+                        .iter()
+                        .map(|item| item.as_ref().map(|item| item.client()))
+                        .collect(),
+                    None => vec![],
+                };
+                let hotbar_slot = user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed);
+                server.message_queue.send_message(
+                    std::iter::once(user_index),
+                    NetworkMessageS2C::HUDUpdate {
+                        active_tool: inventory
+                            .get(hotbar_slot)
+                            .and_then(|item| {
+                                item.as_ref().and_then(|item| item.item.data().tool.clone())
+                            })
+                            .unwrap_or(ToolData::hand()),
+                        items: inventory,
+                        properties: {
+                            let mut properties = HashMap::new();
+                            properties.insert("hotbar_slot".to_string(), hotbar_slot as f32);
+                            PropertyMap(properties)
+                        },
                     },
-                    properties: {
-                        let mut properties = HashMap::new();
-                        properties.insert(
-                            "hotbar_slot".to_string(),
-                            user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed) as f32,
-                        );
-                        PropertyMap(properties)
-                    },
-                },
-            );
+                );
+            }
             let mut screen_lock = user.screen.lock();
             if let Some(screen) = &mut *screen_lock {
                 match screen.state {
                     UserScreenState::Open => {
                         println!("open inventory");
-                        let inventory = match screen.inventory.get_inventory(&server) {
-                            Some(inventory) => inventory,
-                            None => {
-                                *screen_lock = None;
-                                continue;
-                            }
+                        let Some(inventory) = screen.inventory.get_inventory(&server) else {
+                            *screen_lock = None;
+                            continue;
                         };
                         server.message_queue.send_message(
                             std::iter::once(user_index),
@@ -426,12 +433,9 @@ fn main() {
                         screen.state = UserScreenState::Normal;
                     }
                     UserScreenState::Normal => {
-                        let new_inventory = match screen.inventory.get_inventory(&server) {
-                            Some(inventory) => inventory,
-                            None => {
-                                screen.state = UserScreenState::Close;
-                                continue;
-                            }
+                        let Some(new_inventory) = screen.inventory.get_inventory(&server) else {
+                            *screen_lock = None;
+                            continue;
                         };
                         for (slot, (previous, new)) in screen
                             .previous_inventory
@@ -509,7 +513,13 @@ fn main() {
                                 &teleport.to_chunk_pos(),
                             ])
                             .map(|v| v.unwrap());
-                        previous_chunk.entities.retain(|e| *e != index);
+                        previous_chunk.entities.remove(
+                            previous_chunk
+                                .entities
+                                .iter()
+                                .position(|ce| *ce == index)
+                                .unwrap(),
+                        );
                         new_chunk.entities.push(index);
                         entity.position = teleport;
                         server.message_queue.send_message(

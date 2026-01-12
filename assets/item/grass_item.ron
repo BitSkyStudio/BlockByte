@@ -1,5 +1,5 @@
 (
-    place: Some("nature.grass"),
+    action: Place("nature.grass"),
     model: Block("nature.grass"),
     stack_size: 20,
 )
