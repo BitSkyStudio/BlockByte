@@ -367,6 +367,16 @@ impl RenderState {
             &mut viewmodel_mesh,
             &mut damage_mesh,
         );
+        {
+            let viewmodel_light = Matrix4::from_angle_x(Rad(camera.direction.pitch))
+                * Matrix4::from_angle_y(Rad(camera.direction.yaw));
+            for vertex in &mut viewmodel_mesh.vertices {
+                let normal =
+                    cgmath::Vector3::new(vertex.normals[0], vertex.normals[1], vertex.normals[2]);
+                let new_normal = viewmodel_light.transform_vector(normal);
+                vertex.normals = [new_normal.x, new_normal.y, new_normal.z];
+            }
+        }
         let aspect_ratio = self.size.width as f32 / self.size.height as f32;
         text_renderer().draw(
             Vec3 {
@@ -622,10 +632,12 @@ impl RenderState {
 pub struct Vertex {
     pub position: [f32; 3],
     pub tex_coords: [f32; 2],
+    pub normals: [f32; 3],
+    pub color: [u8; 4],
 }
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
+    const ATTRIBS: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Unorm8x4];
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
@@ -918,12 +930,14 @@ pub fn draw_model(
         matrix,
         animation,
         time,
-        |position, uv, texture| {
+        |position, normal, uv, texture| {
             let texture = textures[texture];
             let uv = texture.map((uv.0, uv.1));
             mesh.vertices.push(Vertex {
                 position: [position.x, position.y, position.z],
                 tex_coords: [uv.0, uv.1],
+                normals: [normal.x, normal.y, normal.z],
+                color: Color::WHITE.into(),
             });
         },
         |matrix, binding| {
@@ -948,12 +962,14 @@ pub fn draw_model(
                     matrix * anchor,
                     None,
                     time,
-                    |position, uv, texture| {
+                    |position, normal, uv, texture| {
                         let texture = textures[texture];
                         let uv = texture.map((uv.0, uv.1));
                         mesh.vertices.push(Vertex {
                             position: [position.x, position.y, position.z],
                             tex_coords: [uv.0, uv.1],
+                            normals: [normal.x, normal.y, normal.z],
+                            color: Color::WHITE.into(),
                         });
                     },
                     |_, _| {},

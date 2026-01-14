@@ -23,6 +23,7 @@ use block_byte_common::{
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
 };
+use cgmath::Matrix4;
 use image::{DynamicImage, RgbaImage};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
@@ -1009,6 +1010,7 @@ impl ClientWorld {
                 _ => None,
             },
         );
+
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
             .modified_chunks
@@ -1170,18 +1172,26 @@ impl ClientWorld {
                                 Vertex {
                                     position: [first.x, first.y, first.z],
                                     tex_coords: [texture.u1, texture.v2],
+                                    normals: [0., 1., 0.],
+                                    color: Color::WHITE.into(),
                                 },
                                 Vertex {
                                     position: [second.x, second.y, second.z],
                                     tex_coords: [texture.u2, texture.v2],
+                                    normals: [0., 1., 0.],
+                                    color: Color::WHITE.into(),
                                 },
                                 Vertex {
                                     position: [first.x, first.y + plant.height, first.z],
                                     tex_coords: [texture.u1, texture.v1],
+                                    normals: [0., 1., 0.],
+                                    color: Color::WHITE.into(),
                                 },
                                 Vertex {
                                     position: [second.x, second.y + plant.height, second.z],
                                     tex_coords: [texture.u2, texture.v1],
+                                    normals: [0., 1., 0.],
+                                    color: Color::WHITE.into(),
                                 },
                             ];
                             entity_mesh.vertices.push(vertices[0]);
@@ -1336,9 +1346,12 @@ impl ClientChunk {
                                 let texture = faces.by_face(*face).tex_coords();
                                 face.add_vertices(texture, |position, coords| {
                                     let vt_pos = base_position + position;
+                                    let normal = face.get_offset();
                                     mesh.vertices.push(Vertex {
                                         position: [vt_pos.x, vt_pos.y, vt_pos.z],
                                         tex_coords: [coords.0, coords.1],
+                                        normals: [normal.x, normal.y, normal.z],
+                                        color: Color::WHITE.into(),
                                     });
                                 });
                             }

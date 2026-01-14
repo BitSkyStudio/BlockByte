@@ -8,11 +8,14 @@ var<uniform> camera: CameraUniform;
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) color: vec4<f32>,
 }
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
+    @location(1) color: vec4<f32>,
 }
 
 @vertex
@@ -21,7 +24,10 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0); // 2.
+    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
+    let shading = dot(model.normal, normalize(vec3<f32>(1, -1, 0.5)));
+    let shade_color = 1. - max(0., 0.7-abs(shading)) / 2.;
+    out.color = model.color * vec4<f32>(shade_color, shade_color, shade_color, 1.);
     return out;
 }
 
@@ -35,9 +41,9 @@ var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-        if color.w == 0.{
-            discard;
-        }
-        return color;
+    let color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords) * in.color;
+    if color.w == 0.{
+        discard;
+    }
+    return color;
 }

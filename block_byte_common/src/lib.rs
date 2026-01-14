@@ -72,6 +72,11 @@ impl Color {
         }
     }
 }
+impl Into<[u8; 4]> for Color {
+    fn into(self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+}
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct LookDirection {
     pub pitch: f32,

@@ -161,7 +161,7 @@ impl Bone {
         parent: Matrix4<f32>,
         animation: Option<usize>,
         time: f32,
-        mut vertex_consumer: &mut impl FnMut(Pos, (f32, f32), usize),
+        mut vertex_consumer: &mut impl FnMut(Pos, Pos, (f32, f32), usize),
         mut binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
     ) {
         let world = parent * self.animation_transform(animation, time);
@@ -179,11 +179,19 @@ impl Bone {
                                         / BLOCKBENCH_SIZE,
                                 )
                                 .to_vec();
+                            let normal = face.get_offset();
+                            let normal =
+                                world.transform_vector(Vector3::new(normal.x, normal.y, normal.z));
                             vertex_consumer(
                                 Pos {
                                     x: pos.x,
                                     y: pos.y,
                                     z: pos.z,
+                                },
+                                Pos {
+                                    x: normal.x,
+                                    y: normal.y,
+                                    z: normal.z,
                                 },
                                 uv,
                                 texture,
@@ -269,7 +277,7 @@ impl Model {
         matrix: Matrix4<f32>,
         animation_name: Option<&str>,
         time: f32,
-        mut vertex_consumer: impl FnMut(Pos, (f32, f32), usize),
+        mut vertex_consumer: impl FnMut(Pos, Pos, (f32, f32), usize),
         mut binding_consumer: impl FnMut(Matrix4<f32>, &str),
     ) {
         let animation = animation_name.map(|animation| *self.animations.get(animation).unwrap());
