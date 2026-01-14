@@ -1,7 +1,9 @@
-use block_byte_common::Color;
 use block_byte_common::coord::{Pos, Vec3};
-use block_byte_common::registry::{EntityData, Key, ModelData, ModelKey, TextureData, TextureKey};
+use block_byte_common::registry::{
+    EntityData, ItemModel, Key, ModelData, ModelKey, TextureData, TextureKey,
+};
 use block_byte_common::ui::UIScreen;
+use block_byte_common::{ClientItem, Color};
 use cgmath::{EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
 use std::f64::consts::PI;
@@ -902,26 +904,61 @@ pub fn draw_model(
     mesh: &mut BaseMesh,
     animation: Option<&str>,
     time: f32,
+    item_query: impl Fn(&str) -> Option<ClientItem>,
 ) {
-    let model = &model_key.data().bbmodel;
+    let model = &model_key.data().model;
     let matrix = Matrix4::from_translation(Vector3 {
         x: position.x,
         y: position.y,
         z: position.z,
     }) * Matrix4::from_angle_y(Rad(rotation));
-    for triangle in block_byte_common::model::draw(model, animation, time) {
-        let texture = TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()][triangle.texture];
-        let texture_data = &model.textures[triangle.texture];
-        for v in [triangle.c, triangle.b, triangle.a] {
-            let tc = texture.map((
-                v.uv.x / texture_data.uv_width,
-                v.uv.y / texture_data.uv_height,
-            ));
-            let vertex = matrix.transform_point(Point3::from_vec(v.position) / 16.);
+    let textures = &TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()];
+    let mut item_models = Vec::new();
+    model.draw(
+        matrix,
+        animation,
+        time,
+        |position, uv, texture| {
+            let texture = textures[texture];
+            let uv = texture.map((uv.0, uv.1));
             mesh.vertices.push(Vertex {
-                position: [vertex.x, vertex.y, vertex.z],
-                tex_coords: [tc.0, tc.1],
+                position: [position.x, position.y, position.z],
+                tex_coords: [uv.0, uv.1],
             });
+        },
+        |matrix, binding| {
+            if let Some(item) = item_query(binding) {
+                item_models.push((matrix, item));
+            }
+        },
+    );
+    for (matrix, item) in item_models {
+        match item.item.data().model {
+            ItemModel::Block(key) => {
+                //todo
+            }
+            ItemModel::Model(key) => {
+                let model = &key.data().model;
+                let anchor = model
+                    .anchor("hand", Matrix4::identity(), None, 0.)
+                    .map(|matrix| matrix.invert().unwrap())
+                    .unwrap_or(Matrix4::identity());
+                let textures = &TEXTURE_ATLAS.get().unwrap().models[key.numeric_id()];
+                model.draw(
+                    matrix * anchor,
+                    None,
+                    time,
+                    |position, uv, texture| {
+                        let texture = textures[texture];
+                        let uv = texture.map((uv.0, uv.1));
+                        mesh.vertices.push(Vertex {
+                            position: [position.x, position.y, position.z],
+                            tex_coords: [uv.0, uv.1],
+                        });
+                    },
+                    |_, _| {},
+                );
+            }
         }
     }
 }

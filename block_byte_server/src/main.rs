@@ -12,7 +12,7 @@ use std::{
 use block_byte_common::{
     MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
-    net::{NetworkMessageC2S, NetworkMessageS2C},
+    net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{self, BlockData, BlockKey, ItemAction, ItemKey, ToolData, load_registries},
     ui::{PropertyMap, UIScreenKey},
 };
@@ -43,7 +43,7 @@ fn main() {
     .build_global()
     .unwrap();*/
     load_registries(&Path::new("assets"));
-    let mut network_server = RenetServer::new(ConnectionConfig::default());
+    let mut network_server = RenetServer::new(make_connection_config());
     const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
     let network_socket: UdpSocket = UdpSocket::bind(SERVER_ADDR).unwrap();
     let network_server_config = ServerConfig {
@@ -111,6 +111,10 @@ fn main() {
             InventoryView::from_range(0..10).add_item(
                 &mut *entity.inventory.write(),
                 ItemStack::new(ItemKey::id("barrel").unwrap(), 20),
+            );
+            InventoryView::from_range(0..10).add_item(
+                &mut *entity.inventory.write(),
+                ItemStack::new(ItemKey::id("pickaxe").unwrap(), 1),
             );
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
@@ -258,7 +262,22 @@ fn main() {
                         }
                     }
                     NetworkMessageC2S::AttackBlock { position } => {
-                        server.schedule_block_event(position, BlockEvent::Damage { damage: 1. });
+                        if let Some(entity) = user.entity {
+                            let entity = server.entities.get(entity).unwrap();
+                            let hotbar_slot =
+                                user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed);
+                            let mut inventory = entity.inventory.write();
+                            let tool = inventory.items[hotbar_slot]
+                                .as_ref()
+                                .and_then(|item| item.item.data().tool)
+                                .unwrap_or(ToolData::hand());
+                            server.schedule_block_event(
+                                position,
+                                BlockEvent::Damage {
+                                    damage: tool.damage,
+                                },
+                            );
+                        }
                     }
                     NetworkMessageC2S::PlaceBlock { position, face } => {
                         if let Some(entity) = user.entity {
@@ -394,12 +413,7 @@ fn main() {
                 server.message_queue.send_message(
                     std::iter::once(user_index),
                     NetworkMessageS2C::HUDUpdate {
-                        active_tool: inventory
-                            .get(hotbar_slot)
-                            .and_then(|item| {
-                                item.as_ref().and_then(|item| item.item.data().tool.clone())
-                            })
-                            .unwrap_or(ToolData::hand()),
+                        held_item: inventory.get(hotbar_slot).cloned().flatten(),
                         items: inventory,
                         properties: {
                             let mut properties = HashMap::new();

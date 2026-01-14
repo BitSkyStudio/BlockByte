@@ -1,92 +1,117 @@
 use cgmath::{
-    Deg, EuclideanSpace, Euler, Matrix4, Point3, SquareMatrix, Transform, Vector2, Vector3,
-    VectorSpace,
+    Deg, ElementWise, EuclideanSpace, Euler, Matrix4, Point3, SquareMatrix, Transform, Vector2,
+    Vector3, VectorSpace, Zero,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
+use uuid::Uuid;
 
-/* =========================
-Blockbench JSON structs
-========================= */
+use crate::{
+    TexCoords,
+    coord::{Face, FaceMap, Pos},
+};
 
 #[derive(Deserialize, Debug)]
-pub struct BBModel {
-    pub elements: Vec<BBElement>,
-    pub outliner: Vec<BBOutliner>,
-    pub groups: Vec<BBGroup>,
-    pub animations: Option<Vec<BBAnimation>>,
-    pub textures: Vec<BBTexture>,
+struct BBModel {
+    elements: Vec<BBElement>,
+    outliner: Vec<BBOutliner>,
+    groups: Vec<BBGroup>,
+    animations: Option<Vec<BBAnimation>>,
+    textures: Vec<BBTexture>,
 }
 #[derive(Deserialize, Debug)]
-pub struct BBTexture {
-    pub uv_width: f32,
-    pub uv_height: f32,
-    pub source: String,
+struct BBTexture {
+    uv_width: f32,
+    uv_height: f32,
+    source: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct BBElement {
-    pub uuid: String,
-    pub from: [f32; 3],
-    pub to: [f32; 3],
-    pub faces: Option<HashMap<String, BBFace>>,
+#[serde(tag = "type")]
+enum BBElement {
+    #[serde(rename = "cube")]
+    Cube {
+        uuid: String,
+        from: [f32; 3],
+        to: [f32; 3],
+        faces: Option<HashMap<String, BBFace>>,
+    },
+    #[serde(rename = "locator")]
+    Locator {
+        uuid: String,
+        position: [f32; 3],
+        rotation: [f32; 3],
+        name: String,
+    },
+}
+impl BBElement {
+    pub fn uuid(&self) -> &str {
+        match self {
+            BBElement::Cube { uuid, .. } => uuid.as_str(),
+            BBElement::Locator { uuid, .. } => uuid.as_str(),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
-pub enum BBOutliner {
+enum BBOutliner {
     Group {
         uuid: String,
         children: Vec<BBOutliner>,
     },
-    Element(String), // element UUID
+    Element(String),
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct BBGroup {
-    pub uuid: String,
-    pub name: String,
-    pub origin: [f32; 3],
-    pub children: Vec<String>, // UUIDs of elements
+struct BBGroup {
+    uuid: String,
+    name: String,
+    origin: [f32; 3],
+    children: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct BBFace {
-    pub uv: [f32; 4],
-    pub texture: usize,
-}
-
-/* =========================
-Animations
-========================= */
-
-#[derive(Deserialize, Debug)]
-pub struct BBAnimation {
-    pub name: String,
-    pub length: f32,
-    pub animators: HashMap<String, BBAnimator>, // UUID keys
+struct BBFace {
+    uv: [f32; 4],
+    texture: usize,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct BBAnimator {
-    pub name: String, // UUID of bone/group
-    #[serde(rename = "type")]
-    pub animator_type: String,
-    pub keyframes: Option<Vec<BBKeyframe>>,
+struct BBAnimation {
+    name: String,
+    length: f32,
+    animators: HashMap<String, BBAnimator>,
+}
+
+#[derive(Deserialize, Debug)]
+struct BBAnimator {
+    #[serde(default)]
+    keyframes: Vec<BBKeyframe>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct BBKeyframe {
-    pub channel: String, // "rotation", "position", "scale"
-    pub time: f32,
-    pub data_points: Vec<BBVec3>,
+struct BBKeyframe {
+    channel: AnimatorChannel,
+    time: f32,
+    data_points: Vec<BBVec3>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum AnimatorChannel {
+    #[serde(rename = "position")]
+    Translation,
+    #[serde(rename = "rotation")]
+    Rotation,
+    #[serde(rename = "scale")]
+    Scale,
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct BBVec3 {
-    pub x: String,
-    pub y: String,
-    pub z: String,
+struct BBVec3 {
+    x: String,
+    y: String,
+    z: String,
 }
 
 impl BBVec3 {
@@ -99,269 +124,361 @@ impl BBVec3 {
     }
 }
 
-/* =========================
-Runtime structures
-========================= */
-
-#[derive(Debug, Clone)]
-pub struct Vertex {
-    pub position: Vector3<f32>,
-    pub uv: Vector2<f32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Triangle {
-    pub a: Vertex,
-    pub b: Vertex,
-    pub c: Vertex,
-    pub texture: usize,
-}
-
-#[derive(Debug)]
 pub struct Bone {
-    pub uuid: String,
     pub origin: Vector3<f32>,
-    pub elements: Vec<BBElement>,
+    pub elements: Vec<Element>,
     pub children: Vec<Bone>,
+    pub animators: Vec<BoneAnimation>,
 }
-
-/* =========================
-Bone hierarchy builder (UUID-based)
-========================= */
-
-fn build_bones(model: &BBModel) -> HashMap<String, Bone> {
-    // Map elements and groups by UUID
-    let element_map: HashMap<_, _> = model
-        .elements
-        .iter()
-        .map(|e| (e.uuid.clone(), e.clone()))
-        .collect();
-
-    let group_map: HashMap<_, _> = model
-        .groups
-        .iter()
-        .map(|g| (g.uuid.clone(), g.clone()))
-        .collect();
-
-    // Build top-level bones recursively
-    let mut bones = HashMap::new();
-    for node in &model.outliner {
-        let bone = build_bone(node, &element_map, &group_map);
-        bones.insert(bone.uuid.clone(), bone);
-    }
-
-    bones
-}
-
-fn build_bone(
-    node: &BBOutliner,
-    elements: &HashMap<String, BBElement>,
-    groups: &HashMap<String, BBGroup>,
-) -> Bone {
-    match node {
-        BBOutliner::Element(uuid) => {
-            let elem = elements.get(uuid).expect("Element UUID not found");
-            Bone {
-                uuid: elem.uuid.clone(),
-                origin: Vector3::new(0.0, 0.0, 0.0),
-                elements: vec![elem.clone()],
-                children: vec![],
+impl Bone {
+    fn animation_transform(&self, animation: Option<usize>, time: f32) -> Matrix4<f32> {
+        let mut transform = Matrix4::identity();
+        if let Some(animation) = animation {
+            let animator = &self.animators[animation];
+            if let Some(value) = animator.sample(AnimatorChannel::Translation, time) {
+                transform = transform * Matrix4::from_translation(value / BLOCKBENCH_SIZE);
+            }
+            if let Some(value) = animator.sample(AnimatorChannel::Rotation, time) {
+                let o = Matrix4::from_translation(self.origin);
+                let io = Matrix4::from_translation(-self.origin);
+                transform = transform
+                    * o
+                    * Matrix4::from(Euler {
+                        x: Deg(value.x),
+                        y: Deg(value.y),
+                        z: Deg(value.z),
+                    })
+                    * io;
+            }
+            if let Some(value) = animator.sample(AnimatorChannel::Scale, time) {
+                transform = transform * Matrix4::from_nonuniform_scale(value.x, value.y, value.z);
             }
         }
-        BBOutliner::Group { uuid, children } => {
-            let group = groups.get(uuid).expect("Group UUID not found");
-            let bone_origin = Vector3::from(group.origin);
+        transform
+    }
+    fn draw(
+        &self,
+        parent: Matrix4<f32>,
+        animation: Option<usize>,
+        time: f32,
+        mut vertex_consumer: &mut impl FnMut(Pos, (f32, f32), usize),
+        mut binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
+    ) {
+        let world = parent * self.animation_transform(animation, time);
 
-            // Build child bones recursively
-            let mut bone_children = Vec::new();
-            for child in children {
-                bone_children.push(build_bone(child, elements, groups));
-            }
-
-            // Attach direct child elements
-            let mut elems = Vec::new();
-            for elem_uuid in &group.children {
-                if let Some(elem) = elements.get(elem_uuid) {
-                    elems.push(elem.clone());
+        for elem in &self.elements {
+            match elem {
+                Element::Cube { from, to, uvs } => {
+                    for face in Face::all() {
+                        let (uv, texture) = *uvs.by_face(*face);
+                        face.add_vertices(uv, |pos, uv| {
+                            let pos = Vector3::new(pos.x, pos.y, pos.z);
+                            let pos = world
+                                .transform_point(
+                                    Point3::from_vec(*from + ((*to - *from).mul_element_wise(pos)))
+                                        / BLOCKBENCH_SIZE,
+                                )
+                                .to_vec();
+                            vertex_consumer(
+                                Pos {
+                                    x: pos.x,
+                                    y: pos.y,
+                                    z: pos.z,
+                                },
+                                uv,
+                                texture,
+                            );
+                        });
+                    }
                 }
-            }
-
-            Bone {
-                uuid: group.uuid.clone(),
-                origin: bone_origin,
-                elements: elems,
-                children: bone_children,
-            }
-        }
-    }
-}
-
-/* =========================
-Animation helpers
-========================= */
-
-fn find_animator<'a>(anim: &'a BBAnimation, bone_uuid: &str) -> Option<&'a BBAnimator> {
-    anim.animators.get(bone_uuid)
-}
-
-fn sample_keyframes(frames: &[BBKeyframe], time: f32) -> Vector3<f32> {
-    if frames.len() == 1 {
-        return frames[0].data_points[0].to_vec();
-    }
-
-    for w in frames.windows(2) {
-        let a = &w[0];
-        let b = &w[1];
-        if time >= a.time && time <= b.time {
-            let t = (time - a.time) / (b.time - a.time);
-            return a.data_points[0].to_vec().lerp(b.data_points[0].to_vec(), t);
-        }
-    }
-
-    frames.last().unwrap().data_points[0].to_vec()
-}
-
-/* =========================
-Geometry helpers
-========================= */
-
-const CUBE_VERTS: [Vector3<f32>; 8] = [
-    Vector3::new(0.0, 0.0, 0.0),
-    Vector3::new(1.0, 0.0, 0.0),
-    Vector3::new(1.0, 1.0, 0.0),
-    Vector3::new(0.0, 1.0, 0.0),
-    Vector3::new(0.0, 0.0, 1.0),
-    Vector3::new(1.0, 0.0, 1.0),
-    Vector3::new(1.0, 1.0, 1.0),
-    Vector3::new(0.0, 1.0, 1.0),
-];
-
-fn face_indices(face: &str) -> [usize; 4] {
-    match face {
-        "north" => [0, 1, 2, 3],
-        "south" => [5, 4, 7, 6],
-        "west" => [4, 0, 3, 7],
-        "east" => [1, 5, 6, 2],
-        "up" => [3, 2, 6, 7],
-        "down" => [4, 5, 1, 0],
-        _ => panic!("Unknown face {}", face),
-    }
-}
-
-fn face_uvs(uv: [f32; 4]) -> [Vector2<f32>; 4] {
-    let (x1, y1, x2, y2) = (uv[0], uv[1], uv[2], uv[3]);
-    [
-        Vector2::new(x1, y1),
-        Vector2::new(x2, y1),
-        Vector2::new(x2, y2),
-        Vector2::new(x1, y2),
-    ]
-}
-
-/* =========================
-Triangle collector (UUID-based)
-========================= */
-
-fn collect_triangles(
-    bone: &Bone,
-    parent: Matrix4<f32>,
-    anim: Option<&BBAnimation>,
-    time: f32,
-    out: &mut Vec<Triangle>,
-) {
-    // Get rotation from animator (UUID)
-    let mut rot = Matrix4::identity();
-    let mut transl = Matrix4::identity();
-    if let Some(anim) = anim {
-        if let Some(animator) = anim.animators.get(&bone.uuid) {
-            if let Some(frames) = &animator.keyframes {
-                let rotation_frames: Vec<_> = frames
-                    .iter()
-                    .filter(|k| k.channel == "rotation")
-                    .cloned()
-                    .collect();
-                if !rotation_frames.is_empty() {
-                    let r = sample_keyframes(&rotation_frames, time);
-                    rot = Matrix4::from(Euler {
-                        x: Deg(r.x),
-                        y: Deg(r.y),
-                        z: Deg(r.z),
-                    });
-                }
-                let translation_frames: Vec<_> = frames
-                    .iter()
-                    .filter(|k| k.channel == "position")
-                    .cloned()
-                    .collect();
-                if !translation_frames.is_empty() {
-                    let r = sample_keyframes(&translation_frames, time);
-                    rot = Matrix4::from_translation(r);
+                Element::Locator {
+                    position,
+                    rotation,
+                    name,
+                } => {
+                    binding_consumer(
+                        world
+                            * Matrix4::from_translation(position / BLOCKBENCH_SIZE)
+                            * Matrix4::from(*rotation),
+                        name.as_str(),
+                    );
                 }
             }
         }
+        for child in &self.children {
+            child.draw(world, animation, time, vertex_consumer, binding_consumer);
+        }
     }
+    fn anchor(
+        &self,
+        anchor: &str,
+        matrix: Matrix4<f32>,
+        animation: Option<usize>,
+        time: f32,
+    ) -> Option<Matrix4<f32>> {
+        let transform = matrix * self.animation_transform(animation, time);
+        for element in &self.elements {
+            match element {
+                Element::Locator {
+                    name,
+                    position,
+                    rotation,
+                } => {
+                    if name == anchor {
+                        return Some(
+                            transform
+                                * Matrix4::from_translation(position / BLOCKBENCH_SIZE)
+                                * Matrix4::from(*rotation),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        for child in &self.children {
+            if let Some(anchor) = child.anchor(anchor, transform, animation, time) {
+                return Some(anchor);
+            }
+        }
 
-    // Apply rotation around origin pivot
-    let o = Matrix4::from_translation(bone.origin);
-    let io = Matrix4::from_translation(-bone.origin);
-    let world = parent * transl * o * rot * io;
+        None
+    }
+}
 
-    // Transform elements
-    for elem in &bone.elements {
-        let min = Vector3::from(elem.from);
-        let max = Vector3::from(elem.to);
-        let size = max - min;
+pub enum Element {
+    Cube {
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        uvs: FaceMap<(TexCoords, usize)>,
+    },
+    Locator {
+        name: String,
+        position: Vector3<f32>,
+        rotation: Euler<Deg<f32>>,
+    },
+}
 
-        let verts: Vec<Vector3<f32>> = CUBE_VERTS
+pub struct Model {
+    root_bone: Bone,
+    animations: HashMap<String, usize>,
+    pub textures: Vec<String>,
+}
+impl Model {
+    pub fn draw(
+        &self,
+        matrix: Matrix4<f32>,
+        animation_name: Option<&str>,
+        time: f32,
+        mut vertex_consumer: impl FnMut(Pos, (f32, f32), usize),
+        mut binding_consumer: impl FnMut(Matrix4<f32>, &str),
+    ) {
+        let animation = animation_name.map(|animation| *self.animations.get(animation).unwrap());
+        self.root_bone.draw(
+            matrix,
+            animation,
+            time,
+            &mut vertex_consumer,
+            &mut binding_consumer,
+        );
+    }
+    pub fn anchor(
+        &self,
+        name: &str,
+        matrix: Matrix4<f32>,
+        animation_name: Option<&str>,
+        time: f32,
+    ) -> Option<Matrix4<f32>> {
+        let animation = animation_name.map(|animation| *self.animations.get(animation).unwrap());
+        self.root_bone.anchor(name, matrix, animation, time)
+    }
+    pub fn from_bbmodel(bbmodel: BBModel) -> Model {
+        let element_map: HashMap<_, _> = bbmodel
+            .elements
             .iter()
-            .map(|v| min + Vector3::new(v.x * size.x, v.y * size.y, v.z * size.z))
+            .map(|e| (e.uuid().to_string(), e.clone()))
             .collect();
 
-        if let Some(faces) = &elem.faces {
-            for (face_name, face) in faces {
-                let idx = face_indices(face_name);
-                let uvs = face_uvs(face.uv);
+        let group_map: HashMap<_, _> = bbmodel
+            .groups
+            .iter()
+            .map(|g| (g.uuid.clone(), g.clone()))
+            .collect();
 
-                let v = |i: usize, uv: Vector2<f32>| Vertex {
-                    position: world.transform_point(Point3::from_vec(verts[i])).to_vec(),
-                    uv,
-                };
-
-                out.push(Triangle {
-                    a: v(idx[0], uvs[0]),
-                    b: v(idx[1], uvs[1]),
-                    c: v(idx[2], uvs[2]),
-                    texture: face.texture,
-                });
-                out.push(Triangle {
-                    a: v(idx[2], uvs[2]),
-                    b: v(idx[3], uvs[3]),
-                    c: v(idx[0], uvs[0]),
-                    texture: face.texture,
-                });
-            }
+        let mut root_bone =
+            Self::build_bone(&bbmodel.outliner, None, &element_map, &group_map, &bbmodel);
+        Model {
+            root_bone,
+            animations: bbmodel
+                .animations
+                .unwrap_or(Vec::new())
+                .into_iter()
+                .enumerate()
+                .map(|(i, animation)| (animation.name, i))
+                .collect(),
+            textures: bbmodel
+                .textures
+                .into_iter()
+                .map(|texture| texture.source)
+                .collect(),
         }
     }
-
-    // Recurse into children
-    for child in &bone.children {
-        collect_triangles(child, world, anim, time, out);
+    fn build_bone(
+        outliner: &[BBOutliner],
+        uuid: Option<&str>,
+        element_map: &HashMap<String, BBElement>,
+        group_map: &HashMap<String, BBGroup>,
+        model: &BBModel,
+    ) -> Bone {
+        let group = uuid.and_then(|uuid| group_map.get(uuid));
+        let name = group.map(|group| group.name.as_str()).unwrap_or("");
+        let mut bone = Bone {
+            origin: group
+                .map(|group| Vector3::from(group.origin))
+                .unwrap_or(Vector3::zero()),
+            elements: Vec::new(),
+            children: Vec::new(),
+            animators: model
+                .animations
+                .as_ref()
+                .unwrap_or(&Vec::new())
+                .iter()
+                .map(|animation| {
+                    let mut bone_animation = BoneAnimation::default();
+                    if let Some(uuid) = uuid {
+                        if let Some(animator) = animation.animators.get(uuid) {
+                            for bb_keyframe in &animator.keyframes {
+                                let keyframe = Keyframe {
+                                    data: bb_keyframe.data_points[0].to_vec(),
+                                    time: bb_keyframe.time,
+                                };
+                                match bb_keyframe.channel {
+                                    AnimatorChannel::Translation => {
+                                        bone_animation.position.push(keyframe)
+                                    }
+                                    AnimatorChannel::Rotation => {
+                                        bone_animation.rotation.push(keyframe)
+                                    }
+                                    AnimatorChannel::Scale => bone_animation.scale.push(keyframe),
+                                }
+                            }
+                        }
+                    }
+                    bone_animation
+                })
+                .collect(),
+        };
+        for outline in outliner {
+            match outline {
+                BBOutliner::Group { uuid, children } => {
+                    bone.children.push(Self::build_bone(
+                        &children,
+                        Some(uuid),
+                        element_map,
+                        group_map,
+                        model,
+                    ));
+                }
+                BBOutliner::Element(element) => {
+                    let bbelement = element_map.get(element.as_str()).unwrap();
+                    match bbelement {
+                        BBElement::Cube {
+                            uuid,
+                            from,
+                            to,
+                            faces,
+                        } => {
+                            bone.elements.push(Element::Cube {
+                                from: Vector3::from(*from),
+                                to: Vector3::from(*to),
+                                uvs: FaceMap::init(|face| {
+                                    let face = match face {
+                                        Face::Back => "south",
+                                        Face::Front => "north",
+                                        Face::Up => "up",
+                                        Face::Down => "down",
+                                        Face::Left => "west",
+                                        Face::Right => "east",
+                                    };
+                                    let face = faces.as_ref().unwrap().get(face).unwrap();
+                                    let texture = &model.textures[face.texture];
+                                    (
+                                        TexCoords {
+                                            u1: face.uv[0] / texture.uv_width,
+                                            v1: face.uv[1] / texture.uv_height,
+                                            u2: face.uv[2] / texture.uv_width,
+                                            v2: face.uv[3] / texture.uv_height,
+                                        },
+                                        face.texture,
+                                    )
+                                }),
+                            });
+                        }
+                        BBElement::Locator {
+                            uuid,
+                            position,
+                            rotation,
+                            name,
+                        } => {
+                            bone.elements.push(Element::Locator {
+                                position: Vector3::from(*position),
+                                rotation: Euler {
+                                    x: Deg(rotation[0]),
+                                    y: Deg(rotation[1]),
+                                    z: Deg(rotation[2]),
+                                },
+                                name: name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        bone
+    }
+}
+impl<'de> Deserialize<'de> for Model {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bbmodel = BBModel::deserialize(deserializer)?;
+        Ok(Model::from_bbmodel(bbmodel))
     }
 }
 
-/* =========================
-Public draw entry point
-========================= */
-
-pub fn draw(model: &BBModel, animation_name: Option<&str>, time: f32) -> Vec<Triangle> {
-    let bones_map = build_bones(model);
-
-    let anim =
-        animation_name.and_then(|name| model.animations.as_ref()?.iter().find(|a| a.name == name));
-
-    let mut triangles = Vec::new();
-    for bone in bones_map.values() {
-        collect_triangles(bone, Matrix4::identity(), anim, time, &mut triangles);
-    }
-    triangles
+pub struct Keyframe {
+    time: f32,
+    data: Vector3<f32>,
 }
+#[derive(Default)]
+pub struct BoneAnimation {
+    position: Vec<Keyframe>,
+    rotation: Vec<Keyframe>,
+    scale: Vec<Keyframe>,
+}
+impl BoneAnimation {
+    pub fn sample(&self, channel: AnimatorChannel, time: f32) -> Option<Vector3<f32>> {
+        let frames = match channel {
+            AnimatorChannel::Translation => &self.position,
+            AnimatorChannel::Rotation => &self.rotation,
+            AnimatorChannel::Scale => &self.scale,
+        };
+        if frames.is_empty() {
+            return None;
+        }
+        if time <= frames[0].time {
+            return Some(frames[0].data);
+        }
+        for w in frames.windows(2) {
+            let a = &w[0];
+            let b = &w[1];
+            if time >= a.time && time <= b.time {
+                let t = (time - a.time) / (b.time - a.time);
+                return Some(a.data.lerp(b.data, t));
+            }
+        }
+        Some(frames.last().unwrap().data)
+    }
+}
+
+pub const BLOCKBENCH_SIZE: f32 = 16.;

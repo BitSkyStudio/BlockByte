@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use palettevec::PaletteVec;
+use renet::{ChannelConfig, ConnectionConfig, SendType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -98,6 +101,54 @@ pub enum NetworkMessageS2C {
     HUDUpdate {
         items: Vec<Option<ClientItem>>,
         properties: PropertyMap,
-        active_tool: ToolData,
+        held_item: Option<ClientItem>,
     },
+}
+
+pub fn make_connection_config() -> ConnectionConfig {
+    ConnectionConfig {
+        available_bytes_per_tick: 600000,
+        server_channels_config: vec![
+            ChannelConfig {
+                channel_id: 0,
+                max_memory_usage_bytes: 5 * 1024 * 1024,
+                send_type: SendType::Unreliable,
+            },
+            ChannelConfig {
+                channel_id: 1,
+                max_memory_usage_bytes: 5 * 1024 * 1024,
+                send_type: SendType::ReliableUnordered {
+                    resend_time: Duration::from_millis(300),
+                },
+            },
+            ChannelConfig {
+                channel_id: 2,
+                max_memory_usage_bytes: 50 * 1024 * 1024,
+                send_type: SendType::ReliableOrdered {
+                    resend_time: Duration::from_millis(300),
+                },
+            },
+        ],
+        client_channels_config: vec![
+            ChannelConfig {
+                channel_id: 0,
+                max_memory_usage_bytes: 5 * 1024 * 1024,
+                send_type: SendType::Unreliable,
+            },
+            ChannelConfig {
+                channel_id: 1,
+                max_memory_usage_bytes: 5 * 1024 * 1024,
+                send_type: SendType::ReliableUnordered {
+                    resend_time: Duration::from_millis(300),
+                },
+            },
+            ChannelConfig {
+                channel_id: 2,
+                max_memory_usage_bytes: 5 * 1024 * 1024,
+                send_type: SendType::ReliableOrdered {
+                    resend_time: Duration::from_millis(300),
+                },
+            },
+        ],
+    }
 }

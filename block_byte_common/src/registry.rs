@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::coord::{AABB, FaceMap, Pos};
-use crate::model::BBModel;
+use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
@@ -459,15 +459,14 @@ pub struct LootTableEntry {
     pub chance: f32,
 }
 pub struct ModelData {
-    pub bbmodel: BBModel,
+    pub model: Model,
 }
 pub type ModelKey = Key<ModelData>;
 impl RegistryConfigLoadable for ModelData {
     fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
         let json = std::fs::read_to_string(config).map_err(|_| anyhow!("error loading"))?;
         Ok(ModelData {
-            bbmodel: serde_json::from_str(&json)
-                .map_err(|err| anyhow!("error loading {:?}", err))?,
+            model: serde_json::from_str(&json).map_err(|err| anyhow!("error loading {:?}", err))?,
         })
     }
 }

@@ -13,9 +13,9 @@ use std::{
 
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    Color, LookDirection, MoveMode, PlayerAbilities, TexCoords,
+    ClientItem, Color, LookDirection, MoveMode, PlayerAbilities, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
-    net::{NetworkMessageC2S, NetworkMessageS2C},
+    net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, ModelData, ModelKey,
         Registry, TextureData, TextureKey, ToolData, load_registries,
@@ -50,7 +50,7 @@ fn main() {
         TextureAtlas::pack(registries.get_registry(), registries.get_registry());
     TEXTURE_ATLAS.set(atlas);
     TEXT_RENDERER.set(text_renderer);
-    let mut client = RenetClient::new(ConnectionConfig::default());
+    let mut client = RenetClient::new(make_connection_config());
     let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let current_time = SystemTime::now()
@@ -363,8 +363,9 @@ impl ApplicationHandler for App {
                                 self.world.tick_server(dt);
                                 if let Some(hit_timer) = self.world.hit_timer {
                                     let new_hit_timer = hit_timer + dt;
-                                    if hit_timer < self.world.active_tool.hit_time
-                                        && new_hit_timer >= self.world.active_tool.hit_time
+                                    let active_tool = self.world.active_tool();
+                                    if hit_timer < active_tool.hit_time
+                                        && new_hit_timer >= active_tool.hit_time
                                     {
                                         match self.camera.raycast(&self.world) {
                                             RayCastResult::Block(position, _) => {
@@ -381,7 +382,7 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     self.world.hit_timer = Some(new_hit_timer);
-                                    if new_hit_timer > self.world.active_tool.swing_time {
+                                    if new_hit_timer > active_tool.swing_time {
                                         self.world.hit_timer = None;
                                     }
                                 }
@@ -462,14 +463,22 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::HUDUpdate {
                                 items,
                                 properties,
-                                active_tool,
+                                held_item,
                             } => {
                                 self.world.hud.slots = items;
                                 self.world.hud.properties = properties;
-                                if self.world.active_tool != active_tool {
-                                    self.world.hit_timer = None;
+                                match (&self.world.held_item, &held_item) {
+                                    (None, None) => {}
+                                    (Some(first), Some(second)) => {
+                                        if first.item != second.item {
+                                            self.world.hit_timer = None;
+                                        }
+                                    }
+                                    _ => {
+                                        self.world.hit_timer = None;
+                                    }
                                 }
-                                self.world.active_tool = active_tool;
+                                self.world.held_item = held_item;
                             }
                         }
                     }
@@ -520,10 +529,10 @@ impl TextureAtlas {
                 .unwrap();
         }
         for (i, model) in model_registry.data_entries().enumerate() {
-            for (j, texture) in model.bbmodel.textures.iter().enumerate() {
+            for (j, texture) in model.model.textures.iter().enumerate() {
                 let image = image::load_from_memory_with_format(
                     BASE64_STANDARD
-                        .decode(&texture.source["data:image/png;base64,".len()..])
+                        .decode(&texture["data:image/png;base64,".len()..])
                         .unwrap()
                         .as_slice(),
                     image::ImageFormat::Png,
@@ -587,7 +596,7 @@ impl TextureAtlas {
                     .enumerate()
                     .map(|(i, model)| {
                         model
-                            .bbmodel
+                            .model
                             .textures
                             .iter()
                             .enumerate()
@@ -944,7 +953,7 @@ pub struct ClientWorld {
     pub screen: Option<ScreenData>,
     pub hud: ScreenData,
     pub hit_timer: Option<f32>,
-    pub active_tool: ToolData,
+    pub held_item: Option<ClientItem>,
 }
 impl Default for ClientWorld {
     fn default() -> Self {
@@ -965,11 +974,17 @@ impl Default for ClientWorld {
                 properties: PropertyMap(HashMap::new()),
             },
             hit_timer: None,
-            active_tool: ToolData::hand(),
+            held_item: None,
         }
     }
 }
 impl ClientWorld {
+    pub fn active_tool(&self) -> ToolData {
+        self.held_item
+            .as_ref()
+            .and_then(|item| item.item.data().tool)
+            .unwrap_or(ToolData::hand())
+    }
     pub fn tick_client(
         &mut self,
         device: &Device,
@@ -988,7 +1003,11 @@ impl ClientWorld {
             0.,
             viewmodel_mesh,
             Some("hit"),
-            self.hit_timer.unwrap_or(0.) / self.active_tool.swing_time,
+            self.hit_timer.unwrap_or(0.) / self.active_tool().swing_time,
+            |binding| match binding {
+                "hand" => self.held_item.clone(),
+                _ => None,
+            },
         );
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
@@ -1040,6 +1059,7 @@ impl ClientWorld {
                 entity_mesh,
                 None,
                 0.,
+                |_| None,
             );
         }
         /*let crack_textures: Vec<_> = (0..=3)
@@ -1088,8 +1108,7 @@ impl ClientWorld {
                     .unwrap();*/
 
                     for face in Face::all() {
-                        ClientChunk::add_vertices(
-                            *face,
+                        face.add_vertices(
                             TexCoords {
                                 u1: 0.,
                                 v1: 0.,
@@ -1315,7 +1334,7 @@ impl ClientChunk {
                                 }
 
                                 let texture = faces.by_face(*face).tex_coords();
-                                Self::add_vertices(*face, texture, |position, coords| {
+                                face.add_vertices(texture, |position, coords| {
                                     let vt_pos = base_position + position;
                                     mesh.vertices.push(Vertex {
                                         position: [vt_pos.x, vt_pos.y, vt_pos.z],
@@ -1330,7 +1349,7 @@ impl ClientChunk {
                                 y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32,
                                 z: (self.position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
                             };
-                            render::draw_model(*model, position, 0., &mut mesh, None, 0.);
+                            render::draw_model(*model, position, 0., &mut mesh, None, 0., |_| None);
                         }
                     }
                 }
@@ -1338,152 +1357,5 @@ impl ClientChunk {
         }
 
         mesh
-    }
-    fn add_vertices(
-        face: Face,
-        coords: TexCoords,
-        mut vertex_consumer: impl FnMut(Pos, (f32, f32)),
-    ) {
-        let (first, second, third, fourth) = match face {
-            Face::Front => (
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 0.,
-                },
-            ),
-            Face::Back => (
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 1.,
-                },
-            ),
-            Face::Up => (
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 1.,
-                },
-            ),
-            Face::Down => (
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 1.,
-                },
-            ),
-            Face::Left => (
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 0.,
-                },
-            ),
-            Face::Right => (
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 1.,
-                },
-            ),
-        };
-        vertex_consumer(first, (coords.u1, coords.v1));
-        vertex_consumer(fourth, (coords.u1, coords.v2));
-        vertex_consumer(third, (coords.u2, coords.v2));
-
-        vertex_consumer(third, (coords.u2, coords.v2));
-        vertex_consumer(second, (coords.u2, coords.v1));
-        vertex_consumer(first, (coords.u1, coords.v1));
     }
 }

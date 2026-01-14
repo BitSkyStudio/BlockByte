@@ -248,7 +248,7 @@ fn render_element(
                             todo!()
                         }
                     },
-                    ItemModel::Model(key) => todo!(),
+                    ItemModel::Model(key) => {}
                 }
                 text_renderer().draw(
                     Pos {

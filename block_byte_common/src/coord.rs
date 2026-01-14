@@ -7,6 +7,8 @@ use std::{
 use num_integer::{Integer, Roots};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::TexCoords;
+
 pub const CHUNK_SIZE_BITS: u8 = 5;
 pub const CHUNK_SIZE: u8 = 32;
 
@@ -768,4 +770,149 @@ impl Ray {
 pub struct AABBRaycastResult {
     pub position: Pos,
     pub face: Face,
+}
+impl Face {
+    pub fn add_vertices(self, coords: TexCoords, mut vertex_consumer: impl FnMut(Pos, (f32, f32))) {
+        let (first, second, third, fourth) = match self {
+            Face::Front => (
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 0.,
+                },
+            ),
+            Face::Back => (
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 1.,
+                },
+            ),
+            Face::Up => (
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 1.,
+                },
+            ),
+            Face::Down => (
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 1.,
+                },
+            ),
+            Face::Left => (
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 0.,
+                    y: 0.,
+                    z: 0.,
+                },
+            ),
+            Face::Right => (
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 1.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 1.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 0.,
+                },
+                Pos {
+                    x: 1.,
+                    y: 0.,
+                    z: 1.,
+                },
+            ),
+        };
+        vertex_consumer(first, (coords.u1, coords.v1));
+        vertex_consumer(fourth, (coords.u1, coords.v2));
+        vertex_consumer(third, (coords.u2, coords.v2));
+
+        vertex_consumer(third, (coords.u2, coords.v2));
+        vertex_consumer(second, (coords.u2, coords.v1));
+        vertex_consumer(first, (coords.u1, coords.v1));
+    }
 }

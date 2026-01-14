@@ -1,0 +1,9 @@
+(
+    model: Model("pickaxe"),
+    stack_size: 1,
+    tool: Some((
+        damage: 10,
+        swing_time: 1.,
+        hit_time: 0.5,
+    )),
+)

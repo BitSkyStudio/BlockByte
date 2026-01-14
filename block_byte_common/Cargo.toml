@@ -19,6 +19,7 @@ roxmltree = "0.21.1"
 taffy = "0.9.2"
 cgmath = "0.18"
 serde_json = "1.0.149"
+renet = "1.2.0"
 
 [features]
 client = ["dep:image"]
