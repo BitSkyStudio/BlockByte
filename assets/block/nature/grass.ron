@@ -10,6 +10,13 @@
         ),
     ),
     health: Some((health: 5., health_regen: 0.05)),
-    loot_table: Key("empty"),
+    loot_table: Own((
+        entries: [
+            (
+                item: "grass_item",
+                chance: 1.,
+            )
+        ]
+    )),
     plantable: true,
 )

@@ -13,7 +13,10 @@ use block_byte_common::{
     MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
-    registry::{self, BlockData, BlockKey, ItemAction, ItemKey, ToolData, load_registries},
+    registry::{
+        self, BlockData, BlockKey, EntityKey, ItemAction, ItemKey, ToolData, air_block,
+        load_registries,
+    },
     ui::{PropertyMap, UIScreenKey},
 };
 use palettevec::PaletteVec;
@@ -29,9 +32,7 @@ use slotmap::{SlotMap, new_key_type};
 use crate::{
     inventory::{Inventory, InventoryView, ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
-    world::{
-        BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex, air_block,
-    },
+    world::{BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex},
 };
 
 mod inventory;
@@ -222,16 +223,10 @@ fn main() {
                             let mut blocked = false;
                             let entity = server.entities.get(entity).unwrap();
                             *entity.direction.lock() = direction;
-                            for block in entity.key.data().hitbox().offset(position).to_block() {
-                                if match server.get_block(block) {
-                                    Some(block) => !block.data().selection.is_empty(), //todo: proper collisions
-                                    None => true,
-                                } {
-                                    blocked = true;
-                                    break;
-                                }
-                            }
-                            if blocked {
+
+                            if server.hitbox_block_collides(
+                                entity.key.data().hitbox().offset(position).to_block(),
+                            ) {
                                 let teleport_id = user
                                     .teleport_id
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -644,6 +639,17 @@ pub struct Server {
     entity_add_queue: Mutex<Vec<Entity>>,
 }
 impl Server {
+    pub fn hitbox_block_collides(&self, hitbox: AABB<i32>) -> bool {
+        for block in hitbox {
+            if match self.get_block(block) {
+                Some(block) => !block.data().selection.is_empty(), //todo: proper collisions
+                None => true,
+            } {
+                return true;
+            }
+        }
+        false
+    }
     pub fn spawn_entity(&self, entity: Entity) -> Result<(), ()> {
         if !self
             .chunks
@@ -653,6 +659,11 @@ impl Server {
         }
         self.entity_add_queue.lock().push(entity);
         Ok(())
+    }
+    pub fn spawn_item(&self, item: ItemStack, position: Pos) -> Result<(), ()> {
+        let mut item_entity = Entity::new(EntityKey::id("item").unwrap(), position);
+        item_entity.inventory.get_mut().items[0] = Some(item);
+        self.spawn_entity(item_entity)
     }
     pub fn place(&self, position: BlockPos, block: BlockKey) -> Result<(), ()> {
         let block_data = block.data();

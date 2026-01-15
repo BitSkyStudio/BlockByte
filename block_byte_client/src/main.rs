@@ -18,7 +18,7 @@ use block_byte_common::{
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, ModelData, ModelKey,
-        Registry, TextureData, TextureKey, ToolData, load_registries,
+        Registry, TextureData, TextureKey, ToolData, air_block, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -122,6 +122,9 @@ impl ApplicationHandler for App {
         self.render_state = Some(pollster::block_on(RenderState::new(
             window,
             self.texture_image.take().unwrap(),
+            image::load_from_memory(std::fs::read("assets/skybox.png").unwrap().as_slice())
+                .unwrap()
+                .to_rgba8(),
         )));
     }
     fn device_event(
@@ -296,6 +299,26 @@ impl ApplicationHandler for App {
                         teleport_id: self.teleport_id,
                         direction: self.camera.direction,
                     });
+                    if let Some(hit_timer) = self.world.hit_timer {
+                        let new_hit_timer = hit_timer + dt;
+                        let active_tool = self.world.active_tool();
+                        if hit_timer < active_tool.hit_time && new_hit_timer >= active_tool.hit_time
+                        {
+                            match self.camera.raycast(&self.world) {
+                                RayCastResult::Block(position, _) => {
+                                    self.send_message(NetworkMessageC2S::AttackBlock { position });
+                                }
+                                RayCastResult::Entity(entity) => {
+                                    self.send_message(NetworkMessageC2S::AttackEntity { entity });
+                                }
+                                RayCastResult::Empty => {}
+                            }
+                        }
+                        self.world.hit_timer = Some(new_hit_timer);
+                        if new_hit_timer > active_tool.swing_time {
+                            self.world.hit_timer = None;
+                        }
+                    }
                     while let Some(message) = self
                         .network_client
                         .receive_message(DefaultChannel::ReliableOrdered)
@@ -362,31 +385,6 @@ impl ApplicationHandler for App {
                             }
                             NetworkMessageS2C::GameTick { ticks_passed, dt } => {
                                 self.world.tick_server(dt);
-                                if let Some(hit_timer) = self.world.hit_timer {
-                                    let new_hit_timer = hit_timer + dt;
-                                    let active_tool = self.world.active_tool();
-                                    if hit_timer < active_tool.hit_time
-                                        && new_hit_timer >= active_tool.hit_time
-                                    {
-                                        match self.camera.raycast(&self.world) {
-                                            RayCastResult::Block(position, _) => {
-                                                self.send_message(NetworkMessageC2S::AttackBlock {
-                                                    position,
-                                                });
-                                            }
-                                            RayCastResult::Entity(entity) => {
-                                                self.send_message(
-                                                    NetworkMessageC2S::AttackEntity { entity },
-                                                );
-                                            }
-                                            RayCastResult::Empty => {}
-                                        }
-                                    }
-                                    self.world.hit_timer = Some(new_hit_timer);
-                                    if new_hit_timer > active_tool.swing_time {
-                                        self.world.hit_timer = None;
-                                    }
-                                }
                             }
                             NetworkMessageS2C::AddEntity {
                                 uuid,
@@ -1300,6 +1298,10 @@ impl ClientChunk {
         let mut mesh: BaseMesh = Mesh {
             vertices: Vec::new(),
         };
+
+        if self.blocks.unique_values() == 1 && *self.blocks.get(0).unwrap() == air_block() {
+            return mesh;
+        }
 
         for x in 0..CHUNK_SIZE {
             for y in 0..CHUNK_SIZE {

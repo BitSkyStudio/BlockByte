@@ -276,6 +276,11 @@ where
     }
 }
 
+static AIR_BLOCK: OnceLock<BlockKey> = OnceLock::new();
+pub fn air_block() -> BlockKey {
+    *AIR_BLOCK.get_or_init(|| BlockKey::id("air").unwrap())
+}
+
 #[derive(Deserialize)]
 pub struct ItemData {
     pub model: ItemModel,
@@ -357,6 +362,7 @@ pub struct BlockHealthData {
 pub enum BlockInteractAction {
     Ignore,
     OpenInventory(UIScreenKey),
+    Pickup,
 }
 impl Default for BlockInteractAction {
     fn default() -> Self {
@@ -400,6 +406,18 @@ pub struct EntityData {
     #[serde(default)]
     pub eye_height: f32,
     pub model: ModelKey,
+    #[serde(default)]
+    pub interact_action: EntityInteractAction,
+}
+#[derive(Deserialize)]
+pub enum EntityInteractAction {
+    Ignore,
+    Pickup,
+}
+impl Default for EntityInteractAction {
+    fn default() -> Self {
+        Self::Ignore
+    }
 }
 impl EntityData {
     pub fn hitbox(&self) -> AABB<f32> {

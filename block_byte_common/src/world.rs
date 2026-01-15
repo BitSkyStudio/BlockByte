@@ -26,16 +26,15 @@ impl<T> BlockComponentStorage<T> {
             self.components.push((block, data));
         }
     }
-    pub fn remove(&mut self, block: ChunkOffset) -> bool {
+    pub fn remove(&mut self, block: ChunkOffset) -> Option<T> {
         if let Some(index) = self
             .components
             .iter()
             .position(|(offset, _)| *offset == block)
         {
-            self.components.swap_remove(index);
-            true
+            Some(self.components.swap_remove(index).1)
         } else {
-            false
+            None
         }
     }
 }

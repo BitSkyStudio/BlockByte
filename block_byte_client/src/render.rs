@@ -1,9 +1,9 @@
-use block_byte_common::coord::{Pos, Vec3};
+use block_byte_common::coord::{Face, Pos, Vec3};
 use block_byte_common::registry::{
     EntityData, ItemModel, Key, ModelData, ModelKey, TextureData, TextureKey,
 };
 use block_byte_common::ui::UIScreen;
-use block_byte_common::{ClientItem, Color};
+use block_byte_common::{ClientItem, Color, TexCoords};
 use cgmath::{EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
 use std::f64::consts::PI;
@@ -31,6 +31,9 @@ pub struct RenderState {
     chunk_render_pipeline: wgpu::RenderPipeline,
     gui_render_pipeline: wgpu::RenderPipeline,
     damage_render_pipeline: wgpu::RenderPipeline,
+    skybox_render_pipeline: wgpu::RenderPipeline,
+    skybox_buffer: Buffer,
+    skybox_texture: GPUTexture,
     texture: GPUTexture,
     camera_uniform: CameraUniform,
     camera_buffer: Buffer,
@@ -43,7 +46,7 @@ pub struct RenderState {
 }
 
 impl RenderState {
-    pub async fn new(window: Window, texture_image: RgbaImage) -> Self {
+    pub async fn new(window: Window, texture_image: RgbaImage, skybox: RgbaImage) -> Self {
         let window = Arc::new(window);
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -90,17 +93,24 @@ impl RenderState {
         };
         surface.configure(&device, &config);
         let texture = GPUTexture::from_image(&device, &queue, &texture_image, Some("main texture"));
+        let skybox_texture =
+            GPUTexture::from_image(&device, &queue, &skybox, Some("skybox texture"));
+
         let chunk_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Chunk Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/chunk.wgsl").into()),
         });
         let gui_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("GUI Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gui_shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gui.wgsl").into()),
         });
         let damage_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Damage Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/damage_shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/damage.wgsl").into()),
+        });
+        let skybox_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Skybox Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/skybox.wgsl").into()),
         });
         let camera_uniform = CameraUniform::new();
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -307,6 +317,90 @@ impl RenderState {
                 multiview: None,
                 cache: None,
             });
+        let skybox_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Skybox Render Pipeline Layout"),
+                bind_group_layouts: &[
+                    &skybox_texture.texture_bind_group_layout,
+                    &camera_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+        let skybox_render_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Skybox Render Pipeline"),
+                layout: Some(&skybox_render_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &skybox_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[SkyboxVertex::desc()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &skybox_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Always,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
+        let mut skybox_mesh: Mesh<SkyboxVertex> = Mesh {
+            vertices: Vec::new(),
+        };
+        for (face, tx, ty) in [
+            (Face::Front, 3, 1),
+            (Face::Back, 1, 1),
+            (Face::Left, 2, 1),
+            (Face::Right, 0, 1),
+            (Face::Down, 1, 2),
+            (Face::Up, 1, 0),
+        ] {
+            face.add_vertices(
+                TexCoords {
+                    u2: tx as f32 / 4.,
+                    v1: ty as f32 / 3.,
+                    u1: (tx + 1) as f32 / 4.,
+                    v2: (ty + 1) as f32 / 3.,
+                },
+                |pos, (u, v)| {
+                    skybox_mesh.vertices.push(SkyboxVertex {
+                        position: [pos.x * 2. - 1., pos.y * 2. - 1., pos.z * 2. - 1.],
+                        tex_coords: [u, v],
+                    });
+                },
+            );
+        }
+        let skybox_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Skybox Vertex Buffer"),
+            contents: bytemuck::cast_slice(skybox_mesh.vertices.as_slice()),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
         Self {
             window,
             surface,
@@ -326,6 +420,9 @@ impl RenderState {
             viewmodel_camera_bind_group,
             viewmodel_camera_buffer,
             damage_render_pipeline,
+            skybox_buffer,
+            skybox_render_pipeline,
+            skybox_texture,
         }
     }
 
@@ -458,7 +555,35 @@ impl RenderState {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Skybox Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.2,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.skybox_render_pipeline);
+            render_pass.set_bind_group(0, &self.skybox_texture.diffuse_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.skybox_buffer.slice(..));
+            render_pass.draw(0..(6 * 6), 0..1);
+        }
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Chunk Render Pass"),
@@ -466,12 +591,7 @@ impl RenderState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -682,6 +802,27 @@ pub struct DamageVertex {
 impl DamageVertex {
     const ATTRIBS: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SkyboxVertex {
+    pub position: [f32; 3],
+    pub tex_coords: [f32; 2],
+}
+impl SkyboxVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;

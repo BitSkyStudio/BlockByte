@@ -10,7 +10,8 @@ use block_byte_common::{
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{
-        BiomeKey, BlockData, BlockInteractAction, BlockKey, BlockPalette, EntityKey, PlantKey,
+        BiomeKey, BlockData, BlockInteractAction, BlockKey, BlockPalette, EntityInteractAction,
+        EntityKey, PlantKey, air_block,
     },
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
@@ -29,7 +30,7 @@ use uuid::Uuid;
 
 use crate::{
     InventoryProvider, Server, UserIndex,
-    inventory::Inventory,
+    inventory::{Inventory, generate_loot_table, lock_inventories},
     registry::{Key, RegistryConfigLoadable},
 };
 #[derive(Serialize, Deserialize)]
@@ -163,7 +164,7 @@ impl Chunk {
                             damage_component.remove(block);
                             self.blocks.write().set(block.index(), &air_block());
                             if block_data.plantable {
-                                if self.components.plant.write().remove(block) {
+                                if self.components.plant.write().remove(block).is_some() {
                                     server.send_message_multiple(
                                         self.viewers.iter(),
                                         NetworkMessageS2C::UpdateBlockComponents {
@@ -174,14 +175,39 @@ impl Chunk {
                                     );
                                 }
                             }
+                            let block_pos = self.position.to_block_pos() + block.xyz();
+                            for item in generate_loot_table(block_data.loot_table.data()) {
+                                server.spawn_item(
+                                    item,
+                                    block_pos.to_pos()
+                                        + Pos {
+                                            x: 0.5,
+                                            y: 0.5,
+                                            z: 0.5,
+                                        },
+                                );
+                            }
                             if let Some(_) = &block_data.machine {
-                                self.components.machine.write().remove(block);
-                                //todo: drop items
+                                let machine =
+                                    self.components.machine.write().remove(block).unwrap();
+                                for item in machine.inventory.into_inner().items {
+                                    if let Some(item) = item {
+                                        server.spawn_item(
+                                            item,
+                                            block_pos.to_pos()
+                                                + Pos {
+                                                    x: 0.5,
+                                                    y: 0.5,
+                                                    z: 0.5,
+                                                },
+                                        );
+                                    }
+                                }
                             }
                             server.send_message_multiple(
                                 self.viewers.iter(),
                                 NetworkMessageS2C::SetBlock {
-                                    position: self.position.to_block_pos() + block.xyz(),
+                                    position: block_pos,
                                     block: air_block(),
                                 },
                             );
@@ -201,17 +227,19 @@ impl Chunk {
                 }
                 BlockEvent::PlayerInteract { user } => {
                     let block_data = self.blocks.read().get(block.index()).unwrap().data();
+                    let block_position = self.position.to_block_pos() + block.xyz();
                     match &block_data.interact_action {
                         BlockInteractAction::Ignore => {}
                         BlockInteractAction::OpenInventory(key) => {
                             if let Some(user) = server.get_user(user.0) {
-                                user.set_screen(
-                                    *key,
-                                    InventoryProvider::Block(
-                                        self.position.to_block_pos() + block.xyz(),
-                                    ),
-                                );
+                                user.set_screen(*key, InventoryProvider::Block(block_position));
                             }
+                        }
+                        BlockInteractAction::Pickup => {
+                            server.schedule_block_event(
+                                block_position,
+                                BlockEvent::Damage { damage: 10000. },
+                            );
                         }
                     }
                 }
@@ -291,11 +319,6 @@ pub enum BlockEvent {
     PlayerInteract { user: UserIndexSave },
 }
 
-static AIR_BLOCK: OnceLock<BlockKey> = OnceLock::new();
-pub fn air_block() -> BlockKey {
-    *AIR_BLOCK.get_or_init(|| BlockKey::id("air").unwrap())
-}
-
 #[derive(Serialize, Deserialize)]
 pub enum EntityEvent {
     Damage { damage: f32 },
@@ -313,6 +336,7 @@ pub struct Entity {
     pub removed: AtomicBool,
     pub inventory: RwLock<Inventory>,
     pub events: Mutex<Vec<EntityEvent>>,
+    pub velocity: Mutex<Pos>,
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
@@ -326,6 +350,11 @@ impl Entity {
             removed: AtomicBool::new(false),
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
             events: Mutex::new(Vec::new()),
+            velocity: Mutex::new(Pos {
+                x: 0.,
+                y: 0.,
+                z: 0.,
+            }),
         }
     }
     pub fn tick(&self, server: &Server) {
@@ -334,13 +363,105 @@ impl Entity {
         for event in processing_events {
             match event {
                 EntityEvent::Damage { damage } => {}
-                EntityEvent::PlayerInteract { user } => {}
+                EntityEvent::PlayerInteract { user } => match self.key.data().interact_action {
+                    EntityInteractAction::Ignore => {}
+                    EntityInteractAction::Pickup => {
+                        if let Some(user) = server.get_user(user.0) {
+                            if let Some(player_entity) =
+                                user.entity.and_then(|entity| server.get_entity(entity))
+                            {
+                                let (mut inventory, mut player_inventory) =
+                                    lock_inventories(&self.inventory, &player_entity.inventory);
+                                let mut items_present = false;
+                                for slot in &mut inventory.items {
+                                    if let Some(item) = &slot {
+                                        *slot = player_inventory
+                                            .full_view()
+                                            .add_item(&mut player_inventory, item.clone());
+                                        if slot.is_some() {
+                                            items_present = true;
+                                        }
+                                    }
+                                }
+                                if !items_present {
+                                    self.remove();
+                                }
+                            }
+                        }
+                    }
+                },
             }
+        }
+        {
+            let hitbox = self.key.data().hitbox();
+            let mut movement = *self.velocity.lock();
+            movement.y -= 10. / server.tps as f32;
+
+            if movement.x != 0
+                && server.hitbox_block_collides(
+                    hitbox
+                        .offset(
+                            self.position
+                                + Pos {
+                                    x: movement.x,
+                                    y: 0.,
+                                    z: 0.,
+                                } / server.tps as f32,
+                        )
+                        .to_block(),
+                )
+            {
+                movement.x = 0.;
+            }
+            if movement.y != 0
+                && server.hitbox_block_collides(
+                    hitbox
+                        .offset(
+                            self.position
+                                + Pos {
+                                    x: movement.x,
+                                    y: movement.y,
+                                    z: 0.,
+                                } / server.tps as f32,
+                        )
+                        .to_block(),
+                )
+            {
+                movement.y = 0.;
+            }
+            if movement.z != 0
+                && server.hitbox_block_collides(
+                    hitbox
+                        .offset(
+                            self.position
+                                + Pos {
+                                    x: movement.x,
+                                    y: movement.y,
+                                    z: movement.z,
+                                } / server.tps as f32,
+                        )
+                        .to_block(),
+                )
+            {
+                movement.z = 0.;
+            }
+            if movement.length_squared() != 0. {
+                let mut teleport = self.teleport.lock();
+                if teleport.is_none() {
+                    *teleport = Some(self.position + movement / server.tps as f32);
+                }
+            }
+
+            *self.velocity.lock() = movement;
         }
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
         let entity_data = self.key.data();
         entity_data.hitbox().offset(self.position)
+    }
+    pub fn remove(&self) {
+        self.removed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 impl Entity {

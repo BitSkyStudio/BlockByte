@@ -2,8 +2,9 @@ use std::path::Path;
 
 use block_byte_common::{
     ClientItem,
-    registry::{ItemKey, LootTableKey},
+    registry::{ItemKey, LootTableData, LootTableKey},
 };
+use parking_lot::{RwLock, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
@@ -321,6 +322,9 @@ impl Inventory {
                 .into_boxed_slice(),
         }
     }
+    pub fn full_view(&self) -> InventoryView {
+        InventoryView::from_range(0..self.items.len())
+    }
 }
 
 pub struct InventoryView {
@@ -421,8 +425,7 @@ impl InventoryView {
         count
     }
 }
-pub fn generate_loot_table(loot_table: LootTableKey) -> Vec<ItemStack> {
-    let loot_table = loot_table.data();
+pub fn generate_loot_table(loot_table: &LootTableData) -> Vec<ItemStack> {
     let mut items = Vec::new();
     for entry in &loot_table.entries {
         if rand::random_bool(entry.chance as f64) {
@@ -434,4 +437,21 @@ pub fn generate_loot_table(loot_table: LootTableKey) -> Vec<ItemStack> {
         }
     }
     items
+}
+pub fn lock_inventories<'a>(
+    a: &'a RwLock<Inventory>,
+    b: &'a RwLock<Inventory>,
+) -> (
+    RwLockWriteGuard<'a, Inventory>,
+    RwLockWriteGuard<'a, Inventory>,
+) {
+    if (a as *const _) < (b as *const _) {
+        let a = a.write();
+        let b = b.write();
+        (a, b)
+    } else {
+        let b = b.write();
+        let a = a.write();
+        (a, b)
+    }
 }
