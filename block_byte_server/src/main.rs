@@ -138,7 +138,7 @@ fn main() {
                 NetworkMessageS2C::PlayerAbilities {
                     abilities: PlayerAbilities {
                         move_mode: MoveMode::Normal,
-                        speed: 1.,
+                        speed: 1.2,
                     },
                 },
             );
@@ -159,7 +159,6 @@ fn main() {
                         entity: None,
                         teleport_id: AtomicU32::new(1),
                         screen: Mutex::new(None),
-                        hotbar_slot: AtomicUsize::new(0),
                     });
                     server.send_message(
                         user,
@@ -193,8 +192,7 @@ fn main() {
                             .entities
                             .get(entity)
                             .unwrap()
-                            .removed
-                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                            .schedule_event(EntityEvent::Remove);
                     }
                 }
             }
@@ -222,7 +220,6 @@ fn main() {
                         if let Some(entity) = user.entity {
                             let mut blocked = false;
                             let entity = server.entities.get(entity).unwrap();
-                            *entity.direction.lock() = direction;
 
                             if server.hitbox_block_collides(
                                 entity.key.data().hitbox().offset(position).to_block(),
@@ -253,19 +250,21 @@ fn main() {
                             *user.view_position.lock() = chunk_position;
                         }
                         if let Some(entity) = user.entity {
-                            *server.entities.get(entity).unwrap().teleport.lock() = Some(position);
+                            let entity = server.entities.get_mut(entity).unwrap();
+                            entity.state.get_mut().teleport = Some(position);
+                            entity.direction = direction;
                         }
                     }
                     NetworkMessageC2S::AttackBlock { position } => {
                         if let Some(entity) = user.entity {
-                            let entity = server.entities.get(entity).unwrap();
-                            let hotbar_slot =
-                                user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed);
+                            let entity = server.entities.get_mut(entity).unwrap();
+                            let hotbar_slot = entity.state.get_mut().hand_slot;
                             let mut inventory = entity.inventory.write();
                             let tool = inventory.items[hotbar_slot]
                                 .as_ref()
                                 .and_then(|item| item.item.data().tool)
                                 .unwrap_or(ToolData::hand());
+                            drop(inventory);
                             server.schedule_block_event(
                                 position,
                                 BlockEvent::Damage {
@@ -277,8 +276,7 @@ fn main() {
                     NetworkMessageC2S::PlaceBlock { position, face } => {
                         if let Some(entity) = user.entity {
                             let entity = server.entities.get(entity).unwrap();
-                            let hotbar_slot =
-                                user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed);
+                            let hotbar_slot = entity.state.lock().hand_slot;
                             let mut inventory = entity.inventory.write();
                             if let Some(item) = &mut inventory.items[hotbar_slot] {
                                 match item.item.data().action {
@@ -303,17 +301,18 @@ fn main() {
                         }
                     }
                     NetworkMessageC2S::HotbarSelect { slot, relative } => {
-                        let new_slot = if relative {
-                            user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed) as isize
-                                + slot
-                        } else {
-                            slot
-                        };
-                        let hotbar_size = 10;
-                        let new_slot =
-                            ((new_slot % hotbar_size + hotbar_size) % hotbar_size) as usize;
-                        user.hotbar_slot
-                            .store(new_slot, std::sync::atomic::Ordering::Relaxed);
+                        if let Some(entity) = user.entity {
+                            let entity = server.entities.get_mut(entity).unwrap();
+                            let new_slot = if relative {
+                                entity.state.get_mut().hand_slot as isize + slot
+                            } else {
+                                slot
+                            };
+                            let hotbar_size = 10;
+                            let new_slot =
+                                ((new_slot % hotbar_size + hotbar_size) % hotbar_size) as usize;
+                            entity.state.get_mut().hand_slot = new_slot;
+                        }
                     }
                     NetworkMessageC2S::InteractBlock { position } => {
                         server.schedule_block_event(
@@ -370,6 +369,35 @@ fn main() {
                             }
                         }
                     }
+                    NetworkMessageC2S::DropItem { stack } => {
+                        if let Some(entity) = user.entity {
+                            let entity = server.entities.get_mut(entity).unwrap();
+                            let slot = &mut entity.inventory.get_mut().items
+                                [entity.state.get_mut().hand_slot];
+                            let drop_item = if let Some(item) = slot {
+                                if item.count == 1 || stack {
+                                    slot.take().unwrap()
+                                } else {
+                                    item.count -= 1;
+                                    item.copy(1)
+                                }
+                            } else {
+                                continue;
+                            };
+                            let mut item_entity = Entity::new(
+                                EntityKey::id("item").unwrap(),
+                                entity.position + Pos::Y,
+                            );
+                            let throw_force = 3.;
+                            item_entity.state.get_mut().velocity = Pos {
+                                x: entity.direction.yaw.sin(),
+                                y: 0.,
+                                z: entity.direction.yaw.cos(),
+                            } * throw_force;
+                            item_entity.inventory.get_mut().items[0] = Some(drop_item);
+                            server.spawn_entity(item_entity);
+                        }
+                    }
                 }
             }
         }
@@ -390,21 +418,23 @@ fn main() {
 
         for (user_index, user) in &server.users {
             {
-                let inventory = match user
+                let (inventory, hotbar_slot) = match user
                     .entity
                     .as_ref()
-                    .and_then(|entity| server.entities.get(*entity))
+                    .and_then(|entity| server.entities.get_mut(*entity))
                 {
-                    Some(entity) => entity
-                        .inventory
-                        .read()
-                        .items
-                        .iter()
-                        .map(|item| item.as_ref().map(|item| item.client()))
-                        .collect(),
-                    None => vec![],
+                    Some(entity) => (
+                        entity
+                            .inventory
+                            .get_mut()
+                            .items
+                            .iter()
+                            .map(|item| item.as_ref().map(|item| item.client()))
+                            .collect(),
+                        entity.state.get_mut().hand_slot,
+                    ),
+                    None => (vec![], 0),
                 };
-                let hotbar_slot = user.hotbar_slot.load(std::sync::atomic::Ordering::Relaxed);
                 server.message_queue.send_message(
                     std::iter::once(user_index),
                     NetworkMessageS2C::HUDUpdate {
@@ -491,7 +521,7 @@ fn main() {
         }
 
         server.entities.retain(|index, entity| {
-            if entity.removed.load(std::sync::atomic::Ordering::Relaxed) {
+            if entity.state.get_mut().removed {
                 {
                     let mut chunk_entities = &mut server
                         .chunks
@@ -512,7 +542,7 @@ fn main() {
                 );
                 return false;
             }
-            if let Some(teleport) = entity.teleport.lock().take() {
+            if let Some(teleport) = entity.state.get_mut().teleport.take() {
                 if server.chunks.contains_key(&teleport.to_chunk_pos()) {
                     if entity.position.to_chunk_pos() != teleport.to_chunk_pos() {
                         let [previous_chunk, new_chunk] = server
@@ -594,7 +624,7 @@ fn main() {
             bincode::serde::encode_to_vec(
                 NetworkMessageS2C::GameTick {
                     ticks_passed: server.ticks_passed,
-                    dt: 1. / server.tps as f32,
+                    dt: server.delta_time(),
                 },
                 bincode::config::standard(),
             )
@@ -639,6 +669,9 @@ pub struct Server {
     entity_add_queue: Mutex<Vec<Entity>>,
 }
 impl Server {
+    pub fn delta_time(&self) -> f32 {
+        1. / self.tps as f32
+    }
     pub fn hitbox_block_collides(&self, hitbox: AABB<i32>) -> bool {
         for block in hitbox {
             if match self.get_block(block) {
@@ -662,6 +695,11 @@ impl Server {
     }
     pub fn spawn_item(&self, item: ItemStack, position: Pos) -> Result<(), ()> {
         let mut item_entity = Entity::new(EntityKey::id("item").unwrap(), position);
+        item_entity.state.get_mut().velocity = Pos {
+            x: rand::random::<f32>() * 2. - 1.,
+            y: rand::random::<f32>(),
+            z: rand::random::<f32>() * 2. - 1.,
+        };
         item_entity.inventory.get_mut().items[0] = Some(item);
         self.spawn_entity(item_entity)
     }
@@ -811,8 +849,8 @@ impl ChunkViewingManager {
                             .entities
                             .into_iter()
                             .filter_map(|entity| {
-                                let entity = server.entities.remove(entity)?;
-                                if entity.removed.load(std::sync::atomic::Ordering::Relaxed) {
+                                let mut entity = server.entities.remove(entity)?;
+                                if entity.state.get_mut().removed {
                                     return None;
                                 }
                                 if entity.key == Key::id("player").unwrap() {
@@ -907,7 +945,6 @@ pub struct User {
     entity: Option<EntityIndex>,
     teleport_id: AtomicU32,
     screen: Mutex<Option<UserScreen>>,
-    hotbar_slot: AtomicUsize,
 }
 pub struct UserScreen {
     pub screen: UIScreenKey,

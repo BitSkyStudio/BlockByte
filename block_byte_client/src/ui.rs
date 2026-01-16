@@ -48,18 +48,7 @@ pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &m
             },
         )
         .unwrap();
-    render_element(
-        root,
-        &taffy,
-        size,
-        Pos {
-            x: 0.,
-            y: 0.,
-            z: 0.,
-        },
-        &screen_data,
-        mesh,
-    );
+    render_element(root, &taffy, size, Pos::ZERO, &screen_data, mesh);
 }
 pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::Size<f32> {
     let style = get_element_style(element, properties);

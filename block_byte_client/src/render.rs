@@ -1,10 +1,11 @@
 use block_byte_common::coord::{Face, Pos, Vec3};
 use block_byte_common::registry::{
-    EntityData, ItemModel, Key, ModelData, ModelKey, TextureData, TextureKey,
+    BlockKey, BlockRenderData, EntityData, ItemModel, Key, ModelData, ModelKey, TextureData,
+    TextureKey,
 };
 use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
-use cgmath::{EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3};
+use cgmath::{Deg, EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
 use std::f64::consts::PI;
 use std::iter;
@@ -192,7 +193,7 @@ impl RenderState {
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: config.format,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
@@ -459,6 +460,7 @@ impl RenderState {
 
         world.tick_client(
             &self.device,
+            &camera,
             &mut entity_mesh,
             &mut gui_mesh,
             &mut viewmodel_mesh,
@@ -510,6 +512,7 @@ impl RenderState {
         self.camera_uniform.load_camera_proj_matrix(
             camera,
             self.size.width as f32 / self.size.height as f32,
+            90.,
             world.get_player_data(),
         );
         self.queue.write_buffer(
@@ -518,19 +521,8 @@ impl RenderState {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
-        self.camera_uniform.load_view_proj_matrix(
-            aspect_ratio,
-            Pos {
-                x: 0.,
-                y: 0.,
-                z: 0.,
-            },
-            Pos {
-                x: 0.,
-                y: 0.,
-                z: -1.,
-            },
-        );
+        self.camera_uniform
+            .load_view_proj_matrix(aspect_ratio, 70., Pos::ZERO, -Pos::Z);
         self.queue.write_buffer(
             &self.viewmodel_camera_buffer,
             0,
@@ -850,22 +842,24 @@ impl CameraUniform {
         &mut self,
         camera: &ClientPlayer,
         aspect_ratio: f32,
+        fov: f32,
         player_entity_data: Option<&EntityData>,
     ) {
         self.load_view_proj_matrix(
             aspect_ratio,
+            fov,
             camera.get_eye(player_entity_data),
             camera.make_front(),
         );
     }
-    fn load_view_proj_matrix(&mut self, aspect_ratio: f32, eye: Pos, front: Pos) {
+    fn load_view_proj_matrix(&mut self, aspect_ratio: f32, fov: f32, eye: Pos, front: Pos) {
         let eye = Point3 {
             x: eye.x,
             y: eye.y,
             z: eye.z,
         };
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
-            * ClientPlayer::create_projection_matrix(aspect_ratio)
+            * ClientPlayer::create_projection_matrix(aspect_ratio, fov)
             * cgmath::Matrix4::look_at_rh(
                 eye,
                 eye + cgmath::Vector3 {
@@ -1050,21 +1044,50 @@ pub fn create_depth_texture(
 
     (texture, sampler, view)
 }
+pub fn draw_block_model(
+    block_key: BlockKey,
+    matrix: Matrix4<f32>,
+    vertex_consumer: &mut impl FnMut([f32; 3], [f32; 2], [f32; 3]),
+) {
+    let block = block_key.data();
+    match &block.render_data {
+        BlockRenderData::Air => {}
+        BlockRenderData::Full { faces } => {
+            for face in Face::all() {
+                face.add_vertices(faces.by_face(*face).tex_coords(), |pos, (u, v)| {
+                    let result_pos = (pos
+                        - Pos {
+                            x: 0.5,
+                            y: 0.,
+                            z: 0.5,
+                        });
+                    let result_pos = Point3::new(result_pos.x, result_pos.y, result_pos.z);
+                    let result_pos = matrix.transform_point(result_pos);
+                    let normal = face.get_offset();
+                    let normal = Vector3::new(normal.x, normal.y, normal.z);
+                    let normal = matrix.transform_vector(normal);
+                    vertex_consumer(
+                        [result_pos.x, result_pos.y, result_pos.z],
+                        [u, v],
+                        [normal.x, normal.y, normal.z],
+                    );
+                });
+            }
+        }
+        BlockRenderData::Model(key) => {
+            draw_model(*key, matrix, vertex_consumer, None, 0., |_| None);
+        }
+    }
+}
 pub fn draw_model(
     model_key: ModelKey,
-    position: Pos,
-    rotation: f32,
-    mesh: &mut BaseMesh,
+    matrix: Matrix4<f32>,
+    vertex_consumer: &mut impl FnMut([f32; 3], [f32; 2], [f32; 3]),
     animation: Option<&str>,
     time: f32,
     item_query: impl Fn(&str) -> Option<ClientItem>,
 ) {
     let model = &model_key.data().model;
-    let matrix = Matrix4::from_translation(Vector3 {
-        x: position.x,
-        y: position.y,
-        z: position.z,
-    }) * Matrix4::from_angle_y(Rad(rotation));
     let textures = &TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()];
     let mut item_models = Vec::new();
     model.draw(
@@ -1074,12 +1097,11 @@ pub fn draw_model(
         |position, normal, uv, texture| {
             let texture = textures[texture];
             let uv = texture.map((uv.0, uv.1));
-            mesh.vertices.push(Vertex {
-                position: [position.x, position.y, position.z],
-                tex_coords: [uv.0, uv.1],
-                normals: [normal.x, normal.y, normal.z],
-                color: Color::WHITE.into(),
-            });
+            vertex_consumer(
+                [position.x, position.y, position.z],
+                [uv.0, uv.1],
+                [normal.x, normal.y, normal.z],
+            );
         },
         |matrix, binding| {
             if let Some(item) = item_query(binding) {
@@ -1090,7 +1112,14 @@ pub fn draw_model(
     for (matrix, item) in item_models {
         match item.item.data().model {
             ItemModel::Block(key) => {
-                //todo
+                draw_block_model(
+                    key,
+                    matrix
+                        * Matrix4::from_angle_x(Deg(-90.))
+                        * Matrix4::from_translation(Vector3::new(0., -0.1, 0.))
+                        * Matrix4::from_scale(0.35),
+                    vertex_consumer,
+                );
             }
             ItemModel::Model(key) => {
                 let model = &key.data().model;
@@ -1098,24 +1127,16 @@ pub fn draw_model(
                     .anchor("hand", Matrix4::identity(), None, 0.)
                     .map(|matrix| matrix.invert().unwrap())
                     .unwrap_or(Matrix4::identity());
-                let textures = &TEXTURE_ATLAS.get().unwrap().models[key.numeric_id()];
-                model.draw(
+                draw_model(
+                    key,
                     matrix * anchor,
+                    vertex_consumer,
                     None,
-                    time,
-                    |position, normal, uv, texture| {
-                        let texture = textures[texture];
-                        let uv = texture.map((uv.0, uv.1));
-                        mesh.vertices.push(Vertex {
-                            position: [position.x, position.y, position.z],
-                            tex_coords: [uv.0, uv.1],
-                            normals: [normal.x, normal.y, normal.z],
-                            color: Color::WHITE.into(),
-                        });
-                    },
-                    |_, _| {},
+                    0.,
+                    EMPTY_ITEM_QUERY,
                 );
             }
         }
     }
 }
+static EMPTY_ITEM_QUERY: fn(&str) -> Option<ClientItem> = |_| None;

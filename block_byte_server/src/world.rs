@@ -25,12 +25,13 @@ use rand::{Rng, rngs::StdRng};
 use rand_seeder::Seeder;
 use serde::{Deserialize, Serialize};
 use slotmap::new_key_type;
+use smallvec::SmallVec;
 use splines::{Interpolation, Spline};
 use uuid::Uuid;
 
 use crate::{
     InventoryProvider, Server, UserIndex,
-    inventory::{Inventory, generate_loot_table, lock_inventories},
+    inventory::{Inventory, ItemStack, generate_loot_table, lock_inventories},
     registry::{Key, RegistryConfigLoadable},
 };
 #[derive(Serialize, Deserialize)]
@@ -256,7 +257,8 @@ impl Chunk {
                 .write()
                 .components
                 .retain_mut(|(offset, damage)| {
-                    damage.damage -= 1. / server.tps as f32
+                    damage.damage -= 1.
+                        * server.delta_time()
                         * blocks
                             .get(offset.index())
                             .unwrap()
@@ -323,6 +325,8 @@ pub enum BlockEvent {
 pub enum EntityEvent {
     Damage { damage: f32 },
     PlayerInteract { user: UserIndexSave },
+    Teleport { position: Pos },
+    Remove,
 }
 
 new_key_type! {pub struct EntityIndex;}
@@ -331,12 +335,19 @@ pub struct Entity {
     pub key: EntityKey,
     pub uuid: Uuid,
     pub position: Pos,
-    pub direction: Mutex<LookDirection>,
-    pub teleport: Mutex<Option<Pos>>,
-    pub removed: AtomicBool,
+    pub direction: LookDirection,
     pub inventory: RwLock<Inventory>,
-    pub events: Mutex<Vec<EntityEvent>>,
-    pub velocity: Mutex<Pos>,
+    pub events: Mutex<SmallVec<[EntityEvent; 4]>>,
+    pub state: Mutex<InternalEntityState>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct InternalEntityState {
+    pub velocity: Pos,
+    pub teleport: Option<Pos>,
+    pub removed: bool,
+    pub hand_slot: usize,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub last_hand_item: Option<ItemStack>,
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
@@ -345,21 +356,25 @@ impl Entity {
             key,
             uuid: Uuid::new_v4(),
             position,
-            direction: Mutex::new(LookDirection { pitch: 0., yaw: 0. }),
-            teleport: Mutex::new(None),
-            removed: AtomicBool::new(false),
+            direction: LookDirection { pitch: 0., yaw: 0. },
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
-            events: Mutex::new(Vec::new()),
-            velocity: Mutex::new(Pos {
-                x: 0.,
-                y: 0.,
-                z: 0.,
+            events: Mutex::new(SmallVec::new()),
+            state: Mutex::new(InternalEntityState {
+                velocity: Pos::ZERO,
+                removed: false,
+                teleport: None,
+                hand_slot: 0,
+                last_hand_item: None,
             }),
         }
     }
+    pub fn schedule_event(&self, event: EntityEvent) {
+        self.events.lock().push(event);
+    }
     pub fn tick(&self, server: &Server) {
-        let mut processing_events = Vec::new();
+        let mut processing_events = SmallVec::new();
         std::mem::swap(&mut processing_events, &mut *self.events.lock());
+        let mut state = self.state.lock();
         for event in processing_events {
             match event {
                 EntityEvent::Damage { damage } => {}
@@ -384,20 +399,28 @@ impl Entity {
                                     }
                                 }
                                 if !items_present {
-                                    self.remove();
+                                    self.schedule_event(EntityEvent::Remove);
                                 }
                             }
                         }
                     }
                 },
+                EntityEvent::Teleport { position } => {
+                    state.teleport = Some(position);
+                }
+                EntityEvent::Remove => {
+                    state.removed = true;
+                }
             }
         }
         {
             let hitbox = self.key.data().hitbox();
-            let mut movement = *self.velocity.lock();
-            movement.y -= 10. / server.tps as f32;
+            let mut movement = state.velocity;
+            movement.y -= 10. * server.delta_time();
 
-            if movement.x != 0
+            let mut friction = 0.;
+
+            if movement.x != 0.
                 && server.hitbox_block_collides(
                     hitbox
                         .offset(
@@ -406,14 +429,15 @@ impl Entity {
                                     x: movement.x,
                                     y: 0.,
                                     z: 0.,
-                                } / server.tps as f32,
+                                } * server.delta_time(),
                         )
                         .to_block(),
                 )
             {
                 movement.x = 0.;
+                friction += 1.;
             }
-            if movement.y != 0
+            if movement.y != 0.
                 && server.hitbox_block_collides(
                     hitbox
                         .offset(
@@ -422,14 +446,15 @@ impl Entity {
                                     x: movement.x,
                                     y: movement.y,
                                     z: 0.,
-                                } / server.tps as f32,
+                                } * server.delta_time(),
                         )
                         .to_block(),
                 )
             {
                 movement.y = 0.;
+                friction += 1.;
             }
-            if movement.z != 0
+            if movement.z != 0.
                 && server.hitbox_block_collides(
                     hitbox
                         .offset(
@@ -438,30 +463,72 @@ impl Entity {
                                     x: movement.x,
                                     y: movement.y,
                                     z: movement.z,
-                                } / server.tps as f32,
+                                } * server.delta_time(),
                         )
                         .to_block(),
                 )
             {
                 movement.z = 0.;
+                friction += 1.;
             }
             if movement.length_squared() != 0. {
-                let mut teleport = self.teleport.lock();
-                if teleport.is_none() {
-                    *teleport = Some(self.position + movement / server.tps as f32);
+                if state.teleport.is_none() {
+                    state.teleport = Some(self.position + movement * server.delta_time());
+                } else {
+                    movement = Pos::ZERO;
                 }
             }
+            {
+                let drag = 0.1;
+                movement = movement * (1. - drag * server.delta_time());
+            }
+            let movement_length = movement.length();
+            if movement_length > 0. {
+                let friction_constant = 8.;
+                let friction_axis = |value: f32| -> f32 {
+                    let force = value / movement_length
+                        * friction_constant
+                        * friction
+                        * server.delta_time();
+                    if value.abs() < force.abs() {
+                        return 0.;
+                    }
+                    value - force
+                };
+                movement.x = friction_axis(movement.x);
+                movement.y = friction_axis(movement.y);
+                movement.z = friction_axis(movement.z);
+            }
 
-            *self.velocity.lock() = movement;
+            state.velocity = movement;
+        }
+        {
+            let new_hand_item = self
+                .inventory
+                .read()
+                .items
+                .get(state.hand_slot)
+                .cloned()
+                .flatten();
+            if new_hand_item != state.last_hand_item {
+                server.send_message_multiple(
+                    server
+                        .get_chunk(self.position.to_chunk_pos())
+                        .unwrap()
+                        .viewers
+                        .iter(),
+                    NetworkMessageS2C::EntityHandItem {
+                        uuid: self.uuid,
+                        item: new_hand_item.as_ref().map(|item| item.client()),
+                    },
+                );
+                state.last_hand_item = new_hand_item;
+            }
         }
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
         let entity_data = self.key.data();
         entity_data.hitbox().offset(self.position)
-    }
-    pub fn remove(&self) {
-        self.removed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 impl Entity {
@@ -470,14 +537,14 @@ impl Entity {
             uuid: self.uuid,
             key: self.key,
             position: self.position,
-            direction: *self.direction.lock(),
+            direction: self.direction,
         }
     }
     pub fn create_move_message(&self) -> NetworkMessageS2C {
         NetworkMessageS2C::MoveEntity {
             uuid: self.uuid,
             position: self.position,
-            direction: *self.direction.lock(),
+            direction: self.direction,
         }
     }
     pub fn create_remove_message(&self) -> NetworkMessageS2C {

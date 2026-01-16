@@ -41,6 +41,9 @@ pub enum NetworkMessageC2S {
     AttackEntity {
         entity: Uuid,
     },
+    DropItem {
+        stack: bool,
+    },
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {
@@ -79,6 +82,10 @@ pub enum NetworkMessageS2C {
     RemoveEntity {
         uuid: Uuid,
     },
+    EntityHandItem {
+        uuid: Uuid,
+        item: Option<ClientItem>,
+    },
     SetPlayerEntity {
         uuid: Option<Uuid>,
     },
@@ -107,7 +114,7 @@ pub enum NetworkMessageS2C {
 
 pub fn make_connection_config() -> ConnectionConfig {
     ConnectionConfig {
-        available_bytes_per_tick: 600000,
+        available_bytes_per_tick: 60000,
         server_channels_config: vec![
             ChannelConfig {
                 channel_id: 0,
@@ -123,7 +130,7 @@ pub fn make_connection_config() -> ConnectionConfig {
             },
             ChannelConfig {
                 channel_id: 2,
-                max_memory_usage_bytes: 50 * 1024 * 1024,
+                max_memory_usage_bytes: 10 * 1024 * 1024,
                 send_type: SendType::ReliableOrdered {
                     resend_time: Duration::from_millis(300),
                 },

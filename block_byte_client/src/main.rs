@@ -17,13 +17,13 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockPalette, BlockRenderData, EntityData, EntityKey, Key, ModelData, ModelKey,
-        Registry, TextureData, TextureKey, ToolData, air_block, load_registries,
+        self, BlockPalette, BlockRenderData, EntityData, EntityKey, ItemAction, Key, ModelData,
+        ModelKey, Registry, TextureData, TextureKey, ToolData, air_block, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
 };
-use cgmath::Matrix4;
+use cgmath::{Matrix4, Rad, SquareMatrix, Vector3};
 use image::{DynamicImage, RgbaImage};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
@@ -35,7 +35,7 @@ use winit::{
     event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::KeyCode,
-    window::{Window, WindowAttributes, WindowId},
+    window::{Fullscreen, Window, WindowAttributes, WindowId},
 };
 
 use crate::{
@@ -119,6 +119,9 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        window.set_cursor_grab(winit::window::CursorGrabMode::Locked);
+        window.set_cursor_visible(false);
+        window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         self.render_state = Some(pollster::block_on(RenderState::new(
             window,
             self.texture_image.take().unwrap(),
@@ -136,8 +139,11 @@ impl ApplicationHandler for App {
         match event {
             DeviceEvent::MouseMotion { delta } => {
                 if self.world.screen.is_none() {
-                    self.camera
-                        .update_orientation(-delta.1 as f32, -delta.0 as f32);
+                    let sensitivity = 0.4;
+                    self.camera.update_orientation(
+                        -delta.1 as f32 * sensitivity,
+                        -delta.0 as f32 * sensitivity,
+                    );
                 }
             }
             _ => {}
@@ -198,6 +204,11 @@ impl ApplicationHandler for App {
                         }
                         if key_code == KeyCode::Escape {
                             self.send_message(NetworkMessageC2S::CloseUI);
+                        }
+                        if key_code == KeyCode::KeyQ {
+                            self.send_message(NetworkMessageC2S::DropItem {
+                                stack: self.keys.contains(&KeyCode::ControlLeft),
+                            });
                         }
                     } else {
                         self.keys.remove(&key_code);
@@ -401,6 +412,7 @@ impl ApplicationHandler for App {
                                         previous_position: position,
                                         previous_direction: direction,
                                         update_timestamp: Instant::now(),
+                                        hand_item: None,
                                     },
                                 );
                             }
@@ -478,6 +490,11 @@ impl ApplicationHandler for App {
                                     }
                                 }
                                 self.world.held_item = held_item;
+                            }
+                            NetworkMessageS2C::EntityHandItem { uuid, item } => {
+                                if let Some(entity) = self.world.entities.get_mut(&uuid) {
+                                    entity.hand_item = item;
+                                }
                             }
                         }
                     }
@@ -668,16 +685,8 @@ pub struct ClientPlayer {
 impl Default for ClientPlayer {
     fn default() -> Self {
         ClientPlayer {
-            position: Pos {
-                x: 0.,
-                y: 0.,
-                z: 0.,
-            },
-            velocity: Pos {
-                x: 0.,
-                y: 0.,
-                z: 0.,
-            },
+            position: Pos::ZERO,
+            velocity: Pos::ZERO,
             direction: LookDirection { pitch: 0., yaw: 0. },
             on_ground: false,
         }
@@ -871,20 +880,7 @@ impl ClientPlayer {
     ) -> bool {
         match player_entity_data {
             Some(player_entity_data) => {
-                let collider = AABB {
-                    min: Pos {
-                        x: -player_entity_data.hitbox_size,
-                        y: 0.,
-                        z: -player_entity_data.hitbox_size,
-                    },
-                    max: Pos {
-                        x: player_entity_data.hitbox_size,
-                        y: player_entity_data.hitbox_height,
-                        z: player_entity_data.hitbox_size,
-                    },
-                }
-                .offset(position)
-                .to_block();
+                let collider = player_entity_data.hitbox().offset(position).to_block();
                 for block in collider {
                     let (chunk, offset) = block.to_chunk_pos_offset();
                     match world.chunks.get(&chunk) {
@@ -939,8 +935,8 @@ impl ClientPlayer {
             ClientPlayer::UP,
         )
     }
-    pub fn create_projection_matrix(aspect: f32) -> cgmath::Matrix4<f32> {
-        cgmath::perspective(cgmath::Deg(90.), aspect, 0.05, 500.)
+    pub fn create_projection_matrix(aspect: f32, fov: f32) -> cgmath::Matrix4<f32> {
+        cgmath::perspective(cgmath::Deg(fov), aspect, 0.05, 500.)
     }
 }
 pub struct ClientWorld {
@@ -957,11 +953,7 @@ pub struct ClientWorld {
 impl Default for ClientWorld {
     fn default() -> Self {
         Self {
-            player_position: Pos {
-                x: 0.,
-                y: 0.,
-                z: 0.,
-            },
+            player_position: Pos::ZERO,
             chunks: Default::default(),
             modified_chunks: Default::default(),
             entities: Default::default(),
@@ -987,6 +979,7 @@ impl ClientWorld {
     pub fn tick_client(
         &mut self,
         device: &Device,
+        camera: &ClientPlayer,
         entity_mesh: &mut BaseMesh,
         gui_mesh: &mut GUIMesh,
         viewmodel_mesh: &mut BaseMesh,
@@ -994,13 +987,8 @@ impl ClientWorld {
     ) {
         render::draw_model(
             ModelKey::id("viewmodel").unwrap(),
-            Pos {
-                x: 0.,
-                y: 0.,
-                z: 0.,
-            },
-            0.,
-            viewmodel_mesh,
+            Matrix4::identity(),
+            &mut viewmodel_mesh.vertex_consumer(),
             Some("hit"),
             self.hit_timer.unwrap_or(0.) / self.active_tool().swing_time,
             |binding| match binding {
@@ -1051,15 +1039,18 @@ impl ClientWorld {
                 entity.previous_direction.yaw,
                 entity.direction.yaw,
                 lerp_time,
-            );
+            ) + std::f32::consts::PI;
             render::draw_model(
                 entity.key.data().model,
-                position,
-                rotation,
-                entity_mesh,
+                Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
+                    * Matrix4::from_angle_y(Rad(rotation)),
+                &mut entity_mesh.vertex_consumer(),
                 None,
                 0.,
-                |_| None,
+                |slot| match slot {
+                    "hand" => entity.hand_item.clone(),
+                    _ => None,
+                },
             );
         }
         /*let crack_textures: Vec<_> = (0..=3)
@@ -1203,6 +1194,62 @@ impl ClientWorld {
                 }
             }
         }
+
+        if let Some(held_item) = &self.held_item {
+            match held_item.item.data().action {
+                ItemAction::Place(place_block) => match camera.raycast(self) {
+                    RayCastResult::Block(position, face) => {
+                        let block_position = position + face.get_block_offset();
+                        let mut blocked = false;
+                        for entity in self.entities.values() {
+                            if entity
+                                .key
+                                .data()
+                                .hitbox()
+                                .offset(entity.position)
+                                .to_block()
+                                .contains(block_position)
+                            {
+                                blocked = true;
+                                break;
+                            }
+                        }
+                        if !blocked {
+                            let (chunk, offset) = block_position.to_chunk_pos_offset();
+                            if let Some(chunk) = self.chunks.get(&chunk) {
+                                let block = chunk.blocks.get(offset.index()).unwrap();
+                                if *block == air_block() {
+                                    render::draw_block_model(
+                                        place_block,
+                                        Matrix4::from_translation(Vector3::new(
+                                            block_position.x as f32 + 0.5,
+                                            block_position.y as f32,
+                                            block_position.z as f32 + 0.5,
+                                        )),
+                                        &mut |position, tex_coords, normals| {
+                                            entity_mesh.vertices.push(Vertex {
+                                                position,
+                                                tex_coords,
+                                                normals,
+                                                color: Color {
+                                                    r: 255,
+                                                    g: 255,
+                                                    b: 255,
+                                                    a: 100,
+                                                }
+                                                .into(),
+                                            });
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    RayCastResult::Empty | RayCastResult::Entity(_) => {}
+                },
+                ItemAction::Ignore => {}
+            }
+        }
     }
     pub fn tick_server(&mut self, dt: f32) {
         for (_, chunk) in &mut self.chunks {
@@ -1241,6 +1288,7 @@ pub struct ClientEntity {
     previous_position: Pos,
     previous_direction: LookDirection,
     update_timestamp: Instant,
+    hand_item: Option<ClientItem>,
 }
 pub struct ClientChunk {
     pub position: ChunkPos,
@@ -1261,6 +1309,19 @@ impl<T> Default for Mesh<T> {
 pub type BaseMesh = Mesh<Vertex>;
 pub type GUIMesh = Mesh<GUIVertex>;
 pub type DamageMesh = Mesh<DamageVertex>;
+
+impl BaseMesh {
+    pub fn vertex_consumer(&mut self) -> impl FnMut([f32; 3], [f32; 2], [f32; 3]) {
+        move |position, tex_coords, normals| {
+            self.vertices.push(Vertex {
+                position,
+                tex_coords,
+                normals,
+                color: Color::WHITE.into(),
+            });
+        }
+    }
+}
 
 impl GUIMesh {
     pub fn add_quad(&mut self, position: Pos, size: Pos, texture: TexCoords, color: Color) {
@@ -1364,7 +1425,16 @@ impl ClientChunk {
                                 y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32,
                                 z: (self.position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
                             };
-                            render::draw_model(*model, position, 0., &mut mesh, None, 0., |_| None);
+                            render::draw_model(
+                                *model,
+                                Matrix4::from_translation(Vector3::new(
+                                    position.x, position.y, position.z,
+                                )),
+                                &mut mesh.vertex_consumer(),
+                                None,
+                                0.,
+                                |_| None,
+                            );
                         }
                     }
                 }
