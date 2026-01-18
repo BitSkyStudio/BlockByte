@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use block_byte_common::{
-    ClientItem,
+    ClientItem, InventoryView,
     registry::{ItemKey, LootTableData, LootTableKey},
 };
 use parking_lot::{RwLock, RwLockWriteGuard};
@@ -325,41 +325,27 @@ impl Inventory {
     pub fn full_view(&self) -> InventoryView {
         InventoryView::from_range(0..self.items.len())
     }
-}
-
-pub struct InventoryView {
-    slots: Vec<usize>,
-}
-impl InventoryView {
-    pub fn from_range(range: std::ops::Range<usize>) -> Self {
-        InventoryView {
-            slots: range.collect(),
-        }
-    }
-    pub fn size(&self) -> usize {
-        self.slots.len()
-    }
-    pub fn get_slot<'a>(&self, inventory: &'a Inventory, slot: usize) -> Option<&'a ItemStack> {
-        inventory.items[*self.slots.get(slot)?].as_ref()
+    pub fn get_slot<'a>(&'a self, view: &InventoryView, slot: usize) -> Option<&'a ItemStack> {
+        self.items[*view.slots.get(slot)?].as_ref()
     }
     pub fn set_slot(
-        &self,
-        inventory: &mut Inventory,
+        &mut self,
+        view: &InventoryView,
         slot: usize,
         item: Option<ItemStack>,
     ) -> Result<(), ()> {
-        match self.slots.get(slot) {
+        match view.slots.get(slot) {
             Some(slot) => {
-                inventory.items[*slot] = item;
+                self.items[*slot] = item;
                 Ok(())
             }
             None => Err(()),
         }
     }
-    pub fn add_item(&self, inventory: &mut Inventory, mut item: ItemStack) -> Option<ItemStack> {
+    pub fn add_item(&mut self, view: &InventoryView, mut item: ItemStack) -> Option<ItemStack> {
         let stack_size = item.item.data().stack_size;
-        for slot in &self.slots {
-            let mut slot = &mut inventory.items[*slot];
+        for slot in &view.slots {
+            let mut slot = &mut self.items[*slot];
             if slot.is_none() {
                 if item.count > stack_size {
                     let (first, second) = item.split(stack_size);
@@ -384,10 +370,10 @@ impl InventoryView {
         }
         Some(item)
     }
-    pub fn count_item(&self, inventory: &Inventory, item: ItemKey) -> ItemCount {
+    pub fn count_item(&self, view: &InventoryView, item: ItemKey) -> ItemCount {
         let mut count = 0;
-        for slot in &self.slots {
-            match &inventory.items[*slot] {
+        for slot in &view.slots {
+            match &self.items[*slot] {
                 Some(stack) => {
                     if stack.item == item {
                         count += stack.count
@@ -399,13 +385,13 @@ impl InventoryView {
         count
     }
     pub fn remove_item(
-        &self,
-        inventory: &mut Inventory,
+        &mut self,
+        view: &InventoryView,
         item: ItemKey,
         mut count: ItemCount,
     ) -> ItemCount {
-        for slot in &self.slots {
-            let mut slot = &mut inventory.items[*slot];
+        for slot in &view.slots {
+            let mut slot = &mut self.items[*slot];
             if slot.is_some() {
                 let mut item_slot = slot.as_mut().unwrap();
                 if item_slot.item != item {
@@ -425,6 +411,7 @@ impl InventoryView {
         count
     }
 }
+
 pub fn generate_loot_table(loot_table: &LootTableData) -> Vec<ItemStack> {
     let mut items = Vec::new();
     for entry in &loot_table.entries {

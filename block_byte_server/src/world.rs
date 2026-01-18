@@ -6,7 +6,7 @@ use std::{
 };
 
 use block_byte_common::{
-    LookDirection,
+    InventoryView, LookDirection,
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{
@@ -231,9 +231,23 @@ impl Chunk {
                     let block_position = self.position.to_block_pos() + block.xyz();
                     match &block_data.interact_action {
                         BlockInteractAction::Ignore => {}
-                        BlockInteractAction::OpenInventory(key) => {
+                        BlockInteractAction::OpenInventory { screen, view } => {
                             if let Some(user) = server.get_user(user.0) {
-                                user.set_screen(*key, InventoryProvider::Block(block_position));
+                                if let Some(player) = user.entity {
+                                    user.set_screen(
+                                        *screen,
+                                        vec![
+                                            (
+                                                InventoryProvider::Entity(player),
+                                                InventoryView::from_range(0..10),
+                                            ),
+                                            (
+                                                InventoryProvider::Block(block_position),
+                                                view.clone(),
+                                            ),
+                                        ],
+                                    );
+                                }
                             }
                         }
                         BlockInteractAction::Pickup => {
@@ -390,9 +404,8 @@ impl Entity {
                                 let mut items_present = false;
                                 for slot in &mut inventory.items {
                                     if let Some(item) = &slot {
-                                        *slot = player_inventory
-                                            .full_view()
-                                            .add_item(&mut player_inventory, item.clone());
+                                        let view = player_inventory.full_view();
+                                        *slot = player_inventory.add_item(&view, item.clone());
                                         if slot.is_some() {
                                             items_present = true;
                                         }

@@ -1,18 +1,21 @@
-use std::sync::OnceLock;
+use std::{cell::RefCell, sync::OnceLock};
 
 use block_byte_common::{
     ClientItem, Color, TexCoords,
     coord::Pos,
-    registry::{BlockRenderData, ItemModel, TextureKey},
+    registry::{BlockRenderData, ItemModel, Key, TextureKey},
     ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
 };
 use taffy::{
     AlignItems, AvailableSpace, Dimension, FlexDirection, JustifyContent, Layout, LengthPercentage,
     LengthPercentageAuto, NodeId, Rect, Style, TaffyTree, prelude::TaffyZero,
 };
-use winit::dpi::PhysicalSize;
+use winit::{
+    dpi::{PhysicalPosition, PhysicalSize},
+    event::MouseButton,
+};
 
-use crate::{GUIMesh, TexCoordsExt};
+use crate::{ClientGame, GUIMesh, TexCoordsExt};
 
 pub struct ScreenData {
     pub screen: UIScreenKey,
@@ -20,7 +23,13 @@ pub struct ScreenData {
     pub properties: PropertyMap,
 }
 
-pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &mut GUIMesh) {
+pub fn render_screen(
+    screen_data: &ScreenData,
+    size: PhysicalSize<u32>,
+    game: &ClientGame,
+    mesh: &mut GUIMesh,
+    enable_hovering: bool,
+) -> Option<usize> {
     let screen = screen_data.screen.data();
     let mut taffy: TaffyTree<&UIElement> = TaffyTree::new();
     let root = add_element_to_taffy(&screen.root, &mut taffy, &screen_data.properties);
@@ -36,6 +45,7 @@ pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &m
             &[root],
         )
         .unwrap();
+
     taffy
         .compute_layout_with_measure(
             body,
@@ -48,7 +58,41 @@ pub fn render_screen(screen_data: &ScreenData, size: PhysicalSize<u32>, mesh: &m
             },
         )
         .unwrap();
-    render_element(root, &taffy, size, Pos::ZERO, &screen_data, mesh);
+    render_element(root, &taffy, size, Pos::ZERO, &screen_data, game, mesh);
+    if let Some(hovering) = resolve_hovering(
+        root,
+        Pos::ZERO,
+        &taffy,
+        Pos {
+            x: game.cursor_position.x as f32,
+            y: game.cursor_position.y as f32,
+            z: 0.,
+        },
+    ) && enable_hovering
+    {
+        match &hovering.element_type {
+            UIElementType::ItemSlot { slot } => {
+                if let Some(item) = screen_data.slots.get(*slot).cloned().flatten() {
+                    let aspect_ratio = size.width as f32 / size.height as f32;
+                    text_renderer().draw(
+                        Pos {
+                            x: game.cursor_position.x as f32 / size.height as f32 * 2.
+                                - aspect_ratio,
+                            y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
+                            z: 0.,
+                        },
+                        item.item.text_id(),
+                        40. / size.height as f32 * 2.,
+                        Color::WHITE,
+                        mesh,
+                    );
+                }
+                return Some(*slot);
+            }
+            _ => {}
+        }
+    }
+    None
 }
 pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::Size<f32> {
     let style = get_element_style(element, properties);
@@ -65,10 +109,42 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
             width: *width,
             height: *height,
         },
-        UIElementType::ItemSlot(_) => taffy::Size {
+        UIElementType::ItemSlot { .. } => taffy::Size {
             width: 50.,
             height: 50.,
         },
+    }
+}
+fn resolve_hovering<'a>(
+    node: NodeId,
+    parent_offset: Pos,
+    taffy: &TaffyTree<&'a UIElement>,
+    mouse: Pos,
+) -> Option<&'a UIElement> {
+    let layout = taffy.layout(node).unwrap();
+    for child in taffy.children(node).unwrap() {
+        if let Some(element) = resolve_hovering(
+            child,
+            parent_offset
+                + Pos {
+                    x: layout.location.x + layout.border.left,
+                    y: layout.location.y + layout.border.top,
+                    z: 0.,
+                },
+            taffy,
+            mouse,
+        ) {
+            return Some(element);
+        }
+    }
+    let x = layout.location.x + layout.border.left + parent_offset.x;
+    let y = layout.location.y + layout.border.top + parent_offset.y;
+    let width = layout.size.width - layout.border.left - layout.border.right;
+    let height = layout.size.height - layout.border.top - layout.border.bottom;
+    if mouse.x >= x && mouse.x <= x + width && mouse.y >= y && mouse.y <= y + height {
+        Some(taffy.get_node_context(node).unwrap())
+    } else {
+        None
     }
 }
 fn render_element(
@@ -77,6 +153,7 @@ fn render_element(
     size: PhysicalSize<u32>,
     parent_offset: Pos,
     data: &ScreenData,
+    game: &ClientGame,
     mesh: &mut GUIMesh,
 ) {
     let layout = taffy.layout(node).unwrap();
@@ -121,6 +198,7 @@ fn render_element(
                             z: 0.,
                         },
                     data,
+                    game,
                     mesh,
                 );
             }
@@ -162,7 +240,7 @@ fn render_element(
                 Color::WHITE,
             );
         }
-        UIElementType::ItemSlot(slot) => {
+        UIElementType::ItemSlot { slot } => {
             mesh.add_quad(
                 Pos {
                     x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.

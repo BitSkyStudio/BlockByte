@@ -82,3 +82,56 @@ pub struct LookDirection {
     pub pitch: f32,
     pub yaw: f32,
 }
+#[derive(Serialize, Deserialize, Copy, Clone)]
+pub enum ItemMoveMode {
+    Stack,
+    Single,
+    Half,
+    KeepOne,
+}
+impl ItemMoveMode {
+    pub fn get_count(self, count: u16) -> u16 {
+        match self {
+            ItemMoveMode::Stack => count,
+            ItemMoveMode::Single => 1,
+            ItemMoveMode::Half => count.div_ceil(2),
+            ItemMoveMode::KeepOne => {
+                if count > 1 {
+                    count - 1
+                } else {
+                    0
+                }
+            }
+        }
+    }
+    pub fn can_swap(self) -> bool {
+        match self {
+            ItemMoveMode::Stack => true,
+            _ => false,
+        }
+    }
+}
+#[derive(Clone)]
+pub struct InventoryView {
+    pub slots: Vec<usize>,
+}
+impl InventoryView {
+    pub fn from_range(range: std::ops::Range<usize>) -> Self {
+        InventoryView {
+            slots: range.collect(),
+        }
+    }
+    pub fn size(&self) -> usize {
+        self.slots.len()
+    }
+}
+impl<'de> Deserialize<'de> for InventoryView {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(InventoryView {
+            slots: Vec::<usize>::deserialize(deserializer)?,
+        })
+    }
+}

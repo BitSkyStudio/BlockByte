@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ClientItem, LookDirection, PlayerAbilities,
+    ClientItem, ItemMoveMode, LookDirection, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockKey, BlockPalette, EntityKey, ToolData},
     ui::{PropertyMap, UIScreenKey},
@@ -44,12 +44,18 @@ pub enum NetworkMessageC2S {
     DropItem {
         stack: bool,
     },
+    MoveItem {
+        from: usize,
+        to: usize,
+        mode: ItemMoveMode,
+    },
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {
     GameTick {
         ticks_passed: u64,
         dt: f32,
+        mspt: f32,
     },
     LoadChunk {
         position: ChunkPos,

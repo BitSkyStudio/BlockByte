@@ -20,6 +20,7 @@ use wgpu::{
     Queue, Sampler, TextureView,
 };
 use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::MouseButton;
 use winit::window::Window;
 
 pub struct RenderState {
@@ -450,70 +451,18 @@ impl RenderState {
     pub fn render(
         &mut self,
         camera: &ClientPlayer,
-        world: &mut ClientWorld,
-        dt: f32,
+        game: &mut ClientGame,
+        aspect_ratio: f32,
+        entity_mesh: BaseMesh,
+        gui_mesh: GUIMesh,
+        viewmodel_mesh: BaseMesh,
+        damage_mesh: DamageMesh,
     ) -> Result<(), wgpu::SurfaceError> {
-        let mut entity_mesh = Mesh::default();
-        let mut gui_mesh = Mesh::default();
-        let mut viewmodel_mesh = Mesh::default();
-        let mut damage_mesh = Mesh::default();
-
-        world.tick_client(
-            &self.device,
-            &camera,
-            &mut entity_mesh,
-            &mut gui_mesh,
-            &mut viewmodel_mesh,
-            &mut damage_mesh,
-        );
-        {
-            let viewmodel_light = Matrix4::from_angle_x(Rad(camera.direction.pitch))
-                * Matrix4::from_angle_y(Rad(camera.direction.yaw));
-            for vertex in &mut viewmodel_mesh.vertices {
-                let normal =
-                    cgmath::Vector3::new(vertex.normals[0], vertex.normals[1], vertex.normals[2]);
-                let new_normal = viewmodel_light.transform_vector(normal);
-                vertex.normals = [new_normal.x, new_normal.y, new_normal.z];
-            }
-        }
-        let aspect_ratio = self.size.width as f32 / self.size.height as f32;
-        text_renderer().draw(
-            Vec3 {
-                x: -aspect_ratio + 0.1,
-                y: 0.9,
-                z: 0.,
-            },
-            &format!("{:?} {}", world.player_position, 1. / dt),
-            0.05,
-            Color::WHITE,
-            &mut gui_mesh,
-        );
-        render_screen(&world.hud, self.size, &mut gui_mesh);
-
-        if let Some(screen) = &world.screen {
-            render_screen(screen, self.size, &mut gui_mesh);
-        }
-
-        if world.screen.is_none() {
-            let crosshair_size = Vec3 {
-                x: 0.02,
-                y: 0.02,
-                z: 0.,
-            };
-            let crosshair_texture = TextureKey::id("crosshair").unwrap().tex_coords();
-            gui_mesh.add_quad(
-                -crosshair_size / 2.,
-                crosshair_size,
-                crosshair_texture,
-                Color::WHITE,
-            );
-        }
-
         self.camera_uniform.load_camera_proj_matrix(
             camera,
             self.size.width as f32 / self.size.height as f32,
             90.,
-            world.get_player_data(),
+            game.get_player_data(),
         );
         self.queue.write_buffer(
             &self.camera_buffer,
@@ -603,7 +552,7 @@ impl RenderState {
             render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
 
-            for (_, chunk) in &world.chunks {
+            for (_, chunk) in &game.chunks {
                 if let Some((buffer, count)) = &chunk.buffer {
                     render_pass.set_vertex_buffer(0, buffer.slice(..));
                     render_pass.draw(0..*count, 0..1);
@@ -897,7 +846,9 @@ use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
 use crate::ui::{ScreenData, render_screen, text_renderer};
-use crate::{BaseMesh, ClientPlayer, ClientWorld, Mesh, TEXTURE_ATLAS, TexCoordsExt};
+use crate::{
+    BaseMesh, ClientGame, ClientPlayer, DamageMesh, GUIMesh, Mesh, TEXTURE_ATLAS, TexCoordsExt,
+};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,
@@ -1105,18 +1056,22 @@ pub fn draw_model(
         },
         |matrix, binding| {
             if let Some(item) = item_query(binding) {
-                item_models.push((matrix, item));
+                item_models.push((matrix, item, binding.to_string()));
             }
         },
     );
-    for (matrix, item) in item_models {
+    for (matrix, item, binding) in item_models {
         match item.item.data().model {
             ItemModel::Block(key) => {
                 draw_block_model(
                     key,
                     matrix
                         * Matrix4::from_angle_x(Deg(-90.))
-                        * Matrix4::from_translation(Vector3::new(0., -0.1, 0.))
+                        * Matrix4::from_translation(Vector3::new(
+                            0.,
+                            if binding == "hand" { -0.1 } else { 0. },
+                            0.,
+                        ))
                         * Matrix4::from_scale(0.35),
                     vertex_consumer,
                 );
@@ -1124,7 +1079,7 @@ pub fn draw_model(
             ItemModel::Model(key) => {
                 let model = &key.data().model;
                 let anchor = model
-                    .anchor("hand", Matrix4::identity(), None, 0.)
+                    .anchor(binding.as_str(), Matrix4::identity(), None, 0.)
                     .map(|matrix| matrix.invert().unwrap())
                     .unwrap_or(Matrix4::identity());
                 draw_model(

@@ -27,7 +27,7 @@ pub enum UIElementType {
     Box(Vec<UIElement>),
     Label(String),
     Image(TextureKey, f32, f32),
-    ItemSlot(usize),
+    ItemSlot { slot: usize },
 }
 impl UIElementType {
     pub fn parse(node: &Node) -> anyhow::Result<Self> {
@@ -52,9 +52,9 @@ impl UIElementType {
                     .and_then(|n| n.parse().ok())
                     .unwrap(),
             ),
-            "slot" => {
-                UIElementType::ItemSlot(node.attribute("id").and_then(|n| n.parse().ok()).unwrap())
-            }
+            "slot" => UIElementType::ItemSlot {
+                slot: node.attribute("id").and_then(|n| n.parse().ok()).unwrap(),
+            },
             other => unimplemented!("{}", other),
         })
     }

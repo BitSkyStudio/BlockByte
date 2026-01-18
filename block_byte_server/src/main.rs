@@ -10,7 +10,7 @@ use std::{
 };
 
 use block_byte_common::{
-    MoveMode, PlayerAbilities,
+    ClientItem, InventoryView, LookDirection, MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -24,13 +24,15 @@ use parking_lot::{Mutex, RwLock};
 use rayon::iter::{
     IntoParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator,
 };
-use renet::{ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
+use renet::{
+    Bytes, ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent,
+};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
 
 use crate::{
-    inventory::{Inventory, InventoryView, ItemDurability, ItemStack},
+    inventory::{Inventory, ItemDurability, ItemStack},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex},
 };
@@ -96,6 +98,7 @@ fn main() {
     let mut net_users = HashMap::new();
     let mut player_spawns = Vec::new();
     loop {
+        let tick_start_time = Instant::now();
         {
             let delta_time = Duration::from_millis(1000 / server.tps as u64); //probably make it smarter
             network_server.update(delta_time);
@@ -105,16 +108,17 @@ fn main() {
         }
         for (user, spawn_position) in player_spawns.drain(..) {
             let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
-            InventoryView::from_range(0..10).add_item(
-                &mut *entity.inventory.write(),
+            let full_view = entity.inventory.get_mut().full_view();
+            entity.inventory.get_mut().add_item(
+                &full_view,
                 ItemStack::new(ItemKey::id("grass_item").unwrap(), 20),
             );
-            InventoryView::from_range(0..10).add_item(
-                &mut *entity.inventory.write(),
+            entity.inventory.get_mut().add_item(
+                &full_view,
                 ItemStack::new(ItemKey::id("barrel").unwrap(), 20),
             );
-            InventoryView::from_range(0..10).add_item(
-                &mut *entity.inventory.write(),
+            entity.inventory.get_mut().add_item(
+                &full_view,
                 ItemStack::new(ItemKey::id("pickaxe").unwrap(), 1),
             );
             let player_uuid = entity.uuid;
@@ -386,16 +390,90 @@ fn main() {
                             };
                             let mut item_entity = Entity::new(
                                 EntityKey::id("item").unwrap(),
-                                entity.position + Pos::Y,
+                                entity.position + Pos::Y * entity.key.data().eye_height,
                             );
+                            item_entity.direction = LookDirection {
+                                pitch: 0.,
+                                yaw: entity.direction.yaw,
+                            };
                             let throw_force = 3.;
                             item_entity.state.get_mut().velocity = Pos {
                                 x: entity.direction.yaw.sin(),
-                                y: 0.,
+                                y: 0.1,
                                 z: entity.direction.yaw.cos(),
                             } * throw_force;
                             item_entity.inventory.get_mut().items[0] = Some(drop_item);
                             server.spawn_entity(item_entity);
+                        }
+                    }
+                    NetworkMessageC2S::MoveItem { from, to, mode } => {
+                        if from == to {
+                            continue;
+                        }
+                        let mut from_item = None;
+                        let mut to_item = None;
+                        let mut running_index = 0;
+                        if let Some(screen) = user.screen.lock().as_ref() {
+                            for (inventory, view) in &screen.inventories {
+                                if from < running_index + view.size() && from_item.is_none() {
+                                    from_item = Some(unsafe {
+                                        std::mem::transmute_copy::<
+                                            &mut Option<ItemStack>,
+                                            &mut Option<ItemStack>,
+                                        >(
+                                            &&mut (inventory
+                                                .get_inventory(
+                                                    &mut server.entities,
+                                                    &mut server.chunks,
+                                                )
+                                                .unwrap()
+                                                .items[view.slots[from - running_index]]),
+                                        )
+                                    });
+                                }
+                                if to < running_index + view.size() && to_item.is_none() {
+                                    to_item = Some(unsafe {
+                                        std::mem::transmute_copy::<
+                                            &mut Option<ItemStack>,
+                                            &mut Option<ItemStack>,
+                                        >(
+                                            &&mut inventory
+                                                .get_inventory(
+                                                    &mut server.entities,
+                                                    &mut server.chunks,
+                                                )
+                                                .unwrap()
+                                                .items[view.slots[to - running_index]],
+                                        )
+                                    });
+                                }
+                                running_index += view.size();
+                            }
+                            let from_item = from_item.unwrap();
+                            let to_item = to_item.unwrap();
+                            if let Some(source) = from_item.as_mut() {
+                                let count = mode.get_count(source.count);
+                                if let Some(destination) = to_item.as_mut() {
+                                    if let Some((a, b)) = destination.merge(&source.copy(count)) {
+                                        *destination = a;
+                                        source.count += b.map(|item| item.count).unwrap_or(0);
+                                        source.count -= count;
+                                        if source.count == 0 {
+                                            *from_item = None;
+                                        }
+                                    } else if mode.can_swap() {
+                                        std::mem::swap(source, destination);
+                                    }
+                                } else {
+                                    if count >= source.count {
+                                        *to_item = from_item.take();
+                                    } else {
+                                        let (a, b) = source.split(count);
+                                        *to_item = Some(a);
+                                        *source = b;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -452,8 +530,8 @@ fn main() {
             if let Some(screen) = &mut *screen_lock {
                 match screen.state {
                     UserScreenState::Open => {
-                        println!("open inventory");
-                        let Some(inventory) = screen.inventory.get_inventory(&server) else {
+                        let Ok(items) = screen.get_items(&mut server.entities, &mut server.chunks)
+                        else {
                             *screen_lock = None;
                             continue;
                         };
@@ -461,27 +539,23 @@ fn main() {
                             std::iter::once(user_index),
                             NetworkMessageS2C::UIOpen {
                                 screen: screen.screen,
-                                slots: inventory
-                                    .items
+                                slots: items
                                     .iter()
                                     .map(|item| item.as_ref().map(|item| item.client()))
                                     .collect(),
                             },
                         );
-                        screen.previous_inventory = inventory;
+                        screen.previous_state = items;
                         screen.state = UserScreenState::Normal;
                     }
                     UserScreenState::Normal => {
-                        let Some(new_inventory) = screen.inventory.get_inventory(&server) else {
+                        let Ok(items) = screen.get_items(&mut server.entities, &mut server.chunks)
+                        else {
                             *screen_lock = None;
                             continue;
                         };
-                        for (slot, (previous, new)) in screen
-                            .previous_inventory
-                            .items
-                            .iter()
-                            .zip(new_inventory.items.iter())
-                            .enumerate()
+                        for (slot, (previous, new)) in
+                            screen.previous_state.iter().zip(items.iter()).enumerate()
                         {
                             if previous != new {
                                 server.message_queue.send_message(
@@ -493,7 +567,7 @@ fn main() {
                                 );
                             }
                         }
-                        screen.previous_inventory = new_inventory;
+                        screen.previous_state = items;
                     }
                     UserScreenState::Close => {
                         server
@@ -504,8 +578,7 @@ fn main() {
                 }
             }
         }
-
-        server.chunks.par_iter().for_each(|(_, chunk)| {
+        server.chunks.iter().for_each(|(_, chunk)| {
             chunk.tick(&server);
         });
 
@@ -625,6 +698,7 @@ fn main() {
                 NetworkMessageS2C::GameTick {
                     ticks_passed: server.ticks_passed,
                     dt: server.delta_time(),
+                    mspt: tick_start_time.elapsed().as_secs_f32() * 1000.,
                 },
                 bincode::config::standard(),
             )
@@ -646,13 +720,17 @@ fn main() {
 #[derive(Default)]
 pub struct MessageQueue(Mutex<Vec<(UserIndex, renet::Bytes)>>);
 impl MessageQueue {
+    pub fn encode_message(message: NetworkMessageS2C) -> Bytes {
+        bincode::serde::encode_to_vec(message, bincode::config::standard())
+            .unwrap()
+            .into()
+    }
     pub fn send_message<T: std::borrow::Borrow<UserIndex>>(
         &self,
         users: impl Iterator<Item = T>,
         message: NetworkMessageS2C,
     ) {
-        let message = bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap();
-        let message: renet::Bytes = message.into();
+        let message = Self::encode_message(message);
         let mut message_queue = self.0.lock();
         for user in users {
             message_queue.push((*user.borrow(), message.clone()));
@@ -743,10 +821,11 @@ impl Server {
             NetworkMessageS2C::SetBlock { position, block },
         );
         if let Some(machine_data) = &block_data.machine {
+            let mut inventory = Inventory::new(machine_data.inventory_size);
             chunk.components.machine.write().set(
                 offset,
                 BlockMachine {
-                    inventory: RwLock::new(Inventory::new(machine_data.inventory_size)),
+                    inventory: RwLock::new(inventory),
                 },
             );
         }
@@ -882,7 +961,7 @@ impl ChunkViewingManager {
             drop(statement);
             transaction.commit().unwrap();
         }
-        for (position, users, (mut chunk, entities)) in self
+        for (position, users, load_message, (mut chunk, entities)) in self
             .load
             .into_iter()
             .map(|(position, users)| {
@@ -899,7 +978,7 @@ impl ChunkViewingManager {
             })
             .par_bridge()
             .map(|(position, users, data)| {
-                let chunk = match data {
+                let mut chunk = match data {
                     Some(data) => {
                         let data: ChunkSaveData = serde_cbor::from_slice(data.as_slice()).unwrap();
                         (
@@ -916,7 +995,16 @@ impl ChunkViewingManager {
                     }
                     None => (Chunk::generate(position), Vec::new()),
                 };
-                (position, users, chunk)
+                (
+                    position,
+                    users,
+                    MessageQueue::encode_message(NetworkMessageS2C::LoadChunk {
+                        position,
+                        blocks: chunk.0.blocks.get_mut().clone(),
+                        components: chunk.0.components.client(),
+                    }),
+                    chunk,
+                )
             })
             .collect::<Vec<_>>()
         {
@@ -925,14 +1013,13 @@ impl ChunkViewingManager {
                 server.send_message_multiple(users.iter(), entity.create_add_message());
                 chunk.entities.push(server.entities.insert(entity));
             }
-            server.send_message_multiple(
-                users.iter(),
-                NetworkMessageS2C::LoadChunk {
-                    position,
-                    blocks: chunk.blocks.read().clone(),
-                    components: chunk.components.client(),
-                },
-            );
+            for user in &users {
+                server
+                    .message_queue
+                    .0
+                    .get_mut()
+                    .push((*user, load_message.clone()));
+            }
             server.chunks.insert(position, chunk);
         }
     }
@@ -948,56 +1035,80 @@ pub struct User {
 }
 pub struct UserScreen {
     pub screen: UIScreenKey,
-    pub inventory: InventoryProvider,
+    pub inventories: Vec<(InventoryProvider, InventoryView)>,
     pub state: UserScreenState,
-    pub previous_inventory: Inventory,
+    pub previous_state: Vec<Option<ItemStack>>,
+}
+impl UserScreen {
+    pub fn get_items(
+        &self,
+        entities: &mut SlotMap<EntityIndex, Entity>,
+        chunks: &mut HashMap<ChunkPos, Chunk>,
+    ) -> Result<Vec<Option<ItemStack>>, ()> {
+        let mut items = Vec::new();
+        for (inventory, view) in &self.inventories {
+            let inventory = inventory.get_inventory(entities, chunks).ok_or(())?;
+            for i in 0..view.size() {
+                items.push(inventory.get_slot(view, i).cloned());
+            }
+        }
+        Ok(items)
+    }
 }
 pub enum UserScreenState {
     Open,
     Normal,
     Close,
 }
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum InventoryProvider {
     Entity(EntityIndex),
     Block(BlockPos),
 }
 impl InventoryProvider {
-    //todo: prevent copies?
-    pub fn get_inventory(self, server: &Server) -> Option<Inventory> {
+    pub fn get_inventory<'a>(
+        self,
+        entities: &'a mut SlotMap<EntityIndex, Entity>,
+        chunks: &'a mut HashMap<ChunkPos, Chunk>,
+    ) -> Option<&'a mut Inventory> {
         match self {
             InventoryProvider::Entity(entity) => {
-                Some(server.entities.get(entity)?.inventory.read().clone())
+                Some(entities.get_mut(entity)?.inventory.get_mut())
             }
             InventoryProvider::Block(block) => {
                 let (chunk, offset) = block.to_chunk_pos_offset();
                 Some(
-                    server
-                        .get_chunk(chunk)?
+                    chunks
+                        .get_mut(&chunk)?
                         .components
                         .machine
-                        .read()
-                        .get(offset)?
+                        .get_mut()
+                        .get_mut(offset)?
                         .inventory
-                        .read()
-                        .clone(),
+                        .get_mut(),
                 )
             }
         }
     }
 }
 impl User {
-    pub fn set_screen(&self, screen: UIScreenKey, inventory: InventoryProvider) {
+    pub fn set_screen(
+        &self,
+        screen: UIScreenKey,
+        inventories: Vec<(InventoryProvider, InventoryView)>,
+    ) {
         *self.screen.lock() = Some(UserScreen {
-            inventory,
+            previous_state: (0..(inventories.iter().map(|(_, view)| view.size()).sum()))
+                .map(|_| None)
+                .collect(),
+            inventories,
             screen,
             state: UserScreenState::Open,
-            previous_inventory: Inventory::new(0),
         });
     }
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
-        let distance = 8;
-        let world_height = 8;
+        let distance = 12;
+        let world_height = 12;
         AABB {
             min: ChunkPos {
                 x: view_position.x - distance,

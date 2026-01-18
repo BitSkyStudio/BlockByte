@@ -3,7 +3,9 @@ mod ui;
 
 use core::f32;
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
+    hash::Hash,
     net::{SocketAddr, UdpSocket},
     ops::ControlFlow,
     path::Path,
@@ -13,7 +15,7 @@ use std::{
 
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    ClientItem, Color, LookDirection, MoveMode, PlayerAbilities, TexCoords,
+    ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -23,7 +25,7 @@ use block_byte_common::{
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
 };
-use cgmath::{Matrix4, Rad, SquareMatrix, Vector3};
+use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3};
 use image::{DynamicImage, RgbaImage};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
@@ -32,6 +34,7 @@ use uuid::Uuid;
 use wgpu::{Buffer, Device, util::DeviceExt};
 use winit::{
     application::ApplicationHandler,
+    dpi::PhysicalPosition,
     event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::KeyCode,
@@ -40,7 +43,7 @@ use winit::{
 
 use crate::{
     render::{DamageVertex, GUIVertex, RenderState, Vertex},
-    ui::{ScreenData, TEXT_RENDERER, TextRenderer, text_renderer},
+    ui::{ScreenData, TEXT_RENDERER, TextRenderer, render_screen, text_renderer},
 };
 
 fn main() {
@@ -72,17 +75,16 @@ fn main() {
             camera: ClientPlayer::default(),
             render_state: None,
             texture_image: Some(image),
-            world: ClientWorld::default(),
+            game: ClientGame::default(),
             network_client: client,
             network_transport: transport,
-            keys: HashSet::new(),
-            buttons: HashSet::new(),
-            last_update: Instant::now(),
             teleport_id: 0,
+            last_update: Instant::now(),
             player_abilities: PlayerAbilities {
                 move_mode: MoveMode::Normal,
                 speed: 1.,
             },
+            mspt: 0.,
         })
         .unwrap();
 }
@@ -90,15 +92,14 @@ fn main() {
 struct App {
     texture_image: Option<RgbaImage>,
     render_state: Option<RenderState>,
-    world: ClientWorld,
+    game: ClientGame,
     camera: ClientPlayer,
     network_client: RenetClient,
     network_transport: NetcodeClientTransport,
-    keys: HashSet<KeyCode>,
-    buttons: HashSet<MouseButton>,
+    player_abilities: PlayerAbilities,
     last_update: Instant,
     teleport_id: u32,
-    player_abilities: PlayerAbilities,
+    mspt: f32,
 }
 impl App {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
@@ -119,7 +120,7 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        window.set_cursor_grab(winit::window::CursorGrabMode::Locked);
+        window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
         window.set_cursor_visible(false);
         window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         self.render_state = Some(pollster::block_on(RenderState::new(
@@ -138,7 +139,7 @@ impl ApplicationHandler for App {
     ) {
         match event {
             DeviceEvent::MouseMotion { delta } => {
-                if self.world.screen.is_none() {
+                if self.game.screen.is_none() {
                     let sensitivity = 0.4;
                     self.camera.update_orientation(
                         -delta.1 as f32 * sensitivity,
@@ -156,6 +157,12 @@ impl ApplicationHandler for App {
                 self.network_transport.disconnect();
                 event_loop.exit();
             }
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {
+                self.game.cursor_position = position;
+            }
             WindowEvent::Resized(new_size) => {
                 self.render_state.as_mut().unwrap().resize(new_size);
             }
@@ -166,7 +173,7 @@ impl ApplicationHandler for App {
             } => match event.physical_key {
                 winit::keyboard::PhysicalKey::Code(key_code) => {
                     if event.state == ElementState::Pressed {
-                        self.keys.insert(key_code);
+                        self.game.keys.press(key_code);
                         for (slot, key) in [
                             KeyCode::Digit1,
                             KeyCode::Digit2,
@@ -189,8 +196,8 @@ impl ApplicationHandler for App {
                                 });
                             }
                         }
-                        if key_code == KeyCode::KeyE && self.world.screen.is_none() {
-                            match self.camera.raycast(&self.world) {
+                        if key_code == KeyCode::KeyE && self.game.screen.is_none() {
+                            match self.camera.raycast(&self.game) {
                                 RayCastResult::Empty => {}
                                 RayCastResult::Block(position, _) => {
                                     self.send_message(NetworkMessageC2S::InteractBlock {
@@ -205,13 +212,13 @@ impl ApplicationHandler for App {
                         if key_code == KeyCode::Escape {
                             self.send_message(NetworkMessageC2S::CloseUI);
                         }
-                        if key_code == KeyCode::KeyQ {
+                        if key_code == KeyCode::KeyQ && self.game.screen.is_none() {
                             self.send_message(NetworkMessageC2S::DropItem {
-                                stack: self.keys.contains(&KeyCode::ControlLeft),
+                                stack: self.game.keys.is_down(KeyCode::ControlLeft),
                             });
                         }
                     } else {
-                        self.keys.remove(&key_code);
+                        self.game.keys.release(key_code);
                     }
                 }
                 winit::keyboard::PhysicalKey::Unidentified(native_key_code) => {}
@@ -222,10 +229,12 @@ impl ApplicationHandler for App {
                 phase,
             } => match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, scroll) => {
-                    self.send_message(NetworkMessageC2S::HotbarSelect {
-                        slot: -scroll as isize,
-                        relative: true,
-                    });
+                    if self.game.screen.is_none() {
+                        self.send_message(NetworkMessageC2S::HotbarSelect {
+                            slot: -scroll as isize,
+                            relative: true,
+                        });
+                    }
                 }
                 winit::event::MouseScrollDelta::PixelDelta(physical_position) => {}
             },
@@ -236,14 +245,14 @@ impl ApplicationHandler for App {
             } => {
                 match state {
                     ElementState::Pressed => {
-                        self.buttons.insert(button);
+                        self.game.buttons.press(button);
                     }
                     ElementState::Released => {
-                        self.buttons.remove(&button);
+                        self.game.buttons.release(button);
                     }
                 }
-                if state == ElementState::Pressed && self.world.screen.is_none() {
-                    match (self.camera.raycast(&self.world), button) {
+                if state == ElementState::Pressed && self.game.screen.is_none() {
+                    match (self.camera.raycast(&self.game), button) {
                         (RayCastResult::Block(position, face), MouseButton::Right) => {
                             self.send_message(NetworkMessageC2S::PlaceBlock { position, face });
                         }
@@ -266,11 +275,135 @@ impl ApplicationHandler for App {
                     .unwrap()
                     .window()
                     .pre_present_notify();
-                // Notify that you're about to draw.
 
-                // Draw.
                 let render_state = self.render_state.as_mut().unwrap();
-                match render_state.render(&self.camera, &mut self.world, dt) {
+                let mut entity_mesh = Mesh::default();
+                let mut gui_mesh = Mesh::default();
+                let mut viewmodel_mesh = Mesh::default();
+                let mut damage_mesh = Mesh::default();
+                self.game.tick_client(
+                    render_state.device(),
+                    &self.camera,
+                    &mut entity_mesh,
+                    &mut gui_mesh,
+                    &mut viewmodel_mesh,
+                    &mut damage_mesh,
+                );
+                {
+                    let viewmodel_light = Matrix4::from_angle_x(Rad(self.camera.direction.pitch))
+                        * Matrix4::from_angle_y(Rad(self.camera.direction.yaw));
+                    for vertex in &mut viewmodel_mesh.vertices {
+                        let normal = cgmath::Vector3::new(
+                            vertex.normals[0],
+                            vertex.normals[1],
+                            vertex.normals[2],
+                        );
+                        let new_normal = viewmodel_light.transform_vector(normal);
+                        vertex.normals = [new_normal.x, new_normal.y, new_normal.z];
+                    }
+                }
+                let aspect_ratio =
+                    render_state.size().width as f32 / render_state.size().height as f32;
+                text_renderer().draw(
+                    Vec3 {
+                        x: -aspect_ratio + 0.1,
+                        y: 0.9,
+                        z: 0.,
+                    },
+                    &format!(
+                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2}",
+                        self.game.player_position.x,
+                        self.game.player_position.y,
+                        self.game.player_position.z,
+                        1. / dt,
+                        self.mspt
+                    ),
+                    0.05,
+                    Color::WHITE,
+                    &mut gui_mesh,
+                );
+                render_screen(
+                    &self.game.hud,
+                    render_state.size(),
+                    &self.game,
+                    &mut gui_mesh,
+                    false,
+                );
+
+                if let Some(screen) = &self.game.screen {
+                    if let Some(target_slot) =
+                        render_screen(screen, render_state.size(), &self.game, &mut gui_mesh, true)
+                    {
+                        match self.game.selected_slot {
+                            Some((slot, button)) => match button {
+                                MouseButton::Left => {
+                                    if self.game.buttons.is_just_up(MouseButton::Left) {
+                                        self.send_message(NetworkMessageC2S::MoveItem {
+                                            from: slot,
+                                            to: target_slot,
+                                            mode: ItemMoveMode::Stack,
+                                        });
+                                    }
+                                    if self.game.buttons.is_just_down(MouseButton::Right) {
+                                        self.send_message(NetworkMessageC2S::MoveItem {
+                                            from: slot,
+                                            to: target_slot,
+                                            mode: ItemMoveMode::Single,
+                                        });
+                                    }
+                                }
+                                MouseButton::Right => {
+                                    if self.game.buttons.is_just_up(MouseButton::Right) {
+                                        self.send_message(NetworkMessageC2S::MoveItem {
+                                            from: slot,
+                                            to: target_slot,
+                                            mode: ItemMoveMode::Half,
+                                        });
+                                    }
+                                }
+                                _ => unreachable!(),
+                            },
+                            None => {
+                                for button in [MouseButton::Left, MouseButton::Right] {
+                                    if self.game.buttons.is_just_down(button) {
+                                        self.game.selected_slot = Some((target_slot, button));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some((_, button)) = self.game.selected_slot.as_ref() {
+                    if !self.game.buttons.is_down(*button) {
+                        self.game.selected_slot = None;
+                    }
+                }
+                let render_state = self.render_state.as_mut().unwrap();
+
+                if self.game.screen.is_none() {
+                    let crosshair_size = Vec3 {
+                        x: 0.02,
+                        y: 0.02,
+                        z: 0.,
+                    };
+                    let crosshair_texture = TextureKey::id("crosshair").unwrap().tex_coords();
+                    gui_mesh.add_quad(
+                        -crosshair_size / 2.,
+                        crosshair_size,
+                        crosshair_texture,
+                        Color::WHITE,
+                    );
+                }
+                match render_state.render(
+                    &self.camera,
+                    &mut self.game,
+                    aspect_ratio,
+                    entity_mesh,
+                    gui_mesh,
+                    viewmodel_mesh,
+                    damage_mesh,
+                ) {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                         render_state.resize(render_state.size())
@@ -294,28 +427,30 @@ impl ApplicationHandler for App {
                         .unwrap();
                 }
                 if self.network_client.is_connected() {
-                    if self.buttons.contains(&MouseButton::Left) && self.world.hit_timer.is_none() {
-                        self.world.hit_timer = Some(0.);
+                    if self.game.buttons.is_down(MouseButton::Left)
+                        && self.game.hit_timer.is_none()
+                        && self.game.screen.is_none()
+                    {
+                        self.game.hit_timer = Some(0.);
                     }
                     self.camera.update_position(
-                        &self.keys,
                         dt,
-                        &self.world,
+                        &self.game,
                         &self.player_abilities,
-                        self.world.get_player_data(),
+                        self.game.get_player_data(),
                     );
-                    self.world.player_position = self.camera.position;
+                    self.game.player_position = self.camera.position;
                     self.send_message(NetworkMessageC2S::PlayerPosition {
                         position: self.camera.position,
                         teleport_id: self.teleport_id,
                         direction: self.camera.direction,
                     });
-                    if let Some(hit_timer) = self.world.hit_timer {
+                    if let Some(hit_timer) = self.game.hit_timer {
                         let new_hit_timer = hit_timer + dt;
-                        let active_tool = self.world.active_tool();
+                        let active_tool = self.game.active_tool();
                         if hit_timer < active_tool.hit_time && new_hit_timer >= active_tool.hit_time
                         {
-                            match self.camera.raycast(&self.world) {
+                            match self.camera.raycast(&self.game) {
                                 RayCastResult::Block(position, _) => {
                                     self.send_message(NetworkMessageC2S::AttackBlock { position });
                                 }
@@ -325,9 +460,9 @@ impl ApplicationHandler for App {
                                 RayCastResult::Empty => {}
                             }
                         }
-                        self.world.hit_timer = Some(new_hit_timer);
+                        self.game.hit_timer = Some(new_hit_timer);
                         if new_hit_timer > active_tool.swing_time {
-                            self.world.hit_timer = None;
+                            self.game.hit_timer = None;
                         }
                     }
                     while let Some(message) = self
@@ -346,7 +481,7 @@ impl ApplicationHandler for App {
                                 blocks,
                                 components,
                             } => {
-                                self.world.chunks.insert(
+                                self.game.chunks.insert(
                                     position,
                                     ClientChunk {
                                         blocks,
@@ -355,23 +490,23 @@ impl ApplicationHandler for App {
                                         components,
                                     },
                                 );
-                                self.world.modified_chunks.insert(position);
+                                self.game.modified_chunks.insert(position);
                                 for face in Face::all() {
-                                    self.world
+                                    self.game
                                         .modified_chunks
                                         .insert(position + face.get_chunk_offset());
                                 }
                             }
                             NetworkMessageS2C::UnloadChunk { position } => {
-                                self.world.chunks.remove(&position);
+                                self.game.chunks.remove(&position);
                             }
                             NetworkMessageS2C::SetBlock { position, block } => {
                                 let (chunk, offset) = position.to_chunk_pos_offset();
                                 {
-                                    let chunk = self.world.chunks.get_mut(&chunk).unwrap();
+                                    let chunk = self.game.chunks.get_mut(&chunk).unwrap();
                                     chunk.blocks.set(offset.index(), &block);
                                 }
-                                self.world.modified_chunks.insert(chunk);
+                                self.game.modified_chunks.insert(chunk);
                                 let offset_xyz = offset.xyz();
                                 for face in Face::all() {
                                     let face_offset = face.get_block_offset();
@@ -388,14 +523,19 @@ impl ApplicationHandler for App {
                                         || o(offset_xyz.y) == face_offset.y
                                         || o(offset_xyz.z) == face_offset.z
                                     {
-                                        self.world
+                                        self.game
                                             .modified_chunks
                                             .insert(chunk + face.get_chunk_offset());
                                     }
                                 }
                             }
-                            NetworkMessageS2C::GameTick { ticks_passed, dt } => {
-                                self.world.tick_server(dt);
+                            NetworkMessageS2C::GameTick {
+                                ticks_passed,
+                                dt,
+                                mspt,
+                            } => {
+                                self.game.tick_server(dt);
+                                self.mspt = mspt;
                             }
                             NetworkMessageS2C::AddEntity {
                                 uuid,
@@ -403,7 +543,7 @@ impl ApplicationHandler for App {
                                 position,
                                 direction,
                             } => {
-                                self.world.entities.insert(
+                                self.game.entities.insert(
                                     uuid,
                                     ClientEntity {
                                         key,
@@ -421,7 +561,7 @@ impl ApplicationHandler for App {
                                 position,
                                 direction,
                             } => {
-                                if let Some(entity) = self.world.entities.get_mut(&uuid) {
+                                if let Some(entity) = self.game.entities.get_mut(&uuid) {
                                     entity.previous_position = entity.position;
                                     entity.previous_direction = entity.direction;
                                     entity.update_timestamp = Instant::now();
@@ -430,19 +570,19 @@ impl ApplicationHandler for App {
                                 }
                             }
                             NetworkMessageS2C::RemoveEntity { uuid } => {
-                                self.world.entities.remove(&uuid);
+                                self.game.entities.remove(&uuid);
                             }
                             NetworkMessageS2C::UpdateBlockComponents {
                                 chunk,
                                 offset,
                                 data,
                             } => {
-                                if let Some(chunk) = self.world.chunks.get_mut(&chunk) {
+                                if let Some(chunk) = self.game.chunks.get_mut(&chunk) {
                                     data.update(offset, &mut chunk.components);
                                 }
                             }
                             NetworkMessageS2C::SetPlayerEntity { uuid } => {
-                                self.world.player_entity = uuid;
+                                self.game.player_entity = uuid;
                             }
                             NetworkMessageS2C::TeleportPlayer {
                                 position,
@@ -455,44 +595,58 @@ impl ApplicationHandler for App {
                                 self.player_abilities = abilities;
                             }
                             NetworkMessageS2C::UIOpen { screen, slots } => {
-                                self.world.screen = Some(ScreenData {
+                                self.game.screen = Some(ScreenData {
                                     screen,
                                     slots,
                                     properties: PropertyMap(HashMap::new()),
                                 });
+                                let render_state = self.render_state.as_ref().unwrap();
+                                render_state.window().set_cursor_visible(true);
+                                let size = render_state.size();
+                                render_state
+                                    .window()
+                                    .set_cursor_position(PhysicalPosition::new(
+                                        size.width / 2,
+                                        size.height / 2,
+                                    ));
                             }
                             NetworkMessageS2C::UISetSlot { slot, item } => {
-                                if let Some(screen) = &mut self.world.screen {
+                                if let Some(screen) = &mut self.game.screen {
                                     if slot < screen.slots.len() {
                                         screen.slots[slot] = item;
                                     }
                                 }
                             }
                             NetworkMessageS2C::UIClose => {
-                                self.world.screen = None;
+                                self.game.screen = None;
+                                self.render_state
+                                    .as_ref()
+                                    .unwrap()
+                                    .window()
+                                    .set_cursor_visible(false);
                             }
                             NetworkMessageS2C::HUDUpdate {
                                 items,
                                 properties,
                                 held_item,
                             } => {
-                                self.world.hud.slots = items;
-                                self.world.hud.properties = properties;
-                                match (&self.world.held_item, &held_item) {
+                                self.game.hud.slots = items;
+                                self.game.hud.properties = properties;
+                                match (&self.game.held_item, &held_item) {
                                     (None, None) => {}
                                     (Some(first), Some(second)) => {
                                         if first.item != second.item {
-                                            self.world.hit_timer = None;
+                                            self.game.hit_timer = None;
                                         }
                                     }
                                     _ => {
-                                        self.world.hit_timer = None;
+                                        self.game.hit_timer = None;
                                     }
                                 }
-                                self.world.held_item = held_item;
+                                self.game.held_item = held_item;
                             }
                             NetworkMessageS2C::EntityHandItem { uuid, item } => {
-                                if let Some(entity) = self.world.entities.get_mut(&uuid) {
+                                if let Some(entity) = self.game.entities.get_mut(&uuid) {
                                     entity.hand_item = item;
                                 }
                             }
@@ -506,9 +660,48 @@ impl ApplicationHandler for App {
                 self.network_transport
                     .send_packets(&mut self.network_client)
                     .unwrap();
+                self.game.buttons.frame_clear();
+                self.game.keys.frame_clear();
             }
             _ => (),
         }
+    }
+}
+pub struct InputContainer<T> {
+    pub down: HashSet<T>,
+    pub just_down: HashSet<T>,
+    pub just_up: HashSet<T>,
+}
+impl<T> Default for InputContainer<T> {
+    fn default() -> Self {
+        Self {
+            down: HashSet::new(),
+            just_down: HashSet::new(),
+            just_up: HashSet::new(),
+        }
+    }
+}
+impl<T: Hash + Eq + Copy> InputContainer<T> {
+    pub fn press(&mut self, input: T) {
+        self.down.insert(input);
+        self.just_down.insert(input);
+    }
+    pub fn release(&mut self, input: T) {
+        self.down.remove(&input);
+        self.just_up.insert(input);
+    }
+    pub fn frame_clear(&mut self) {
+        self.just_down.clear();
+        self.just_up.clear();
+    }
+    pub fn is_down(&self, input: T) -> bool {
+        self.down.contains(&input)
+    }
+    pub fn is_just_down(&self, input: T) -> bool {
+        self.just_down.contains(&input)
+    }
+    pub fn is_just_up(&self, input: T) -> bool {
+        self.just_up.contains(&input)
     }
 }
 
@@ -722,7 +915,7 @@ impl ClientPlayer {
                 z: 0.,
             }
     }
-    pub fn raycast(&self, world: &ClientWorld) -> RayCastResult {
+    pub fn raycast(&self, world: &ClientGame) -> RayCastResult {
         let ray = Ray {
             position: self.get_eye(world.get_player_data()),
             direction: self.make_front() * 10.,
@@ -768,9 +961,8 @@ impl ClientPlayer {
     }
     pub fn update_position(
         &mut self,
-        keys: &HashSet<KeyCode>,
         delta_time: f32,
-        world: &ClientWorld,
+        game: &ClientGame,
         abilities: &PlayerAbilities,
         player_entity_data: Option<&EntityData>,
     ) {
@@ -778,7 +970,7 @@ impl ClientPlayer {
             cgmath::Vector3::new(self.direction.yaw.sin(), 0., self.direction.yaw.cos());
         use cgmath::InnerSpace;
         let cross_normalized = forward.cross(Self::UP).normalize();
-        let move_vector = keys.iter().copied().fold(
+        let move_vector = game.keys.down.iter().copied().fold(
             cgmath::Vector3 {
                 x: 0.0,
                 y: 0.0,
@@ -809,10 +1001,10 @@ impl ClientPlayer {
         let total_move = match abilities.move_mode {
             MoveMode::Normal => {
                 move_vector.y = 0.;
-                if keys.contains(&KeyCode::ShiftLeft) {
+                if game.keys.is_down(KeyCode::ShiftLeft) {
                     move_vector /= 2.;
                 }
-                if keys.contains(&KeyCode::Space) && self.on_ground {
+                if game.keys.is_down(KeyCode::Space) && self.on_ground {
                     self.velocity.y += 5.;
                 }
                 self.velocity.y -= 10. * delta_time;
@@ -830,7 +1022,7 @@ impl ClientPlayer {
                             y: 0.,
                             z: 0.,
                         },
-                    world,
+                    game,
                     player_entity_data,
                 ) {
                     self.position.x += total_move.x;
@@ -844,7 +1036,7 @@ impl ClientPlayer {
                             y: total_move.y,
                             z: 0.,
                         },
-                    world,
+                    game,
                     player_entity_data,
                 ) {
                     self.position.y += total_move.y;
@@ -860,7 +1052,7 @@ impl ClientPlayer {
                             y: 0.,
                             z: total_move.z,
                         },
-                    world,
+                    game,
                     player_entity_data,
                 ) {
                     self.position.z += total_move.z;
@@ -875,7 +1067,7 @@ impl ClientPlayer {
     }
     fn collides_at(
         position: Pos,
-        world: &ClientWorld,
+        world: &ClientGame,
         player_entity_data: Option<&EntityData>,
     ) -> bool {
         match player_entity_data {
@@ -939,7 +1131,7 @@ impl ClientPlayer {
         cgmath::perspective(cgmath::Deg(fov), aspect, 0.05, 500.)
     }
 }
-pub struct ClientWorld {
+pub struct ClientGame {
     pub player_position: Pos,
     pub chunks: HashMap<ChunkPos, ClientChunk>,
     pub modified_chunks: HashSet<ChunkPos>,
@@ -949,8 +1141,12 @@ pub struct ClientWorld {
     pub hud: ScreenData,
     pub hit_timer: Option<f32>,
     pub held_item: Option<ClientItem>,
+    pub keys: InputContainer<KeyCode>,
+    pub buttons: InputContainer<MouseButton>,
+    pub cursor_position: PhysicalPosition<f64>,
+    pub selected_slot: Option<(usize, MouseButton)>,
 }
-impl Default for ClientWorld {
+impl Default for ClientGame {
     fn default() -> Self {
         Self {
             player_position: Pos::ZERO,
@@ -966,10 +1162,14 @@ impl Default for ClientWorld {
             },
             hit_timer: None,
             held_item: None,
+            keys: InputContainer::default(),
+            buttons: InputContainer::default(),
+            cursor_position: PhysicalPosition::new(0., 0.),
+            selected_slot: None,
         }
     }
 }
-impl ClientWorld {
+impl ClientGame {
     pub fn active_tool(&self) -> ToolData {
         self.held_item
             .as_ref()
@@ -1047,10 +1247,7 @@ impl ClientWorld {
                 &mut entity_mesh.vertex_consumer(),
                 None,
                 0.,
-                |slot| match slot {
-                    "hand" => entity.hand_item.clone(),
-                    _ => None,
-                },
+                |slot| entity.hand_item.clone(),
             );
         }
         /*let crack_textures: Vec<_> = (0..=3)

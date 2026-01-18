@@ -13,6 +13,7 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::InventoryView;
 use crate::coord::{AABB, FaceMap, Pos};
 use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
@@ -235,13 +236,16 @@ pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
 create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model);
 
-impl<T> Key<T>
+impl<T: 'static> Key<T>
 where
     LoadRegistryStorage: LoadRegistryProvider<T>,
     RegistryStorage: RegistryProvider<T>,
 {
     pub fn data(self) -> &'static T {
         REGISTRIES.get().unwrap().get_registry().by_key(self)
+    }
+    pub fn text_id(self) -> &'static str {
+        REGISTRIES.get().unwrap().get_registry().id_list[self.numeric_id()].as_str()
     }
     pub fn id(id: &str) -> Option<Self> {
         LOAD_REGISTRIES.get().unwrap().get_load_registry().key(id)
@@ -361,7 +365,10 @@ pub struct BlockHealthData {
 #[derive(Deserialize)]
 pub enum BlockInteractAction {
     Ignore,
-    OpenInventory(UIScreenKey),
+    OpenInventory {
+        screen: UIScreenKey,
+        view: InventoryView,
+    },
     Pickup,
 }
 impl Default for BlockInteractAction {

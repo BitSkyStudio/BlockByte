@@ -1,13 +1,26 @@
-<box style="height: 100%;width:100%;justify-content: center;align-items: center;gap-column: 10;">
-    <slot id="0"/>
-    <slot id="1"/>
-    <slot id="2"/>
-    <slot id="3"/>
-    <slot id="4"/>
-    <slot id="5"/>
-    <slot id="6"/>
-    <slot id="7"/>
-    <slot id="8"/>
-    <slot id="9"/>
-    <slot id="10"/>
+<box style="height: 100%;width:100%;justify-content: center;align-items: center;gap-row: 30;flex-direction:column;">
+    <box style="gap-column: 10;">
+        <slot id="10"/>
+        <slot id="11"/>
+        <slot id="12"/>
+        <slot id="13"/>
+        <slot id="14"/>
+        <slot id="15"/>
+        <slot id="16"/>
+        <slot id="17"/>
+        <slot id="18"/>
+        <slot id="19"/>
+    </box>
+    <box style="gap-column: 10;">
+        <slot id="0"/>
+        <slot id="1"/>
+        <slot id="2"/>
+        <slot id="3"/>
+        <slot id="4"/>
+        <slot id="5"/>
+        <slot id="6"/>
+        <slot id="7"/>
+        <slot id="8"/>
+        <slot id="9"/>
+    </box>
 </box>
