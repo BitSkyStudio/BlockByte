@@ -234,7 +234,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language);
 
 impl<T: 'static> Key<T>
 where
@@ -493,5 +493,31 @@ impl RegistryConfigLoadable for ModelData {
         Ok(ModelData {
             model: serde_json::from_str(&json).map_err(|err| anyhow!("error loading {:?}", err))?,
         })
+    }
+}
+
+pub struct TranslationLanguage {
+    pub translations: HashMap<String, String>,
+}
+impl TranslationLanguage {
+    pub fn translate<'a>(&'a self, key: &'a str) -> &'a str {
+        self.translations
+            .get(key)
+            .map(|s| s.as_str())
+            .unwrap_or(key)
+    }
+}
+impl RegistryConfigLoadable for TranslationLanguage {
+    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+        let mut translation = TranslationLanguage {
+            translations: HashMap::new(),
+        };
+        for line in std::fs::read_to_string(config).unwrap().lines() {
+            let (key, value) = line.split_once("=").unwrap();
+            translation
+                .translations
+                .insert(key.trim().to_string(), value.trim().to_string());
+        }
+        Ok(translation)
     }
 }

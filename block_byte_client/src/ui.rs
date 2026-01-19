@@ -15,7 +15,7 @@ use winit::{
     event::MouseButton,
 };
 
-use crate::{ClientGame, GUIMesh, TexCoordsExt};
+use crate::{ClientGame, GUIMesh, TexCoordsExt, translate};
 
 pub struct ScreenData {
     pub screen: UIScreenKey,
@@ -74,18 +74,39 @@ pub fn render_screen(
             UIElementType::ItemSlot { slot } => {
                 if let Some(item) = screen_data.slots.get(*slot).cloned().flatten() {
                     let aspect_ratio = size.width as f32 / size.height as f32;
-                    text_renderer().draw(
-                        Pos {
-                            x: game.cursor_position.x as f32 / size.height as f32 * 2.
-                                - aspect_ratio,
-                            y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
-                            z: 0.,
-                        },
-                        item.item.text_id(),
-                        40. / size.height as f32 * 2.,
-                        Color::WHITE,
-                        mesh,
-                    );
+                    let mut shift = 0.;
+                    shift += text_renderer()
+                        .draw(
+                            Pos {
+                                x: game.cursor_position.x as f32 / size.height as f32 * 2.
+                                    - aspect_ratio,
+                                y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
+                                z: 0.,
+                            },
+                            translate(format!("item.{}", item.item.text_id()).as_str()),
+                            40. / size.height as f32 * 2.,
+                            Color::WHITE,
+                            mesh,
+                        )
+                        .y;
+                    for line in item.description.lines() {
+                        shift += text_renderer()
+                            .draw(
+                                Pos {
+                                    x: game.cursor_position.x as f32 / size.height as f32 * 2.
+                                        - aspect_ratio,
+                                    y: -((game.cursor_position.y) as f32 / size.height as f32 * 2.
+                                        - 1.
+                                        + shift),
+                                    z: 0.,
+                                },
+                                line,
+                                40. / size.height as f32 * 2.,
+                                Color::WHITE,
+                                mesh,
+                            )
+                            .y;
+                    }
                 }
                 return Some(*slot);
             }
@@ -521,7 +542,14 @@ impl TextRenderer {
             z: 0.,
         }
     }
-    pub fn draw(&self, position: Pos, text: &str, size: f32, color: Color, mesh: &mut GUIMesh) {
+    pub fn draw(
+        &self,
+        position: Pos,
+        text: &str,
+        size: f32,
+        color: Color,
+        mesh: &mut GUIMesh,
+    ) -> Pos {
         let layout = self.font.layout(
             text,
             rusttype::Scale::uniform(size),
@@ -565,6 +593,11 @@ impl TextRenderer {
                     color,
                 );
             }
+        }
+        Pos {
+            x: width,
+            y: height,
+            z: 0.,
         }
     }
 }

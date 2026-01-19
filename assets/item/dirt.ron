@@ -1,0 +1,5 @@
+(
+    action: Place("nature.dirt"),
+    model: Block("nature.dirt"),
+    stack_size: 20,
+)

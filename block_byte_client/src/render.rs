@@ -451,7 +451,7 @@ impl RenderState {
     pub fn render(
         &mut self,
         camera: &ClientPlayer,
-        game: &mut ClientGame,
+        game: &ClientGame,
         aspect_ratio: f32,
         entity_mesh: BaseMesh,
         gui_mesh: GUIMesh,

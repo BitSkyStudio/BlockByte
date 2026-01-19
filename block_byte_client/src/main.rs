@@ -20,7 +20,8 @@ use block_byte_common::{
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockPalette, BlockRenderData, EntityData, EntityKey, ItemAction, Key, ModelData,
-        ModelKey, Registry, TextureData, TextureKey, ToolData, air_block, load_registries,
+        ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguage, air_block,
+        load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -397,7 +398,7 @@ impl ApplicationHandler for App {
                 }
                 match render_state.render(
                     &self.camera,
-                    &mut self.game,
+                    &self.game,
                     aspect_ratio,
                     entity_mesh,
                     gui_mesh,
@@ -1640,4 +1641,11 @@ impl ClientChunk {
 
         mesh
     }
+}
+
+pub fn translate<'a>(key: &'a str) -> &'a str {
+    Key::<TranslationLanguage>::id("en")
+        .unwrap()
+        .data()
+        .translate(key)
 }

@@ -162,22 +162,10 @@ impl Chunk {
                             damage_component.set(block, BlockDamage { damage });
                         }
                         if destroy {
-                            damage_component.remove(block);
-                            self.blocks.write().set(block.index(), &air_block());
-                            if block_data.plantable {
-                                if self.components.plant.write().remove(block).is_some() {
-                                    server.send_message_multiple(
-                                        self.viewers.iter(),
-                                        NetworkMessageS2C::UpdateBlockComponents {
-                                            chunk: self.position,
-                                            offset: block,
-                                            data: Option::<ClientBlockPlants>::None.into(),
-                                        },
-                                    );
-                                }
-                            }
+                            drop(damage_component);
                             let block_pos = self.position.to_block_pos() + block.xyz();
-                            for item in generate_loot_table(block_data.loot_table.data()) {
+                            let drops = server.destroy(block_pos);
+                            for item in drops {
                                 server.spawn_item(
                                     item,
                                     block_pos.to_pos()
@@ -188,42 +176,19 @@ impl Chunk {
                                         },
                                 );
                             }
-                            if let Some(_) = &block_data.machine {
-                                let machine =
-                                    self.components.machine.write().remove(block).unwrap();
-                                for item in machine.inventory.into_inner().items {
-                                    if let Some(item) = item {
-                                        server.spawn_item(
-                                            item,
-                                            block_pos.to_pos()
-                                                + Pos {
-                                                    x: 0.5,
-                                                    y: 0.5,
-                                                    z: 0.5,
-                                                },
-                                        );
-                                    }
-                                }
-                            }
+                        } else {
                             server.send_message_multiple(
                                 self.viewers.iter(),
-                                NetworkMessageS2C::SetBlock {
-                                    position: block_pos,
-                                    block: air_block(),
+                                NetworkMessageS2C::UpdateBlockComponents {
+                                    chunk: self.position,
+                                    offset: block,
+                                    data: damage_component
+                                        .get(block)
+                                        .map(|component| Into::<ClientBlockDamage>::into(component))
+                                        .into(),
                                 },
                             );
                         }
-                        server.send_message_multiple(
-                            self.viewers.iter(),
-                            NetworkMessageS2C::UpdateBlockComponents {
-                                chunk: self.position,
-                                offset: block,
-                                data: damage_component
-                                    .get(block)
-                                    .map(|component| Into::<ClientBlockDamage>::into(component))
-                                    .into(),
-                            },
-                        );
                     }
                 }
                 BlockEvent::PlayerInteract { user } => {
@@ -251,10 +216,31 @@ impl Chunk {
                             }
                         }
                         BlockInteractAction::Pickup => {
-                            server.schedule_block_event(
-                                block_position,
-                                BlockEvent::Damage { damage: 10000. },
-                            );
+                            if let Some(user) = server.get_user(user.0) {
+                                if let Some(entity) = user.entity {
+                                    let block_pos = self.position.to_block_pos() + block.xyz();
+                                    let mut drops = server.destroy(block_pos);
+                                    if drops.is_empty() {
+                                        continue;
+                                    }
+                                    let entity = server.get_entity(entity).unwrap();
+                                    let mut entity_inventory = entity.inventory.write();
+                                    let view = entity_inventory.full_view();
+                                    for item in drops {
+                                        if let Some(rest) = entity_inventory.add_item(&view, item) {
+                                            server.spawn_item(
+                                                rest,
+                                                block_pos.to_pos()
+                                                    + Pos {
+                                                        x: 0.5,
+                                                        y: 0.5,
+                                                        z: 0.5,
+                                                    },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

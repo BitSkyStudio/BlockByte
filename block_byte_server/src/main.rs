@@ -18,6 +18,7 @@ use block_byte_common::{
         load_registries,
     },
     ui::{PropertyMap, UIScreenKey},
+    world::{ClientBlockDamage, ClientBlockPlants},
 };
 use palettevec::PaletteVec;
 use parking_lot::{Mutex, RwLock};
@@ -32,7 +33,7 @@ use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
 
 use crate::{
-    inventory::{Inventory, ItemDurability, ItemStack},
+    inventory::{Inventory, ItemDurability, ItemStack, generate_loot_table},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex},
 };
@@ -780,6 +781,60 @@ impl Server {
         };
         item_entity.inventory.get_mut().items[0] = Some(item);
         self.spawn_entity(item_entity)
+    }
+    pub fn destroy(&self, position: BlockPos) -> Vec<ItemStack> {
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        let Some(chunk) = self.get_chunk(chunk) else {
+            return vec![];
+        };
+        let block_data = {
+            let mut blocks = chunk.blocks.write();
+            let block = *blocks.get(offset.index()).unwrap();
+            if block == air_block() {
+                return vec![];
+            }
+            blocks.set(offset.index(), &air_block());
+            block.data()
+        };
+        if chunk.components.damage.write().remove(offset).is_some() {
+            self.send_message_multiple(
+                chunk.viewers.iter(),
+                NetworkMessageS2C::UpdateBlockComponents {
+                    chunk: chunk.position,
+                    offset,
+                    data: Option::<ClientBlockDamage>::None.into(),
+                },
+            );
+        }
+        let mut drops = generate_loot_table(block_data.loot_table.data());
+        if block_data.plantable {
+            if chunk.components.plant.write().remove(offset).is_some() {
+                self.send_message_multiple(
+                    chunk.viewers.iter(),
+                    NetworkMessageS2C::UpdateBlockComponents {
+                        chunk: chunk.position,
+                        offset,
+                        data: Option::<ClientBlockPlants>::None.into(),
+                    },
+                );
+            }
+        }
+        if let Some(_) = &block_data.machine {
+            let machine = chunk.components.machine.write().remove(offset).unwrap();
+            for item in machine.inventory.into_inner().items {
+                if let Some(item) = item {
+                    drops.push(item);
+                }
+            }
+        }
+        self.send_message_multiple(
+            chunk.viewers.iter(),
+            NetworkMessageS2C::SetBlock {
+                position,
+                block: air_block(),
+            },
+        );
+        drops
     }
     pub fn place(&self, position: BlockPos, block: BlockKey) -> Result<(), ()> {
         let block_data = block.data();

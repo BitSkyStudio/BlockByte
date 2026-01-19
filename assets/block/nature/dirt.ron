@@ -10,5 +10,13 @@
         ),
     ),
     health: Some((health: 5., health_regen: 0.05)),
-    loot_table: Key("empty"),
+    interact_action: Pickup,
+    loot_table: Own((
+        entries: [
+            (
+                item: "dirt",
+                chance: 1.,
+            )
+        ]
+    )),
 )
