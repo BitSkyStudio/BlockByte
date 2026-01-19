@@ -13,10 +13,10 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::InventoryView;
 use crate::coord::{AABB, FaceMap, Pos};
 use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
+use crate::{DamageTable, DamageType, InventoryView};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
 impl<T> Key<T> {
@@ -314,6 +314,7 @@ pub struct ToolData {
     pub damage: f32,
     pub swing_time: f32,
     pub hit_time: f32,
+    pub damage_type: DamageType,
 }
 impl ToolData {
     pub fn hand() -> ToolData {
@@ -321,6 +322,7 @@ impl ToolData {
             damage: 1.,
             swing_time: 0.5,
             hit_time: 0.25,
+            damage_type: DamageType::Blunt,
         }
     }
 }
@@ -361,6 +363,7 @@ pub struct BlockData {
 pub struct BlockHealthData {
     pub health: f32,
     pub health_regen: f32,
+    pub table: DamageTable,
 }
 #[derive(Deserialize)]
 pub enum BlockInteractAction {
@@ -415,6 +418,8 @@ pub struct EntityData {
     pub model: ModelKey,
     #[serde(default)]
     pub interact_action: EntityInteractAction,
+    pub health: f32,
+    pub damage_table: DamageTable,
 }
 #[derive(Deserialize)]
 pub enum EntityInteractAction {

@@ -4,4 +4,6 @@
     hitbox_height: 1.9,
     eye_height: 1.7,
     model: "player",
+    health: 100.,
+    damage_table: (),
 )

@@ -31,6 +31,7 @@ use renet::{
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
+use uuid::Uuid;
 
 use crate::{
     inventory::{Inventory, ItemDurability, ItemStack, generate_loot_table},
@@ -211,6 +212,28 @@ fn main() {
                 let (message, _): (NetworkMessageC2S, _) =
                     bincode::serde::decode_from_slice(&message, bincode::config::standard())
                         .unwrap();
+                let find_entity_next_to_player = |entity_id: Uuid| {
+                    for chunk in (AABB::<i16> {
+                        min: ChunkPos {
+                            x: -1,
+                            y: -1,
+                            z: -1,
+                        },
+                        max: ChunkPos { x: 1, y: 1, z: 1 },
+                    }
+                    .offset(*user.view_position.lock()))
+                    {
+                        if let Some(chunk) = server.get_chunk(chunk) {
+                            for entity_index in &chunk.entities {
+                                let entity = server.get_entity(*entity_index).unwrap();
+                                if entity.uuid == entity_id {
+                                    return Some(*entity_index);
+                                }
+                            }
+                        }
+                    }
+                    None
+                };
                 match message {
                     NetworkMessageC2S::PlayerPosition {
                         position,
@@ -264,16 +287,16 @@ fn main() {
                         if let Some(entity) = user.entity {
                             let entity = server.entities.get_mut(entity).unwrap();
                             let hotbar_slot = entity.state.get_mut().hand_slot;
-                            let mut inventory = entity.inventory.write();
+                            let inventory = entity.inventory.get_mut();
                             let tool = inventory.items[hotbar_slot]
                                 .as_ref()
                                 .and_then(|item| item.item.data().tool)
                                 .unwrap_or(ToolData::hand());
-                            drop(inventory);
                             server.schedule_block_event(
                                 position,
                                 BlockEvent::Damage {
                                     damage: tool.damage,
+                                    damage_type: tool.damage_type,
                                 },
                             );
                         }
@@ -327,50 +350,30 @@ fn main() {
                             },
                         );
                     }
-                    NetworkMessageC2S::InteractEntity { entity: entity_id } => {
-                        for chunk in (AABB::<i16> {
-                            min: ChunkPos {
-                                x: -1,
-                                y: -1,
-                                z: -1,
-                            },
-                            max: ChunkPos { x: 1, y: 1, z: 1 },
-                        }
-                        .offset(*user.view_position.lock()))
-                        {
-                            if let Some(chunk) = server.get_chunk(chunk) {
-                                for entity in &chunk.entities {
-                                    let entity = server.get_entity(*entity).unwrap();
-                                    if entity.uuid == entity_id {
-                                        entity.events.lock().push(EntityEvent::PlayerInteract {
-                                            user: user_id.into(),
-                                        });
-                                    }
-                                }
-                            }
+                    NetworkMessageC2S::InteractEntity { entity } => {
+                        if let Some(entity) = find_entity_next_to_player(entity) {
+                            let entity = server.entities.get_mut(entity).unwrap();
+                            entity.events.get_mut().push(EntityEvent::PlayerInteract {
+                                user: user_id.into(),
+                            });
                         }
                     }
-                    NetworkMessageC2S::AttackEntity { entity: entity_id } => {
-                        for chunk in (AABB::<i16> {
-                            min: ChunkPos {
-                                x: -1,
-                                y: -1,
-                                z: -1,
-                            },
-                            max: ChunkPos { x: 1, y: 1, z: 1 },
-                        }
-                        .offset(*user.view_position.lock()))
-                        {
-                            if let Some(chunk) = server.get_chunk(chunk) {
-                                for entity in &chunk.entities {
-                                    let entity = server.get_entity(*entity).unwrap();
-                                    if entity.uuid == entity_id {
-                                        entity
-                                            .events
-                                            .lock()
-                                            .push(EntityEvent::Damage { damage: 1. });
-                                    }
-                                }
+                    NetworkMessageC2S::AttackEntity { entity } => {
+                        if let Some(entity) = find_entity_next_to_player(entity) {
+                            if let Some(player_entity) = user.entity {
+                                let player_entity = server.entities.get_mut(player_entity).unwrap();
+                                let hotbar_slot = player_entity.state.get_mut().hand_slot;
+                                let inventory = player_entity.inventory.get_mut();
+                                let tool = inventory.items[hotbar_slot]
+                                    .as_ref()
+                                    .and_then(|item| item.item.data().tool)
+                                    .unwrap_or(ToolData::hand());
+
+                                let entity = server.entities.get_mut(entity).unwrap();
+                                entity.events.get_mut().push(EntityEvent::Damage {
+                                    damage: tool.damage,
+                                    damage_type: tool.damage_type,
+                                });
                             }
                         }
                     }

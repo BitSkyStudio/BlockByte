@@ -6,7 +6,7 @@ use std::{
 };
 
 use block_byte_common::{
-    InventoryView, LookDirection,
+    DamageType, InventoryView, LookDirection,
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{
@@ -145,9 +145,13 @@ impl Chunk {
         std::mem::swap(&mut processing_events, &mut *self.block_events.lock());
         for (block, event) in processing_events {
             match event {
-                BlockEvent::Damage { damage } => {
+                BlockEvent::Damage {
+                    damage,
+                    damage_type,
+                } => {
                     let block_data = self.blocks.read().get(block.index()).unwrap().data();
                     if let Some(health) = &block_data.health {
+                        let damage = damage * health.table[damage_type];
                         let mut damage_component = self.components.damage.write();
                         let mut destroy = false;
 
@@ -317,15 +321,27 @@ impl From<UserIndex> for UserIndexSave {
 
 #[derive(Serialize, Deserialize)]
 pub enum BlockEvent {
-    Damage { damage: f32 },
-    PlayerInteract { user: UserIndexSave },
+    Damage {
+        damage: f32,
+        damage_type: DamageType,
+    },
+    PlayerInteract {
+        user: UserIndexSave,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum EntityEvent {
-    Damage { damage: f32 },
-    PlayerInteract { user: UserIndexSave },
-    Teleport { position: Pos },
+    Damage {
+        damage: f32,
+        damage_type: DamageType,
+    },
+    PlayerInteract {
+        user: UserIndexSave,
+    },
+    Teleport {
+        position: Pos,
+    },
     Remove,
 }
 
@@ -348,6 +364,7 @@ pub struct InternalEntityState {
     pub hand_slot: usize,
     #[serde(skip_serializing, skip_deserializing)]
     pub last_hand_item: Option<ItemStack>,
+    pub health: f32,
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
@@ -365,6 +382,7 @@ impl Entity {
                 teleport: None,
                 hand_slot: 0,
                 last_hand_item: None,
+                health: entity_data.health,
             }),
         }
     }
@@ -372,12 +390,24 @@ impl Entity {
         self.events.lock().push(event);
     }
     pub fn tick(&self, server: &Server) {
+        let entity_data = self.key.data();
         let mut processing_events = SmallVec::new();
         std::mem::swap(&mut processing_events, &mut *self.events.lock());
         let mut state = self.state.lock();
         for event in processing_events {
             match event {
-                EntityEvent::Damage { damage } => {}
+                EntityEvent::Damage {
+                    damage,
+                    damage_type,
+                } => {
+                    let damage = damage * entity_data.damage_table[damage_type];
+                    state.health -= damage;
+                    if state.health <= 0. {
+                        if self.key.text_id() != "player" {
+                            state.removed = true;
+                        }
+                    }
+                }
                 EntityEvent::PlayerInteract { user } => match self.key.data().interact_action {
                     EntityInteractAction::Ignore => {}
                     EntityInteractAction::Pickup => {

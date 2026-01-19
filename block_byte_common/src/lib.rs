@@ -135,3 +135,31 @@ impl<'de> Deserialize<'de> for InventoryView {
         })
     }
 }
+
+macro_rules! create_damage_types {
+    ($($id:ident),*) => {
+        #[derive(Copy, Clone, Deserialize, Serialize, PartialEq)]
+        pub enum DamageType{
+            $($id,)*
+        }
+        fn default_damage_vulnerability() -> f32{1.}
+        #[allow(non_snake_case)]
+        #[derive(Deserialize)]
+        pub struct DamageTable{
+            $(
+                #[serde(default = "default_damage_vulnerability")]
+                $id: f32,
+            )*
+        }
+        impl std::ops::Index<DamageType> for DamageTable {
+            type Output = f32;
+
+            fn index(&self, damage_type: DamageType) -> &Self::Output {
+                match damage_type {
+                    $(DamageType::$id => &self.$id,)*
+                }
+            }
+        }
+    };
+}
+create_damage_types!(Blunt, Pierce, Slash, Cut);

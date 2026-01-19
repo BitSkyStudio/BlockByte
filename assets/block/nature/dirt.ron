@@ -9,7 +9,7 @@
             up: "dirt",
         ),
     ),
-    health: Some((health: 5., health_regen: 0.05)),
+    health: Some((health: 5., health_regen: 0.05, table: ())),
     interact_action: Pickup,
     loot_table: Own((
         entries: [
