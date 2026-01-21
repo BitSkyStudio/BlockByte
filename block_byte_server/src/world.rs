@@ -6,12 +6,12 @@ use std::{
 };
 
 use block_byte_common::{
-    DamageType, InventoryView, LookDirection,
+    Color, DamageType, InventoryView, LookDirection,
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::NetworkMessageS2C,
     registry::{
-        BiomeKey, BlockData, BlockInteractAction, BlockKey, BlockPalette, EntityInteractAction,
-        EntityKey, PlantKey, air_block,
+        BiomeKey, BlockData, BlockEntry, BlockInteractAction, BlockKey, BlockMachineAction,
+        BlockPalette, BlockRotation, EntityInteractAction, EntityKey, PlantKey, air_block,
     },
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
@@ -62,7 +62,11 @@ impl Chunk {
         let height_noise = Perlin::new(seed);
 
         let mut blocks = BlockPalette::filled(
-            air_block(),
+            BlockEntry {
+                block: air_block(),
+                color: Color::WHITE,
+                rotation: BlockRotation::default(),
+            },
             CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize,
         );
         let mut components = ChunkBlockComponents::default();
@@ -102,7 +106,14 @@ impl Chunk {
                     let y_pos = y as i32 + position.y as i32 * CHUNK_SIZE as i32;
                     let height = height_map[x as usize][z as usize];
                     if y_pos == height {
-                        blocks.set(offset.index(), &biome.top_block);
+                        blocks.set(
+                            offset.index(),
+                            &BlockEntry {
+                                block: biome.top_block,
+                                color: Color::WHITE,
+                                rotation: BlockRotation::default(),
+                            },
+                        );
                         let spawned_plants: Vec<_> = biome
                             .plants
                             .iter()
@@ -123,9 +134,23 @@ impl Chunk {
                             );
                         }
                     } else if y_pos < height - 3 {
-                        blocks.set(offset.index(), &biome.bottom_block);
+                        blocks.set(
+                            offset.index(),
+                            &BlockEntry {
+                                block: biome.bottom_block,
+                                color: Color::WHITE,
+                                rotation: BlockRotation::default(),
+                            },
+                        );
                     } else if y_pos < height {
-                        blocks.set(offset.index(), &biome.middle_block);
+                        blocks.set(
+                            offset.index(),
+                            &BlockEntry {
+                                block: biome.middle_block,
+                                color: Color::WHITE,
+                                rotation: BlockRotation::default(),
+                            },
+                        );
                     }
                 }
             }
@@ -149,7 +174,7 @@ impl Chunk {
                     damage,
                     damage_type,
                 } => {
-                    let block_data = self.blocks.read().get(block.index()).unwrap().data();
+                    let block_data = self.blocks.read().get(block.index()).unwrap().block.data();
                     if let Some(health) = &block_data.health {
                         let damage = damage * health.table[damage_type];
                         let mut damage_component = self.components.damage.write();
@@ -196,7 +221,7 @@ impl Chunk {
                     }
                 }
                 BlockEvent::PlayerInteract { user } => {
-                    let block_data = self.blocks.read().get(block.index()).unwrap().data();
+                    let block_data = self.blocks.read().get(block.index()).unwrap().block.data();
                     let block_position = self.position.to_block_pos() + block.xyz();
                     match &block_data.interact_action {
                         BlockInteractAction::Ignore => {}
@@ -250,6 +275,49 @@ impl Chunk {
                 }
             }
         }
+        for (offset, machine) in &self.components.machine.read().components {
+            let block_data = self.blocks.read().get(offset.index()).unwrap().block.data();
+            let machine_data = block_data.machine.as_ref().unwrap();
+            let mut progress_bars = machine.progress_bars.lock();
+            progress_bars.resize(machine_data.actions.len(), 0.);
+            for (action, progress) in machine_data.actions.iter().zip(progress_bars.iter_mut()) {
+                match action {
+                    BlockMachineAction::Craft {
+                        base_speed,
+                        recipes,
+                        input_view,
+                        output_view,
+                    } => {
+                        let mut inventory = machine.inventory.write();
+                        if *progress <= 0. {
+                            for recipe in &recipes.data().0 {
+                                let recipe = recipe.data();
+                                let mut failed = false;
+                                for (input, count) in &recipe.inputs {
+                                    if inventory.count_item(input_view, *input) < *count {
+                                        failed = true;
+                                        break;
+                                    }
+                                }
+                                if failed {
+                                    continue;
+                                }
+                                for (input, count) in &recipe.inputs {
+                                    inventory.remove_item(input_view, *input, *count);
+                                }
+                                for output in generate_loot_table(recipe.outputs.data()) {
+                                    inventory.add_item(output_view, output);
+                                }
+                                *progress = recipe.craft_time * base_speed;
+                                break;
+                            }
+                        } else {
+                            *progress -= server.delta_time();
+                        }
+                    }
+                }
+            }
+        }
         for entity in &self.entities {
             let entity = server.entities.get(*entity).unwrap();
             entity.tick(server);
@@ -266,6 +334,7 @@ impl Chunk {
                         * blocks
                             .get(offset.index())
                             .unwrap()
+                            .block
                             .data()
                             .health
                             .as_ref()
@@ -640,4 +709,6 @@ impl Into<ClientBlockPlants> for &BlockPlants {
 #[derive(Serialize, Deserialize)]
 pub struct BlockMachine {
     pub inventory: RwLock<Inventory>,
+    #[serde(default)]
+    pub progress_bars: Mutex<Vec<f32>>,
 }

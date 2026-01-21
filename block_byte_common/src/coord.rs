@@ -2,6 +2,7 @@ use std::{
     fmt::Debug,
     marker::PhantomData,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+    sync::OnceLock,
 };
 
 use num_integer::{Integer, Roots};
@@ -187,7 +188,9 @@ impl<T: Copy + DivAssign> DivAssign<T> for Vec3<T> {
 pub type Pos = Vec3<f32>;
 pub type BlockPos = Vec3<i32>;
 pub type ChunkPos = Vec3<i16>;
-
+impl BlockPos {
+    pub const ZERO: BlockPos = Pos::ZERO.to_block_pos();
+}
 impl Pos {
     pub const X: Pos = Pos {
         x: 1.,
@@ -212,7 +215,7 @@ impl Pos {
             z: value,
         }
     }
-    pub fn to_block_pos(self) -> BlockPos {
+    pub const fn to_block_pos(self) -> BlockPos {
         BlockPos {
             x: self.x.floor() as i32,
             y: self.y.floor() as i32,
@@ -922,5 +925,125 @@ impl Face {
         vertex_consumer(third, (coords.u2, coords.v2));
         vertex_consumer(second, (coords.u2, coords.v1));
         vertex_consumer(first, (coords.u1, coords.v1));
+    }
+}
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum Axis {
+    X,
+    Y,
+    Z,
+}
+impl Face {
+    pub fn axis_direction(self) -> (Axis, bool) {
+        match self {
+            Face::Front => (Axis::Z, true),
+            Face::Back => (Axis::Z, false),
+            Face::Up => (Axis::Y, false),
+            Face::Down => (Axis::Y, true),
+            Face::Left => (Axis::X, true),
+            Face::Right => (Axis::X, false),
+        }
+    }
+    pub fn cross(self, other: Face) -> Face {
+        let (a_axis, a_dir) = self.axis_direction();
+        let (b_axis, b_dir) = other.axis_direction();
+
+        let (axis, dir) = match (a_axis, b_axis) {
+            (Axis::X, Axis::Y) => (Axis::Z, false),
+            (Axis::Y, Axis::Z) => (Axis::X, false),
+            (Axis::Z, Axis::X) => (Axis::Y, false),
+            (Axis::Y, Axis::X) => (Axis::Z, true),
+            (Axis::Z, Axis::Y) => (Axis::X, true),
+            (Axis::X, Axis::Z) => (Axis::Y, true),
+            _ => panic!(),
+        };
+        let dir = dir ^ a_dir ^ b_dir;
+        *Face::all()
+            .into_iter()
+            .find(|face| {
+                let (f_axis, f_dir) = face.axis_direction();
+                f_axis == axis && f_dir == dir
+            })
+            .unwrap()
+    }
+}
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct Orientation {
+    pub right: Face,
+    pub up: Face,
+    pub forward: Face,
+}
+static ALL_ORIENTATIONS: OnceLock<[Orientation; 24]> = OnceLock::new();
+impl Orientation {
+    pub const IDENTITY: Self = Self {
+        right: Face::Right,
+        up: Face::Up,
+        forward: Face::Front,
+    };
+    pub fn compose(self, other: Orientation) -> Orientation {
+        Orientation {
+            right: self.apply(other.right),
+            up: self.apply(other.up),
+            forward: self.apply(other.forward),
+        }
+    }
+    fn apply(self, face: Face) -> Face {
+        let (axis, dir) = face.axis_direction();
+        let base = match axis {
+            Axis::X => self.right,
+            Axis::Y => self.up,
+            Axis::Z => self.forward,
+        };
+
+        if dir { base.opposite() } else { base }
+    }
+    pub fn rotate_pos(self, v: Pos) -> Pos {
+        let mut out = Pos::ZERO;
+        out += self.right.get_offset() * v.x;
+        out += self.up.get_offset() * v.y;
+        out += self.forward.get_offset() * v.z;
+        out
+    }
+    pub fn rotate_block_pos(self, v: BlockPos) -> BlockPos {
+        let mut out = BlockPos::ZERO;
+        out += self.right.get_block_offset() * v.x;
+        out += self.up.get_block_offset() * v.y;
+        out += self.forward.get_block_offset() * v.z;
+        out
+    }
+    pub fn from_front_up(front: Face, up: Face) -> Option<Self> {
+        if front == up || front == up.opposite() {
+            return None;
+        }
+        let right = front.cross(up);
+        Some(Self {
+            right,
+            up,
+            forward: front,
+        })
+    }
+    pub fn from_front_right(front: Face, right: Face) -> Option<Self> {
+        if front == right || front == right.opposite() {
+            return None;
+        }
+        let up = right.cross(front);
+        Some(Self {
+            right,
+            up,
+            forward: front,
+        })
+    }
+    pub fn all() -> &'static [Orientation; 24] {
+        ALL_ORIENTATIONS.get_or_init(|| {
+            let mut result = Vec::with_capacity(24);
+            for first in Face::all() {
+                for second in Face::all() {
+                    if let Some(orientation) = Orientation::from_front_up(*first, *second) {
+                        result.push(orientation);
+                    }
+                }
+            }
+            result.try_into().unwrap()
+        })
     }
 }

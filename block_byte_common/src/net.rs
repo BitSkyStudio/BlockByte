@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::{
     ClientItem, ItemMoveMode, LookDirection, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
-    registry::{BlockKey, BlockPalette, EntityKey, ToolData},
+    registry::{BlockEntry, BlockKey, BlockPalette, EntityKey, ToolData},
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
@@ -67,7 +67,7 @@ pub enum NetworkMessageS2C {
     },
     SetBlock {
         position: BlockPos,
-        block: BlockKey,
+        block: BlockEntry,
     },
     UpdateBlockComponents {
         chunk: ChunkPos,

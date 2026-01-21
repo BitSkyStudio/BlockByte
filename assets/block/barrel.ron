@@ -14,5 +14,13 @@
     interact_action: OpenInventory(screen:"barrel", view:[0,1,2,3,4,5,6,7,8,9]),
     machine: Some((
         inventory_size: 10,
+        actions: [
+            Craft(
+                base_speed: 1,
+                recipes: Own((["generate_dirt"])),
+                input_view: [],
+                output_view: [8, 9]
+            )
+        ]
     )),
 )

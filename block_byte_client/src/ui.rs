@@ -332,9 +332,7 @@ fn render_element(
                                 Color::WHITE,
                             );
                         }
-                        BlockRenderData::Model(key) => {
-                            todo!()
-                        }
+                        BlockRenderData::Model(key) => {}
                     },
                     ItemModel::Model(key) => {}
                 }

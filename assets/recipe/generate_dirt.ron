@@ -1,0 +1,12 @@
+(
+    inputs: {},
+    outputs: Own((
+        entries: [
+            (
+                item: "dirt",
+                chance: 1.,
+            )
+        ]
+    )),
+    craft_time: 5,
+)

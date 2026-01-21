@@ -10,12 +10,12 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, InventoryView, LookDirection, MoveMode, PlayerAbilities,
+    ClientItem, Color, InventoryView, LookDirection, MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockData, BlockKey, EntityKey, ItemAction, ItemKey, ToolData, air_block,
-        load_registries,
+        self, BlockData, BlockEntry, BlockKey, BlockRotation, EntityKey, ItemAction, ItemKey,
+        ToolData, air_block, load_registries,
     },
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockDamage, ClientBlockPlants},
@@ -122,6 +122,10 @@ fn main() {
             entity.inventory.get_mut().add_item(
                 &full_view,
                 ItemStack::new(ItemKey::id("pickaxe").unwrap(), 1),
+            );
+            entity.inventory.get_mut().add_item(
+                &full_view,
+                ItemStack::new(ItemKey::id("arrow").unwrap(), 20),
             );
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
@@ -310,9 +314,16 @@ fn main() {
                                 match item.item.data().action {
                                     ItemAction::Ignore => {}
                                     ItemAction::Place(place) => {
-                                        if let Ok(_) =
-                                            server.place(position + face.get_block_offset(), place)
-                                        {
+                                        if let Ok(_) = server.place(
+                                            position + face.get_block_offset(),
+                                            BlockEntry {
+                                                block: place,
+                                                color: Color::WHITE,
+                                                rotation: place.data().rotation.get_nearest_valid(
+                                                    BlockRotation::from(entity.direction),
+                                                ),
+                                            },
+                                        ) {
                                             item.count -= 1;
                                             if item.count == 0 {
                                                 inventory.items[hotbar_slot] = None;
@@ -757,7 +768,7 @@ impl Server {
     pub fn hitbox_block_collides(&self, hitbox: AABB<i32>) -> bool {
         for block in hitbox {
             if match self.get_block(block) {
-                Some(block) => !block.data().selection.is_empty(), //todo: proper collisions
+                Some(block) => !block.block.data().selection.is_empty(), //todo: proper collisions
                 None => true,
             } {
                 return true;
@@ -792,11 +803,18 @@ impl Server {
         };
         let block_data = {
             let mut blocks = chunk.blocks.write();
-            let block = *blocks.get(offset.index()).unwrap();
+            let block = blocks.get(offset.index()).unwrap().block;
             if block == air_block() {
                 return vec![];
             }
-            blocks.set(offset.index(), &air_block());
+            blocks.set(
+                offset.index(),
+                &BlockEntry {
+                    block: air_block(),
+                    color: Color::WHITE,
+                    rotation: BlockRotation::default(),
+                },
+            );
             block.data()
         };
         if chunk.components.damage.write().remove(offset).is_some() {
@@ -834,13 +852,17 @@ impl Server {
             chunk.viewers.iter(),
             NetworkMessageS2C::SetBlock {
                 position,
-                block: air_block(),
+                block: BlockEntry {
+                    block: air_block(),
+                    color: Color::WHITE,
+                    rotation: BlockRotation::default(),
+                },
             },
         );
         drops
     }
-    pub fn place(&self, position: BlockPos, block: BlockKey) -> Result<(), ()> {
-        let block_data = block.data();
+    pub fn place(&self, position: BlockPos, block: BlockEntry) -> Result<(), ()> {
+        let block_data = block.block.data();
         let (chunk, offset) = position.to_chunk_pos_offset();
         let chunk = match self.get_chunk(chunk) {
             Some(chunk) => chunk,
@@ -854,7 +876,7 @@ impl Server {
                 y: -1,
                 z: -1,
             },
-            max: ChunkPos { x: 1, y: 0, z: 1 },
+            max: ChunkPos { x: 1, y: 1, z: 1 },
         }
         .offset(position.to_chunk_pos()))
         {
@@ -869,7 +891,7 @@ impl Server {
         }
         {
             let mut blocks = chunk.blocks.write();
-            if *blocks.get(offset.index()).unwrap() != air_block() {
+            if blocks.get(offset.index()).unwrap().block != air_block() {
                 return Err(());
             }
             blocks.set(offset.index(), &block);
@@ -884,6 +906,7 @@ impl Server {
                 offset,
                 BlockMachine {
                     inventory: RwLock::new(inventory),
+                    progress_bars: Mutex::new(Vec::new()),
                 },
             );
         }
@@ -895,7 +918,7 @@ impl Server {
             chunk.block_events.lock().push((offset, event));
         }
     }
-    pub fn get_block(&self, position: BlockPos) -> Option<BlockKey> {
+    pub fn get_block(&self, position: BlockPos) -> Option<BlockEntry> {
         let (chunk, offset) = position.to_chunk_pos_offset();
         let chunk = match self.get_chunk(chunk) {
             Some(chunk) => chunk,
@@ -1036,21 +1059,26 @@ impl ChunkViewingManager {
             })
             .par_bridge()
             .map(|(position, users, data)| {
-                let mut chunk = match data {
-                    Some(data) => {
-                        let data: ChunkSaveData = serde_cbor::from_slice(data.as_slice()).unwrap();
-                        (
-                            Chunk {
-                                blocks: RwLock::new(data.blocks),
-                                block_events: Mutex::new(data.block_events),
-                                components: data.components,
-                                position,
-                                viewers: HashSet::new(),
-                                entities: Vec::new(),
-                            },
-                            data.entities,
-                        )
+                let mut chunk = match data.and_then(|data| {
+                    match serde_cbor::from_slice::<ChunkSaveData>(data.as_slice()) {
+                        Ok(data) => Some(data),
+                        Err(_) => {
+                            println!("loading {position:?} failed, regenerating");
+                            None
+                        }
                     }
+                }) {
+                    Some(data) => (
+                        Chunk {
+                            blocks: RwLock::new(data.blocks),
+                            block_events: Mutex::new(data.block_events),
+                            components: data.components,
+                            position,
+                            viewers: HashSet::new(),
+                            entities: Vec::new(),
+                        },
+                        data.entities,
+                    ),
                     None => (Chunk::generate(position), Vec::new()),
                 };
                 (

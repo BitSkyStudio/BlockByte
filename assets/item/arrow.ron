@@ -1,0 +1,5 @@
+(
+    action: Place("arrow"),
+    model: Block("arrow"),
+    stack_size: 20,
+)

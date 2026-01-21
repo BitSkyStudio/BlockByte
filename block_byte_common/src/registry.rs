@@ -13,10 +13,10 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, FaceMap, Pos};
+use crate::coord::{AABB, Face, FaceMap, Orientation, Pos};
 use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
-use crate::{DamageTable, DamageType, InventoryView};
+use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
 
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
 impl<T> Key<T> {
@@ -234,7 +234,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language; Recipe, recipe; RecipeGroup, recipe_group);
 
 impl<T: 'static> Key<T>
 where
@@ -350,14 +350,47 @@ pub struct BlockData {
     pub render_data: BlockRenderData,
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
-    pub selection: Vec<crate::coord::AABB<f32>>,
+    pub selection: Vec<AABB<f32>>,
     #[serde(default)]
     pub plantable: bool,
     pub loot_table: OwnOrKey<LootTableData>,
     #[serde(default)]
     pub interact_action: BlockInteractAction,
     #[serde(default)]
-    pub machine: Option<BlockMachine>,
+    pub machine: Option<BlockMachineData>,
+    #[serde(default)]
+    pub rotation: BlockRotationMode,
+}
+#[derive(Copy, Clone, Deserialize)]
+pub enum BlockRotationMode {
+    None,
+    Horizontal,
+    Full,
+    FullOriented,
+}
+impl BlockRotationMode {
+    pub fn get_nearest_valid(self, value: BlockRotation) -> BlockRotation {
+        match self {
+            BlockRotationMode::None => BlockRotation::default(),
+            BlockRotationMode::Horizontal => match Into::<Orientation>::into(value).forward {
+                Face::Up | Face::Down => Orientation::from_front_up(Face::Front, Face::Up).unwrap(),
+                front => Orientation::from_front_up(front, Face::Up).unwrap(),
+            }
+            .into(),
+            BlockRotationMode::Full => match Into::<Orientation>::into(value).forward {
+                Face::Up => Orientation::from_front_up(Face::Up, Face::Back).unwrap(),
+                Face::Down => Orientation::from_front_up(Face::Down, Face::Front).unwrap(),
+                front => Orientation::from_front_up(front, Face::Up).unwrap(),
+            }
+            .into(),
+            BlockRotationMode::FullOriented => value,
+        }
+    }
+}
+impl Default for BlockRotationMode {
+    fn default() -> Self {
+        BlockRotationMode::None
+    }
 }
 #[derive(Deserialize)]
 pub struct BlockHealthData {
@@ -380,8 +413,19 @@ impl Default for BlockInteractAction {
     }
 }
 #[derive(Deserialize)]
-pub struct BlockMachine {
+pub struct BlockMachineData {
     pub inventory_size: usize,
+    #[serde(default)]
+    pub actions: Vec<BlockMachineAction>,
+}
+#[derive(Deserialize)]
+pub enum BlockMachineAction {
+    Craft {
+        base_speed: f32,
+        recipes: OwnOrKey<RecipeGroup>,
+        input_view: InventoryView,
+        output_view: InventoryView,
+    },
 }
 #[derive(Deserialize)]
 #[cfg(feature = "client")]
@@ -392,7 +436,56 @@ pub enum BlockRenderData {
 }
 
 pub type BlockKey = Key<BlockData>;
-pub type BlockPalette = PaletteVec<BlockKey, HybridPalette<16, BlockKey>, AlignedIndexBuffer>;
+pub type BlockPalette = PaletteVec<BlockEntry, HybridPalette<16, BlockEntry>, AlignedIndexBuffer>;
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
+pub struct BlockEntry {
+    pub block: BlockKey,
+    pub color: Color,
+    pub rotation: BlockRotation,
+}
+impl Default for BlockRotation {
+    fn default() -> Self {
+        BlockRotation::from(Orientation::IDENTITY)
+    }
+}
+impl Into<Orientation> for BlockRotation {
+    fn into(self) -> Orientation {
+        Orientation::all()[self.0 as usize]
+    }
+}
+impl From<Orientation> for BlockRotation {
+    fn from(value: Orientation) -> Self {
+        //todo: this shouldnt iterate
+        BlockRotation(
+            Orientation::all()
+                .iter()
+                .position(|orientation| *orientation == value)
+                .unwrap() as u8,
+        )
+    }
+}
+impl From<LookDirection> for BlockRotation {
+    fn from(value: LookDirection) -> Self {
+        fn closest_face_to_offset(offset: Pos) -> Face {
+            let face_fitness = |face: Face| -> f32 {
+                let face_offset = face.get_offset();
+                (offset.x * face_offset.x) + (offset.y * face_offset.y) + (offset.z * face_offset.z)
+            };
+            *Face::all()
+                .iter()
+                .max_by(|face1, face2| face_fitness(**face1).total_cmp(&face_fitness(**face2)))
+                .unwrap()
+        }
+        let orientation = Orientation::from_front_right(
+            closest_face_to_offset(value.make_front()),
+            closest_face_to_offset(value.make_right()),
+        )
+        .unwrap_or(Orientation::IDENTITY);
+        orientation.into()
+    }
+}
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
+pub struct BlockRotation(u8);
 
 pub struct TextureData {
     #[cfg(feature = "client")]
@@ -526,3 +619,13 @@ impl RegistryConfigLoadable for TranslationLanguage {
         Ok(translation)
     }
 }
+#[derive(Deserialize)]
+pub struct Recipe {
+    pub inputs: HashMap<ItemKey, u16>,
+    pub outputs: OwnOrKey<LootTableData>,
+    pub craft_time: f32,
+}
+pub type RecipeKey = Key<Recipe>;
+#[derive(Deserialize)]
+pub struct RecipeGroup(pub Vec<RecipeKey>);
+pub type RecipeGroupKey = Key<RecipeGroup>;

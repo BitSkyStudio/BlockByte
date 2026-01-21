@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::registry::ItemKey;
+use crate::{coord::Pos, registry::ItemKey};
 
 pub mod coord;
 pub mod model;
@@ -51,7 +51,7 @@ impl TexCoords {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -81,6 +81,22 @@ impl Into<[u8; 4]> for Color {
 pub struct LookDirection {
     pub pitch: f32,
     pub yaw: f32,
+}
+impl LookDirection {
+    pub fn make_front(self) -> Pos {
+        Pos {
+            x: self.yaw.sin() * self.pitch.cos(),
+            y: self.pitch.sin(),
+            z: -self.yaw.cos() * self.pitch.cos(),
+        }
+    }
+    pub fn make_right(self) -> Pos {
+        Pos {
+            x: self.yaw.cos(),
+            y: 0.,
+            z: self.yaw.sin(),
+        }
+    }
 }
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum ItemMoveMode {

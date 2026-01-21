@@ -34,6 +34,9 @@ enum BBElement {
         uuid: String,
         from: [f32; 3],
         to: [f32; 3],
+        origin: [f32; 3],
+        #[serde(default)]
+        rotation: [f32; 3],
         faces: Option<HashMap<String, BBFace>>,
     },
     #[serde(rename = "locator")]
@@ -168,7 +171,16 @@ impl Bone {
 
         for elem in &self.elements {
             match elem {
-                Element::Cube { from, to, uvs } => {
+                Element::Cube {
+                    from,
+                    to,
+                    uvs,
+                    origin,
+                    rotation,
+                } => {
+                    let o = Matrix4::from_translation(*origin);
+                    let io = Matrix4::from_translation(-*origin);
+                    let world = world * o * Matrix4::from(*rotation) * io;
                     for face in Face::all() {
                         let (uv, texture) = *uvs.by_face(*face);
                         face.add_vertices(uv, |pos, uv| {
@@ -257,6 +269,8 @@ pub enum Element {
     Cube {
         from: Vector3<f32>,
         to: Vector3<f32>,
+        origin: Vector3<f32>,
+        rotation: Euler<Deg<f32>>,
         uvs: FaceMap<(TexCoords, usize)>,
     },
     Locator {
@@ -341,7 +355,7 @@ impl Model {
         let name = group.map(|group| group.name.as_str()).unwrap_or("");
         let mut bone = Bone {
             origin: group
-                .map(|group| Vector3::from(group.origin))
+                .map(|group| Vector3::from(group.origin) / BLOCKBENCH_SIZE)
                 .unwrap_or(Vector3::zero()),
             elements: Vec::new(),
             children: Vec::new(),
@@ -394,10 +408,18 @@ impl Model {
                             from,
                             to,
                             faces,
+                            origin,
+                            rotation,
                         } => {
                             bone.elements.push(Element::Cube {
                                 from: Vector3::from(*from),
                                 to: Vector3::from(*to),
+                                origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,
+                                rotation: Euler {
+                                    x: Deg(rotation[0]),
+                                    y: Deg(rotation[1]),
+                                    z: Deg(rotation[2]),
+                                },
                                 uvs: FaceMap::init(|face| {
                                     let face = match face {
                                         Face::Back => "south",

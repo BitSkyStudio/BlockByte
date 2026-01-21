@@ -798,7 +798,7 @@ impl CameraUniform {
             aspect_ratio,
             fov,
             camera.get_eye(player_entity_data),
-            camera.make_front(),
+            camera.direction.make_front(),
         );
     }
     fn load_view_proj_matrix(&mut self, aspect_ratio: f32, fov: f32, eye: Pos, front: Pos) {

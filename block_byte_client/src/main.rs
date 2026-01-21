@@ -16,7 +16,10 @@ use std::{
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
     ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities, TexCoords,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
+    coord::{
+        AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos, Ray,
+        Vec3,
+    },
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockPalette, BlockRenderData, EntityData, EntityKey, ItemAction, Key, ModelData,
@@ -26,8 +29,9 @@ use block_byte_common::{
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
 };
-use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3};
+use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
 use image::{DynamicImage, RgbaImage};
+use parking_lot::Mutex;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
@@ -144,7 +148,7 @@ impl ApplicationHandler for App {
                     let sensitivity = 0.4;
                     self.camera.update_orientation(
                         -delta.1 as f32 * sensitivity,
-                        -delta.0 as f32 * sensitivity,
+                        delta.0 as f32 * sensitivity,
                     );
                 }
             }
@@ -317,7 +321,7 @@ impl ApplicationHandler for App {
                         self.game.player_position.y,
                         self.game.player_position.z,
                         1. / dt,
-                        self.mspt
+                        self.mspt,
                     ),
                     0.05,
                     Color::WHITE,
@@ -892,13 +896,6 @@ impl ClientPlayer {
         y: 1.0,
         z: 0.0,
     };
-    pub fn make_front(&self) -> Vec3<f32> {
-        Vec3 {
-            x: self.direction.yaw.sin() * self.direction.pitch.cos(),
-            y: self.direction.pitch.sin(),
-            z: self.direction.yaw.cos() * self.direction.pitch.cos(),
-        }
-    }
     pub fn update_orientation(&mut self, d_pitch_deg: f32, d_yaw_deg: f32) {
         let d_pitch = d_pitch_deg.to_radians();
         let d_yaw = d_yaw_deg.to_radians();
@@ -919,7 +916,7 @@ impl ClientPlayer {
     pub fn raycast(&self, world: &ClientGame) -> RayCastResult {
         let ray = Ray {
             position: self.get_eye(world.get_player_data()),
-            direction: self.make_front() * 10.,
+            direction: self.direction.make_front() * 10.,
         };
         let mut min_distance = f32::INFINITY;
         let mut raycast_result = RayCastResult::Empty;
@@ -932,6 +929,7 @@ impl ClientPlayer {
                 .blocks
                 .get(offset.index())
                 .unwrap()
+                .block
                 .data()
                 .selection
                 .len()
@@ -968,7 +966,7 @@ impl ClientPlayer {
         player_entity_data: Option<&EntityData>,
     ) {
         let mut forward =
-            cgmath::Vector3::new(self.direction.yaw.sin(), 0., self.direction.yaw.cos());
+            cgmath::Vector3::new(self.direction.yaw.sin(), 0., -self.direction.yaw.cos());
         use cgmath::InnerSpace;
         let cross_normalized = forward.cross(Self::UP).normalize();
         let move_vector = game.keys.down.iter().copied().fold(
@@ -1082,6 +1080,7 @@ impl ClientPlayer {
                                 .blocks
                                 .get(offset.index())
                                 .unwrap()
+                                .block
                                 .data()
                                 .selection
                                 .is_empty()
@@ -1110,7 +1109,7 @@ impl ClientPlayer {
             y: eye.y as f32,
             z: eye.z as f32,
         };
-        let front = self.make_front();
+        let front = self.direction.make_front();
         cgmath::Matrix4::look_at_rh(
             eye,
             eye + cgmath::Vector3 {
@@ -1282,7 +1281,7 @@ impl ClientGame {
                     {
                         continue;
                     }
-                    let block = chunk.blocks.get(offset.index()).unwrap().data();
+                    let block = chunk.blocks.get(offset.index()).unwrap().block.data();
                     let progress = (damage.damage
                         / block
                             .health
@@ -1415,8 +1414,8 @@ impl ClientGame {
                         if !blocked {
                             let (chunk, offset) = block_position.to_chunk_pos_offset();
                             if let Some(chunk) = self.chunks.get(&chunk) {
-                                let block = chunk.blocks.get(offset.index()).unwrap();
-                                if *block == air_block() {
+                                let block = chunk.blocks.get(offset.index()).unwrap().block;
+                                if block == air_block() {
                                     render::draw_block_model(
                                         place_block,
                                         Matrix4::from_translation(Vector3::new(
@@ -1456,13 +1455,14 @@ impl ClientGame {
                 .damage
                 .components
                 .retain_mut(|(offset, health)| {
-                    let data = chunk.blocks.get(offset.index()).unwrap().data();
+                    let data = chunk.blocks.get(offset.index()).unwrap().block.data();
                     if let Some(health_data) = &data.health {
                         health.damage -= dt
                             * chunk
                                 .blocks
                                 .get(offset.index())
                                 .unwrap()
+                                .block
                                 .data()
                                 .health
                                 .as_ref()
@@ -1558,7 +1558,7 @@ impl ClientChunk {
             vertices: Vec::new(),
         };
 
-        if self.blocks.unique_values() == 1 && *self.blocks.get(0).unwrap() == air_block() {
+        if self.blocks.unique_values() == 1 && self.blocks.get(0).unwrap().block == air_block() {
             return mesh;
         }
 
@@ -1566,7 +1566,7 @@ impl ClientChunk {
             for y in 0..CHUNK_SIZE {
                 for z in 0..CHUNK_SIZE {
                     let block = *self.blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
-                    let block_data = block.data();
+                    let block_data = block.block.data();
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { faces } => {
@@ -1595,6 +1595,7 @@ impl ClientChunk {
                                         .blocks
                                         .get(neighbor_offset.index())
                                         .unwrap()
+                                        .block
                                         .data();
                                     match &neighbor_block_data.render_data {
                                         BlockRenderData::Air | BlockRenderData::Model(_) => {}
@@ -1620,15 +1621,31 @@ impl ClientChunk {
                         BlockRenderData::Model(model) => {
                             let position = Pos {
                                 x: (self.position.x as f32 * CHUNK_SIZE as f32) + x as f32 + 0.5,
-                                y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32,
+                                y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32 + 0.5,
                                 z: (self.position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
                             };
+                            let orientation: Orientation = block.rotation.into();
+                            let right = orientation.right.get_offset();
+                            let up = orientation.up.get_offset();
+                            let front = orientation.forward.get_offset();
                             render::draw_model(
                                 *model,
                                 Matrix4::from_translation(Vector3::new(
                                     position.x, position.y, position.z,
-                                )),
-                                &mut mesh.vertex_consumer(),
+                                )) * Matrix4::from_cols(
+                                    Vector4::new(right.x, right.y, right.z, 0.),
+                                    Vector4::new(up.x, up.y, up.z, 0.),
+                                    Vector4::new(-front.x, -front.y, -front.z, 0.),
+                                    Vector4::new(0., 0., 0., 1.),
+                                ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
+                                &mut |position, tex_coords, normals| {
+                                    mesh.vertices.push(Vertex {
+                                        position,
+                                        tex_coords,
+                                        normals,
+                                        color: Color::WHITE.into(),
+                                    });
+                                },
                                 None,
                                 0.,
                                 |_| None,

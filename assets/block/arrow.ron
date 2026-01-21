@@ -1,0 +1,13 @@
+(
+    render_data: Model("arrow"),
+    health: Some((health: 5., health_regen: 0.05, table: ())),
+    loot_table: Own((
+        entries: [
+            (
+                item: "arrow",
+                chance: 1.,
+            )
+        ]
+    )),
+    rotation: Full,
+)
