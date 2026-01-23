@@ -79,6 +79,7 @@ pub enum NetworkMessageS2C {
         key: EntityKey,
         position: Pos,
         direction: LookDirection,
+        hand_item: Option<ClientItem>,
     },
     MoveEntity {
         uuid: Uuid,

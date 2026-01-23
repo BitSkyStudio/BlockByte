@@ -987,7 +987,7 @@ impl Orientation {
             forward: self.apply(other.forward),
         }
     }
-    fn apply(self, face: Face) -> Face {
+    pub fn apply(self, face: Face) -> Face {
         let (axis, dir) = face.axis_direction();
         let base = match axis {
             Axis::X => self.right,
@@ -997,18 +997,26 @@ impl Orientation {
 
         if dir { base.opposite() } else { base }
     }
+    pub fn inverse_apply(self, face: Face) -> Face {
+        for test in Face::all() {
+            if self.apply(*test) == face {
+                return *test;
+            }
+        }
+        unreachable!()
+    }
     pub fn rotate_pos(self, v: Pos) -> Pos {
         let mut out = Pos::ZERO;
         out += self.right.get_offset() * v.x;
         out += self.up.get_offset() * v.y;
-        out += self.forward.get_offset() * v.z;
+        out += -self.forward.get_offset() * v.z;
         out
     }
     pub fn rotate_block_pos(self, v: BlockPos) -> BlockPos {
         let mut out = BlockPos::ZERO;
         out += self.right.get_block_offset() * v.x;
         out += self.up.get_block_offset() * v.y;
-        out += self.forward.get_block_offset() * v.z;
+        out += -self.forward.get_block_offset() * v.z;
         out
     }
     pub fn from_front_up(front: Face, up: Face) -> Option<Self> {

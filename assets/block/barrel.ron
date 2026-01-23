@@ -20,7 +20,23 @@
                 recipes: Own((["generate_dirt"])),
                 input_view: [],
                 output_view: [8, 9]
-            )
-        ]
+            ),
+            PushItem(
+                view: [0,1],
+                speed: 1,
+                face: Back,
+                offset: (0,0,-1),
+            ),
+        ],
+        faces: (
+            front: (),
+            back: (
+                input: [2,3]
+            ),
+            left: (),
+            right: (),
+            up: (),
+            down: (),
+        )
     )),
 )

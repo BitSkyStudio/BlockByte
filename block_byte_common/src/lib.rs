@@ -127,7 +127,7 @@ impl ItemMoveMode {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct InventoryView {
     pub slots: Vec<usize>,
 }

@@ -186,10 +186,9 @@ impl Bone {
                         face.add_vertices(uv, |pos, uv| {
                             let pos = Vector3::new(pos.x, pos.y, pos.z);
                             let pos = world
-                                .transform_point(
-                                    Point3::from_vec(*from + ((*to - *from).mul_element_wise(pos)))
-                                        / BLOCKBENCH_SIZE,
-                                )
+                                .transform_point(Point3::from_vec(
+                                    *from + ((*to - *from).mul_element_wise(pos)),
+                                ))
                                 .to_vec();
                             let normal = face.get_offset();
                             let normal =
@@ -217,9 +216,7 @@ impl Bone {
                     name,
                 } => {
                     binding_consumer(
-                        world
-                            * Matrix4::from_translation(position / BLOCKBENCH_SIZE)
-                            * Matrix4::from(*rotation),
+                        world * Matrix4::from_translation(*position) * Matrix4::from(*rotation),
                         name.as_str(),
                     );
                 }
@@ -247,7 +244,7 @@ impl Bone {
                     if name == anchor {
                         return Some(
                             transform
-                                * Matrix4::from_translation(position / BLOCKBENCH_SIZE)
+                                * Matrix4::from_translation(*position)
                                 * Matrix4::from(*rotation),
                         );
                     }
@@ -412,8 +409,8 @@ impl Model {
                             rotation,
                         } => {
                             bone.elements.push(Element::Cube {
-                                from: Vector3::from(*from),
-                                to: Vector3::from(*to),
+                                from: Vector3::from(*from) / BLOCKBENCH_SIZE,
+                                to: Vector3::from(*to) / BLOCKBENCH_SIZE,
                                 origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,
                                 rotation: Euler {
                                     x: Deg(rotation[0]),
@@ -450,7 +447,7 @@ impl Model {
                             name,
                         } => {
                             bone.elements.push(Element::Locator {
-                                position: Vector3::from(*position),
+                                position: Vector3::from(*position) / BLOCKBENCH_SIZE,
                                 rotation: Euler {
                                     x: Deg(rotation[0]),
                                     y: Deg(rotation[1]),

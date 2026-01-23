@@ -1,1 +1,4 @@
 item.pickaxe=Pickaxe
+block_action.open_inventory=Open
+block_action.pickup=Pickup
+entity_action.pickup=Pickup

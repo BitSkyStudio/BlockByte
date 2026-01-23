@@ -1046,7 +1046,7 @@ pub fn draw_model(
         animation,
         time,
         |position, normal, uv, texture| {
-            let texture = textures[texture];
+            let (texture, _, _) = textures[texture];
             let uv = texture.map((uv.0, uv.1));
             vertex_consumer(
                 [position.x, position.y, position.z],

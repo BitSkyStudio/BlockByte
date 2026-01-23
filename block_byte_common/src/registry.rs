@@ -13,7 +13,7 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, Face, FaceMap, Orientation, Pos};
+use crate::coord::{AABB, BlockPos, Face, FaceMap, Orientation, Pos};
 use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
@@ -407,6 +407,17 @@ pub enum BlockInteractAction {
     },
     Pickup,
 }
+impl BlockInteractAction {
+    pub fn tooltip(&self) -> Option<&str> {
+        match self {
+            BlockInteractAction::Ignore => None,
+            BlockInteractAction::OpenInventory { screen, view } => {
+                Some("block_action.open_inventory")
+            }
+            BlockInteractAction::Pickup => Some("block_action.pickup"),
+        }
+    }
+}
 impl Default for BlockInteractAction {
     fn default() -> Self {
         Self::Ignore
@@ -417,6 +428,12 @@ pub struct BlockMachineData {
     pub inventory_size: usize,
     #[serde(default)]
     pub actions: Vec<BlockMachineAction>,
+    pub faces: FaceMap<BlockMachineFace>,
+}
+#[derive(Default, Deserialize)]
+pub struct BlockMachineFace {
+    #[serde(default)]
+    pub input: InventoryView,
 }
 #[derive(Deserialize)]
 pub enum BlockMachineAction {
@@ -425,6 +442,17 @@ pub enum BlockMachineAction {
         recipes: OwnOrKey<RecipeGroup>,
         input_view: InventoryView,
         output_view: InventoryView,
+    },
+    PushItem {
+        view: InventoryView,
+        speed: f32,
+        face: Face,
+        offset: BlockPos,
+    },
+    MoveItem {
+        from: InventoryView,
+        to: InventoryView,
+        speed: f32,
     },
 }
 #[derive(Deserialize)]
@@ -518,6 +546,14 @@ pub struct EntityData {
 pub enum EntityInteractAction {
     Ignore,
     Pickup,
+}
+impl EntityInteractAction {
+    pub fn tooltip(&self) -> Option<&str> {
+        match self {
+            EntityInteractAction::Ignore => None,
+            EntityInteractAction::Pickup => Some("block_action.pickup"),
+        }
+    }
 }
 impl Default for EntityInteractAction {
     fn default() -> Self {

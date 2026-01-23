@@ -412,11 +412,9 @@ fn main() {
                                 yaw: entity.direction.yaw,
                             };
                             let throw_force = 3.;
-                            item_entity.state.get_mut().velocity = Pos {
-                                x: entity.direction.yaw.sin(),
-                                y: 0.1,
-                                z: entity.direction.yaw.cos(),
-                            } * throw_force;
+                            let mut throw_velocity = entity.direction.make_front() * throw_force;
+                            throw_velocity.y = 0.1;
+                            item_entity.state.get_mut().velocity = throw_velocity;
                             item_entity.inventory.get_mut().items[0] = Some(drop_item);
                             server.spawn_entity(item_entity);
                         }

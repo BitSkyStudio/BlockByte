@@ -7,7 +7,7 @@ use std::{
 
 use block_byte_common::{
     Color, DamageType, InventoryView, LookDirection,
-    coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
+    coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Orientation, Pos},
     net::NetworkMessageS2C,
     registry::{
         BiomeKey, BlockData, BlockEntry, BlockInteractAction, BlockKey, BlockMachineAction,
@@ -276,7 +276,8 @@ impl Chunk {
             }
         }
         for (offset, machine) in &self.components.machine.read().components {
-            let block_data = self.blocks.read().get(offset.index()).unwrap().block.data();
+            let block = *self.blocks.read().get(offset.index()).unwrap();
+            let block_data = block.block.data();
             let machine_data = block_data.machine.as_ref().unwrap();
             let mut progress_bars = machine.progress_bars.lock();
             progress_bars.resize(machine_data.actions.len(), 0.);
@@ -310,6 +311,81 @@ impl Chunk {
                                 }
                                 *progress = recipe.craft_time * base_speed;
                                 break;
+                            }
+                        } else {
+                            *progress -= server.delta_time();
+                        }
+                    }
+                    BlockMachineAction::PushItem {
+                        view,
+                        speed,
+                        face,
+                        offset: push_offset,
+                    } => {
+                        if *progress <= 0. {
+                            let orientation = Into::<Orientation>::into(block.rotation);
+                            let other_position = orientation.rotate_block_pos(*push_offset)
+                                + offset.xyz()
+                                + self.position.to_block_pos();
+                            let Some(other_block) = server.get_block(other_position) else {
+                                continue;
+                            };
+                            let other_block_data = other_block.block.data();
+                            if let Some(other_machine_data) = &other_block_data.machine {
+                                let (other_chunk, other_offset) =
+                                    other_position.to_chunk_pos_offset();
+                                let other_chunk_machines = server
+                                    .get_chunk(other_chunk)
+                                    .unwrap()
+                                    .components
+                                    .machine
+                                    .read();
+                                let other_machine = other_chunk_machines.get(other_offset).unwrap();
+                                let face_rotated = Into::<Orientation>::into(other_block.rotation)
+                                    .inverse_apply(orientation.apply(*face));
+                                let face_data = other_machine_data.faces.by_face(face_rotated);
+                                if face_data.input.size() == 0 {
+                                    continue;
+                                }
+                                let (mut first_inventory, mut second_inventory) =
+                                    lock_inventories(&machine.inventory, &other_machine.inventory);
+                                for slot in &view.slots {
+                                    if let Some(item) = first_inventory.items[*slot].as_mut() {
+                                        if second_inventory
+                                            .add_item(&face_data.input, item.copy(1))
+                                            .is_none()
+                                        {
+                                            item.count -= 1;
+                                            if item.count == 0 {
+                                                first_inventory.items[*slot] = None;
+                                            }
+                                            *progress = *speed;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            *progress -= server.delta_time();
+                        }
+                    }
+                    BlockMachineAction::MoveItem { from, to, speed } => {
+                        if *progress <= 0. {
+                            let mut inventory = machine.inventory.write();
+                            for slot in &from.slots {
+                                if let Some(item) =
+                                    inventory.items[*slot].as_ref().map(|item| item.copy(1))
+                                {
+                                    if inventory.add_item(&to, item).is_none() {
+                                        let item = inventory.items[*slot].as_mut().unwrap();
+                                        item.count -= 1;
+                                        if item.count == 0 {
+                                            inventory.items[*slot] = None;
+                                        }
+                                        *progress = *speed;
+                                        break;
+                                    }
+                                }
                             }
                         } else {
                             *progress -= server.delta_time();
@@ -631,11 +707,20 @@ impl Entity {
 }
 impl Entity {
     pub fn create_add_message(&self) -> NetworkMessageS2C {
+        let hand_slot = self.state.lock().hand_slot;
         NetworkMessageS2C::AddEntity {
             uuid: self.uuid,
             key: self.key,
             position: self.position,
             direction: self.direction,
+            hand_item: self
+                .inventory
+                .read()
+                .items
+                .get(hand_slot)
+                .cloned()
+                .flatten()
+                .map(|item| item.client()),
         }
     }
     pub fn create_move_message(&self) -> NetworkMessageS2C {

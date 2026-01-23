@@ -22,9 +22,9 @@ use block_byte_common::{
     },
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockPalette, BlockRenderData, EntityData, EntityKey, ItemAction, Key, ModelData,
-        ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguage, air_block,
-        load_registries,
+        self, BlockPalette, BlockRenderData, BlockRotation, EntityData, EntityKey, ItemAction, Key,
+        ModelData, ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguage,
+        air_block, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -399,6 +399,52 @@ impl ApplicationHandler for App {
                         crosshair_texture,
                         Color::WHITE,
                     );
+
+                    if let Some(tooltip) = match self.camera.raycast(&self.game) {
+                        RayCastResult::Empty => None,
+                        RayCastResult::Block(pos, face) => {
+                            let (chunk, offset) = pos.to_chunk_pos_offset();
+                            self.game
+                                .chunks
+                                .get(&chunk)
+                                .unwrap()
+                                .blocks
+                                .get(offset.index())
+                                .unwrap()
+                                .block
+                                .data()
+                                .interact_action
+                                .tooltip()
+                        }
+                        RayCastResult::Entity(uuid) => self
+                            .game
+                            .entities
+                            .get(&uuid)
+                            .unwrap()
+                            .key
+                            .data()
+                            .interact_action
+                            .tooltip(),
+                    } {
+                        let text = format!("[E]{}", translate(tooltip));
+                        let size = 0.05;
+                        let Pos {
+                            x: width,
+                            y: height,
+                            ..
+                        } = text_renderer().get_size(&text, size);
+                        text_renderer().draw(
+                            Pos {
+                                x: -width / 2.,
+                                y: -height - size,
+                                z: 0.,
+                            },
+                            &text,
+                            size,
+                            Color::WHITE,
+                            &mut gui_mesh,
+                        );
+                    }
                 }
                 match render_state.render(
                     &self.camera,
@@ -547,6 +593,7 @@ impl ApplicationHandler for App {
                                 key,
                                 position,
                                 direction,
+                                hand_item,
                             } => {
                                 self.game.entities.insert(
                                     uuid,
@@ -557,7 +604,7 @@ impl ApplicationHandler for App {
                                         previous_position: position,
                                         previous_direction: direction,
                                         update_timestamp: Instant::now(),
-                                        hand_item: None,
+                                        hand_item,
                                     },
                                 );
                             }
@@ -712,7 +759,7 @@ impl<T: Hash + Eq + Copy> InputContainer<T> {
 
 pub struct TextureAtlas {
     textures: Vec<TexCoords>,
-    models: Vec<Vec<TexCoords>>,
+    models: Vec<Vec<(TexCoords, f32, f32)>>,
 }
 
 impl TextureAtlas {
@@ -817,14 +864,18 @@ impl TextureAtlas {
                             .map(|(j, _)| {
                                 let frame =
                                     packer.get_frame(&TextureAtlasEntry::Model(i, j)).unwrap();
-                                TexCoords {
-                                    u1: frame.frame.x as f32 / packer.width() as f32,
-                                    v1: frame.frame.y as f32 / packer.height() as f32,
-                                    u2: (frame.frame.x + frame.frame.w) as f32
-                                        / packer.width() as f32,
-                                    v2: (frame.frame.y + frame.frame.h) as f32
-                                        / packer.height() as f32,
-                                }
+                                (
+                                    TexCoords {
+                                        u1: frame.frame.x as f32 / packer.width() as f32,
+                                        v1: frame.frame.y as f32 / packer.height() as f32,
+                                        u2: (frame.frame.x + frame.frame.w) as f32
+                                            / packer.width() as f32,
+                                        v2: (frame.frame.y + frame.frame.h) as f32
+                                            / packer.height() as f32,
+                                    },
+                                    frame.frame.w as f32,
+                                    frame.frame.h as f32,
+                                )
                             })
                             .collect()
                     })
@@ -1235,11 +1286,11 @@ impl ClientGame {
             }
             let lerp_time = (entity.update_timestamp.elapsed().as_secs_f32() / (1. / 40.)).min(1.);
             let position = entity.previous_position.lerp(entity.position, lerp_time);
-            let rotation = block_byte_common::coord::lerp_number(
+            let rotation = -block_byte_common::coord::lerp_number(
                 entity.previous_direction.yaw,
                 entity.direction.yaw,
                 lerp_time,
-            ) + std::f32::consts::PI;
+            );
             render::draw_model(
                 entity.key.data().model,
                 Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
@@ -1281,9 +1332,10 @@ impl ClientGame {
                     {
                         continue;
                     }
-                    let block = chunk.blocks.get(offset.index()).unwrap().block.data();
+                    let block = chunk.blocks.get(offset.index()).unwrap();
+                    let block_data = block.block.data();
                     let progress = (damage.damage
-                        / block
+                        / block_data
                             .health
                             .as_ref()
                             .map(|health| health.health)
@@ -1294,30 +1346,66 @@ impl ClientGame {
                             .min(crack_textures.len()),
                     )
                     .unwrap();*/
-
-                    for face in Face::all() {
-                        face.add_vertices(
-                            TexCoords {
-                                u1: 0.,
-                                v1: 0.,
-                                u2: 32.,
-                                v2: 32.,
-                            },
-                            |position, coords| {
-                                let border = 0.;
-                                let vt_pos = base_position + position * (1. + border * 2.)
-                                    - Pos {
-                                        x: border,
-                                        y: border,
-                                        z: border,
-                                    };
-                                damage_mesh.vertices.push(DamageVertex {
-                                    position: [vt_pos.x, vt_pos.y, vt_pos.z],
-                                    tex_coords: [coords.0, coords.1],
-                                    progress,
-                                });
-                            },
-                        );
+                    match &block_data.render_data {
+                        BlockRenderData::Air => {}
+                        BlockRenderData::Full { .. } => {
+                            for face in Face::all() {
+                                face.add_vertices(
+                                    TexCoords {
+                                        u1: 0.,
+                                        v1: 0.,
+                                        u2: 32.,
+                                        v2: 32.,
+                                    },
+                                    |position, coords| {
+                                        let border = 0.;
+                                        let vt_pos = base_position + position * (1. + border * 2.)
+                                            - Pos {
+                                                x: border,
+                                                y: border,
+                                                z: border,
+                                            };
+                                        damage_mesh.vertices.push(DamageVertex {
+                                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
+                                            tex_coords: [coords.0, coords.1],
+                                            progress,
+                                        });
+                                    },
+                                );
+                            }
+                        }
+                        BlockRenderData::Model(model_key) => {
+                            let orientation: Orientation = block.rotation.into();
+                            let right = orientation.right.get_offset();
+                            let up = orientation.up.get_offset();
+                            let front = orientation.forward.get_offset();
+                            let model = &model_key.data().model;
+                            let textures =
+                                &TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()];
+                            model.draw(
+                                Matrix4::from_translation(Vector3::new(
+                                    base_position.x + 0.5,
+                                    base_position.y + 0.5,
+                                    base_position.z + 0.5,
+                                )) * Matrix4::from_cols(
+                                    Vector4::new(right.x, right.y, right.z, 0.),
+                                    Vector4::new(up.x, up.y, up.z, 0.),
+                                    Vector4::new(-front.x, -front.y, -front.z, 0.),
+                                    Vector4::new(0., 0., 0., 1.),
+                                ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
+                                None,
+                                0.,
+                                |position, normal, uv, texture| {
+                                    let (_, width, height) = textures[texture];
+                                    damage_mesh.vertices.push(DamageVertex {
+                                        position: [position.x, position.y, position.z],
+                                        tex_coords: [uv.0 * width, uv.1 * height],
+                                        progress,
+                                    });
+                                },
+                                |matrix, binding| {},
+                            );
+                        }
                     }
                 }
                 for (offset, plants) in &chunk.components.plant.components {
@@ -1416,13 +1504,26 @@ impl ClientGame {
                             if let Some(chunk) = self.chunks.get(&chunk) {
                                 let block = chunk.blocks.get(offset.index()).unwrap().block;
                                 if block == air_block() {
+                                    let rotation = place_block
+                                        .data()
+                                        .rotation
+                                        .get_nearest_valid(BlockRotation::from(camera.direction));
+                                    let orientation: Orientation = rotation.into();
+                                    let right = orientation.right.get_offset();
+                                    let up = orientation.up.get_offset();
+                                    let front = orientation.forward.get_offset();
                                     render::draw_block_model(
                                         place_block,
                                         Matrix4::from_translation(Vector3::new(
                                             block_position.x as f32 + 0.5,
-                                            block_position.y as f32,
+                                            block_position.y as f32 + 0.5,
                                             block_position.z as f32 + 0.5,
-                                        )),
+                                        )) * Matrix4::from_cols(
+                                            Vector4::new(right.x, right.y, right.z, 0.),
+                                            Vector4::new(up.x, up.y, up.z, 0.),
+                                            Vector4::new(-front.x, -front.y, -front.z, 0.),
+                                            Vector4::new(0., 0., 0., 1.),
+                                        ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
                                         &mut |position, tex_coords, normals| {
                                             entity_mesh.vertices.push(Vertex {
                                                 position,
