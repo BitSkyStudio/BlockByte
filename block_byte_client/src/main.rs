@@ -22,9 +22,9 @@ use block_byte_common::{
     },
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockPalette, BlockRenderData, BlockRotation, EntityData, EntityKey, ItemAction, Key,
-        ModelData, ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguage,
-        air_block, load_registries,
+        self, BlockPalette, BlockRenderData, BlockRotation, EntityData, EntityKey, ItemAction,
+        ItemKey, Key, ModelData, ModelKey, Registry, TextureData, TextureKey, ToolData,
+        TranslationLanguage, air_block, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -195,10 +195,8 @@ impl ApplicationHandler for App {
                         .enumerate()
                         {
                             if key_code == *key {
-                                self.send_message(NetworkMessageC2S::HotbarSelect {
-                                    slot: slot as isize,
-                                    relative: false,
-                                });
+                                self.game.hotbar_slot = slot;
+                                self.send_message(NetworkMessageC2S::HotbarSelect { slot });
                             }
                         }
                         if key_code == KeyCode::KeyE && self.game.screen.is_none() {
@@ -235,9 +233,12 @@ impl ApplicationHandler for App {
             } => match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, scroll) => {
                     if self.game.screen.is_none() {
+                        let mut new_slot = self.game.hotbar_slot as isize;
+                        new_slot += -scroll as isize;
+                        new_slot = ((new_slot % 10) + 10) % 10;
+                        self.game.hotbar_slot = new_slot as usize;
                         self.send_message(NetworkMessageC2S::HotbarSelect {
-                            slot: -scroll as isize,
-                            relative: true,
+                            slot: new_slot as usize,
                         });
                     }
                 }
@@ -259,7 +260,18 @@ impl ApplicationHandler for App {
                 if state == ElementState::Pressed && self.game.screen.is_none() {
                     match (self.camera.raycast(&self.game), button) {
                         (RayCastResult::Block(position, face), MouseButton::Right) => {
-                            self.send_message(NetworkMessageC2S::PlaceBlock { position, face });
+                            self.send_message(NetworkMessageC2S::PlaceBlock {
+                                position,
+                                face,
+                                variant: self
+                                    .game
+                                    .held_item()
+                                    .as_ref()
+                                    .and_then(|item| {
+                                        self.game.item_variation.get(&item.item).cloned()
+                                    })
+                                    .unwrap_or(0),
+                            });
                         }
                         _ => {}
                     }
@@ -327,6 +339,11 @@ impl ApplicationHandler for App {
                     Color::WHITE,
                     &mut gui_mesh,
                 );
+                self.game
+                    .hud
+                    .properties
+                    .0
+                    .insert("hotbar_slot".to_string(), self.game.hotbar_slot as f32);
                 render_screen(
                     &self.game.hud,
                     render_state.size(),
@@ -382,6 +399,17 @@ impl ApplicationHandler for App {
                 if let Some((_, button)) = self.game.selected_slot.as_ref() {
                     if !self.game.buttons.is_down(*button) {
                         self.game.selected_slot = None;
+                    }
+                }
+                if let Some(held_item) = self.game.held_item() {
+                    if self.game.keys.is_just_down(KeyCode::KeyG) {
+                        let variation_count = match &held_item.item.data().action {
+                            ItemAction::Ignore => 1,
+                            ItemAction::Place(item_block_placements) => item_block_placements.len(),
+                        };
+                        let variation = self.game.item_variation.entry(held_item.item).or_insert(0);
+                        *variation += 1;
+                        *variation %= variation_count;
                     }
                 }
                 let render_state = self.render_state.as_mut().unwrap();
@@ -677,14 +705,9 @@ impl ApplicationHandler for App {
                                     .window()
                                     .set_cursor_visible(false);
                             }
-                            NetworkMessageS2C::HUDUpdate {
-                                items,
-                                properties,
-                                held_item,
-                            } => {
-                                self.game.hud.slots = items;
-                                self.game.hud.properties = properties;
-                                match (&self.game.held_item, &held_item) {
+                            NetworkMessageS2C::HUDSlot { slot, item } => {
+                                self.game.hud.slots[slot] = item;
+                                /*match (&self.game.held_item, &held_item) {
                                     (None, None) => {}
                                     (Some(first), Some(second)) => {
                                         if first.item != second.item {
@@ -694,8 +717,7 @@ impl ApplicationHandler for App {
                                     _ => {
                                         self.game.hit_timer = None;
                                     }
-                                }
-                                self.game.held_item = held_item;
+                                }*/
                             }
                             NetworkMessageS2C::EntityHandItem { uuid, item } => {
                                 if let Some(entity) = self.game.entities.get_mut(&uuid) {
@@ -783,10 +805,11 @@ impl TextureAtlas {
                 texture_padding: 0,
                 trim: false,
                 texture_extrusion: 0,
+                force_max_dimensions: true,
             });
         for (i, texture) in texture_registry.data_entries().enumerate() {
             packer
-                .pack_ref(TextureAtlasEntry::Texture(i), &texture.texture)
+                .pack_ref(TextureAtlasEntry::Texture(i), &*texture.texture)
                 .unwrap();
         }
         for (i, model) in model_registry.data_entries().enumerate() {
@@ -833,7 +856,7 @@ impl TextureAtlas {
         }
         use texture_packer::exporter::ImageExporter;
         use texture_packer::texture::Texture;
-        let exporter = ImageExporter::export(&packer).unwrap();
+        let exporter = ImageExporter::export(&packer, None).unwrap();
         if false {
             exporter.save(Path::new("textureatlasdump.png")).unwrap();
         }
@@ -1191,11 +1214,12 @@ pub struct ClientGame {
     pub screen: Option<ScreenData>,
     pub hud: ScreenData,
     pub hit_timer: Option<f32>,
-    pub held_item: Option<ClientItem>,
     pub keys: InputContainer<KeyCode>,
     pub buttons: InputContainer<MouseButton>,
     pub cursor_position: PhysicalPosition<f64>,
     pub selected_slot: Option<(usize, MouseButton)>,
+    pub hotbar_slot: usize,
+    pub item_variation: HashMap<ItemKey, usize>,
 }
 impl Default for ClientGame {
     fn default() -> Self {
@@ -1208,21 +1232,25 @@ impl Default for ClientGame {
             screen: None,
             hud: ScreenData {
                 screen: Key::id("hud").unwrap(),
-                slots: vec![],
+                slots: vec![None; 10],
                 properties: PropertyMap(HashMap::new()),
             },
             hit_timer: None,
-            held_item: None,
             keys: InputContainer::default(),
             buttons: InputContainer::default(),
             cursor_position: PhysicalPosition::new(0., 0.),
             selected_slot: None,
+            hotbar_slot: 0,
+            item_variation: HashMap::new(),
         }
     }
 }
 impl ClientGame {
+    pub fn held_item(&self) -> &Option<ClientItem> {
+        &self.hud.slots[self.hotbar_slot]
+    }
     pub fn active_tool(&self) -> ToolData {
-        self.held_item
+        self.held_item()
             .as_ref()
             .and_then(|item| item.item.data().tool)
             .unwrap_or(ToolData::hand())
@@ -1243,7 +1271,7 @@ impl ClientGame {
             Some("hit"),
             self.hit_timer.unwrap_or(0.) / self.active_tool().swing_time,
             |binding| match binding {
-                "hand" => self.held_item.clone(),
+                "hand" => self.held_item().clone(),
                 _ => None,
             },
         );
@@ -1354,8 +1382,8 @@ impl ClientGame {
                                     TexCoords {
                                         u1: 0.,
                                         v1: 0.,
-                                        u2: 32.,
-                                        v2: 32.,
+                                        u2: 16.,
+                                        v2: 16.,
                                     },
                                     |position, coords| {
                                         let border = 0.;
@@ -1456,23 +1484,23 @@ impl ClientGame {
                                     color: Color::WHITE.into(),
                                 },
                                 Vertex {
-                                    position: [first.x, first.y + plant.height, first.z],
-                                    tex_coords: [texture.u1, texture.v1],
-                                    normals: [0., 1., 0.],
-                                    color: Color::WHITE.into(),
-                                },
-                                Vertex {
                                     position: [second.x, second.y + plant.height, second.z],
                                     tex_coords: [texture.u2, texture.v1],
                                     normals: [0., 1., 0.],
                                     color: Color::WHITE.into(),
                                 },
+                                Vertex {
+                                    position: [first.x, first.y + plant.height, first.z],
+                                    tex_coords: [texture.u1, texture.v1],
+                                    normals: [0., 1., 0.],
+                                    color: Color::WHITE.into(),
+                                },
                             ];
                             entity_mesh.vertices.push(vertices[0]);
-                            entity_mesh.vertices.push(vertices[3]);
-                            entity_mesh.vertices.push(vertices[2]);
-                            entity_mesh.vertices.push(vertices[2]);
                             entity_mesh.vertices.push(vertices[1]);
+                            entity_mesh.vertices.push(vertices[2]);
+                            entity_mesh.vertices.push(vertices[2]);
+                            entity_mesh.vertices.push(vertices[3]);
                             entity_mesh.vertices.push(vertices[0]);
                         }
                     }
@@ -1480,12 +1508,17 @@ impl ClientGame {
             }
         }
 
-        if let Some(held_item) = &self.held_item {
-            match held_item.item.data().action {
+        if let Some(held_item) = self.held_item() {
+            match &held_item.item.data().action {
                 ItemAction::Place(place_block) => match camera.raycast(self) {
                     RayCastResult::Block(position, face) => {
+                        let place_block = &place_block[self
+                            .item_variation
+                            .get(&held_item.item)
+                            .cloned()
+                            .unwrap_or(0)];
                         let block_position = position + face.get_block_offset();
-                        let mut blocked = false;
+                        let mut blocked = place_block.use_count > held_item.count;
                         for entity in self.entities.values() {
                             if entity
                                 .key
@@ -1499,47 +1532,55 @@ impl ClientGame {
                                 break;
                             }
                         }
-                        if !blocked {
-                            let (chunk, offset) = block_position.to_chunk_pos_offset();
-                            if let Some(chunk) = self.chunks.get(&chunk) {
-                                let block = chunk.blocks.get(offset.index()).unwrap().block;
-                                if block == air_block() {
-                                    let rotation = place_block
-                                        .data()
-                                        .rotation
-                                        .get_nearest_valid(BlockRotation::from(camera.direction));
-                                    let orientation: Orientation = rotation.into();
-                                    let right = orientation.right.get_offset();
-                                    let up = orientation.up.get_offset();
-                                    let front = orientation.forward.get_offset();
-                                    render::draw_block_model(
-                                        place_block,
-                                        Matrix4::from_translation(Vector3::new(
-                                            block_position.x as f32 + 0.5,
-                                            block_position.y as f32 + 0.5,
-                                            block_position.z as f32 + 0.5,
-                                        )) * Matrix4::from_cols(
-                                            Vector4::new(right.x, right.y, right.z, 0.),
-                                            Vector4::new(up.x, up.y, up.z, 0.),
-                                            Vector4::new(-front.x, -front.y, -front.z, 0.),
-                                            Vector4::new(0., 0., 0., 1.),
-                                        ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
-                                        &mut |position, tex_coords, normals| {
-                                            entity_mesh.vertices.push(Vertex {
-                                                position,
-                                                tex_coords,
-                                                normals,
-                                                color: Color {
+                        let (chunk, offset) = block_position.to_chunk_pos_offset();
+                        if let Some(chunk) = self.chunks.get(&chunk) {
+                            let block = chunk.blocks.get(offset.index()).unwrap().block;
+                            if block == air_block() {
+                                let rotation = place_block
+                                    .block
+                                    .data()
+                                    .rotation
+                                    .get_nearest_valid(BlockRotation::from(camera.direction));
+                                let orientation: Orientation = rotation.into();
+                                let right = orientation.right.get_offset();
+                                let up = orientation.up.get_offset();
+                                let front = orientation.forward.get_offset();
+                                render::draw_block_model(
+                                    place_block.block,
+                                    Matrix4::from_translation(Vector3::new(
+                                        block_position.x as f32 + 0.5,
+                                        block_position.y as f32 + 0.5,
+                                        block_position.z as f32 + 0.5,
+                                    )) * Matrix4::from_cols(
+                                        Vector4::new(right.x, right.y, right.z, 0.),
+                                        Vector4::new(up.x, up.y, up.z, 0.),
+                                        Vector4::new(-front.x, -front.y, -front.z, 0.),
+                                        Vector4::new(0., 0., 0., 1.),
+                                    ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
+                                    &mut |position, tex_coords, normals| {
+                                        entity_mesh.vertices.push(Vertex {
+                                            position,
+                                            tex_coords,
+                                            normals,
+                                            color: if blocked {
+                                                Color {
+                                                    r: 255,
+                                                    g: 100,
+                                                    b: 100,
+                                                    a: 100,
+                                                }
+                                            } else {
+                                                Color {
                                                     r: 255,
                                                     g: 255,
                                                     b: 255,
                                                     a: 100,
                                                 }
-                                                .into(),
-                                            });
-                                        },
-                                    );
-                                }
+                                            }
+                                            .into(),
+                                        });
+                                    },
+                                );
                             }
                         }
                     }

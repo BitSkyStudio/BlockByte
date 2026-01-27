@@ -185,6 +185,16 @@ impl<T: Copy + DivAssign> DivAssign<T> for Vec3<T> {
     }
 }
 
+impl<T: Copy> Vec3<T> {
+    pub const fn all(value: T) -> Vec3<T> {
+        Vec3 {
+            x: value,
+            y: value,
+            z: value,
+        }
+    }
+}
+
 pub type Pos = Vec3<f32>;
 pub type BlockPos = Vec3<i32>;
 pub type ChunkPos = Vec3<i16>;
@@ -208,13 +218,6 @@ impl Pos {
         z: 1.,
     };
     pub const ZERO: Pos = Pos::all(0.);
-    pub const fn all(value: f32) -> Pos {
-        Pos {
-            x: value,
-            y: value,
-            z: value,
-        }
-    }
     pub const fn to_block_pos(self) -> BlockPos {
         BlockPos {
             x: self.x.floor() as i32,

@@ -11,7 +11,7 @@ use std::{
 
 use block_byte_common::{
     ClientItem, Color, InventoryView, LookDirection, MoveMode, PlayerAbilities,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Pos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockData, BlockEntry, BlockKey, BlockRotation, EntityKey, ItemAction, ItemKey,
@@ -127,6 +127,10 @@ fn main() {
                 &full_view,
                 ItemStack::new(ItemKey::id("arrow").unwrap(), 20),
             );
+            entity.inventory.get_mut().add_item(
+                &full_view,
+                ItemStack::new(ItemKey::id("leaves").unwrap(), 20),
+            );
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
@@ -147,7 +151,7 @@ fn main() {
                 user,
                 NetworkMessageS2C::PlayerAbilities {
                     abilities: PlayerAbilities {
-                        move_mode: MoveMode::Normal,
+                        move_mode: MoveMode::Fly,
                         speed: 1.2,
                     },
                 },
@@ -217,13 +221,9 @@ fn main() {
                     bincode::serde::decode_from_slice(&message, bincode::config::standard())
                         .unwrap();
                 let find_entity_next_to_player = |entity_id: Uuid| {
-                    for chunk in (AABB::<i16> {
-                        min: ChunkPos {
-                            x: -1,
-                            y: -1,
-                            z: -1,
-                        },
-                        max: ChunkPos { x: 1, y: 1, z: 1 },
+                    for chunk in (AABB {
+                        min: ChunkPos::all(-1),
+                        max: ChunkPos::all(1),
                     }
                     .offset(*user.view_position.lock()))
                     {
@@ -305,26 +305,40 @@ fn main() {
                             );
                         }
                     }
-                    NetworkMessageC2S::PlaceBlock { position, face } => {
+                    NetworkMessageC2S::PlaceBlock {
+                        position,
+                        face,
+                        variant,
+                    } => {
                         if let Some(entity) = user.entity {
                             let entity = server.entities.get(entity).unwrap();
                             let hotbar_slot = entity.state.lock().hand_slot;
                             let mut inventory = entity.inventory.write();
-                            if let Some(item) = &mut inventory.items[hotbar_slot] {
-                                match item.item.data().action {
+                            if let Some(item) = inventory.get_slot_mut_raw(hotbar_slot) {
+                                match &item.item.data().action {
                                     ItemAction::Ignore => {}
                                     ItemAction::Place(place) => {
+                                        let Some(place) = place.get(variant) else {
+                                            continue;
+                                        };
+                                        if item.count < place.use_count {
+                                            continue;
+                                        }
                                         if let Ok(_) = server.place(
                                             position + face.get_block_offset(),
                                             BlockEntry {
-                                                block: place,
+                                                block: place.block,
                                                 color: Color::WHITE,
-                                                rotation: place.data().rotation.get_nearest_valid(
-                                                    BlockRotation::from(entity.direction),
-                                                ),
+                                                rotation: place
+                                                    .block
+                                                    .data()
+                                                    .rotation
+                                                    .get_nearest_valid(BlockRotation::from(
+                                                        entity.direction,
+                                                    )),
                                             },
                                         ) {
-                                            item.count -= 1;
+                                            item.count -= place.use_count;
                                             if item.count == 0 {
                                                 inventory.items[hotbar_slot] = None;
                                             }
@@ -339,18 +353,10 @@ fn main() {
                             screen.state = UserScreenState::Close;
                         }
                     }
-                    NetworkMessageC2S::HotbarSelect { slot, relative } => {
+                    NetworkMessageC2S::HotbarSelect { slot } => {
                         if let Some(entity) = user.entity {
                             let entity = server.entities.get_mut(entity).unwrap();
-                            let new_slot = if relative {
-                                entity.state.get_mut().hand_slot as isize + slot
-                            } else {
-                                slot
-                            };
-                            let hotbar_size = 10;
-                            let new_slot =
-                                ((new_slot % hotbar_size + hotbar_size) % hotbar_size) as usize;
-                            entity.state.get_mut().hand_slot = new_slot;
+                            entity.state.get_mut().hand_slot = slot;
                         }
                     }
                     NetworkMessageC2S::InteractBlock { position } => {
@@ -391,8 +397,10 @@ fn main() {
                     NetworkMessageC2S::DropItem { stack } => {
                         if let Some(entity) = user.entity {
                             let entity = server.entities.get_mut(entity).unwrap();
-                            let slot = &mut entity.inventory.get_mut().items
-                                [entity.state.get_mut().hand_slot];
+                            let slot = entity
+                                .inventory
+                                .get_mut()
+                                .get_slot_mut_raw(entity.state.get_mut().hand_slot);
                             let drop_item = if let Some(item) = slot {
                                 if item.count == 1 || stack {
                                     slot.take().unwrap()
@@ -434,13 +442,13 @@ fn main() {
                                             &mut Option<ItemStack>,
                                             &mut Option<ItemStack>,
                                         >(
-                                            &&mut (inventory
+                                            &inventory
                                                 .get_inventory(
                                                     &mut server.entities,
                                                     &mut server.chunks,
                                                 )
                                                 .unwrap()
-                                                .items[view.slots[from - running_index]]),
+                                                .get_slot_mut(view, from - running_index),
                                         )
                                     });
                                 }
@@ -450,13 +458,13 @@ fn main() {
                                             &mut Option<ItemStack>,
                                             &mut Option<ItemStack>,
                                         >(
-                                            &&mut inventory
+                                            &&inventory
                                                 .get_inventory(
                                                     &mut server.entities,
                                                     &mut server.chunks,
                                                 )
                                                 .unwrap()
-                                                .items[view.slots[to - running_index]],
+                                                .get_slot_mut(view, to - running_index),
                                         )
                                     });
                                 }
@@ -509,35 +517,26 @@ fn main() {
 
         for (user_index, user) in &server.users {
             {
-                let (inventory, hotbar_slot) = match user
+                let inventory = match user
                     .entity
                     .as_ref()
                     .and_then(|entity| server.entities.get_mut(*entity))
                 {
-                    Some(entity) => (
-                        entity
-                            .inventory
-                            .get_mut()
-                            .items
-                            .iter()
-                            .map(|item| item.as_ref().map(|item| item.client()))
-                            .collect(),
-                        entity.state.get_mut().hand_slot,
-                    ),
-                    None => (vec![], 0),
+                    Some(entity) => entity
+                        .inventory
+                        .get_mut()
+                        .items
+                        .iter()
+                        .map(|item| item.as_ref().map(|item| item.client()))
+                        .collect(),
+                    None => vec![],
                 };
-                server.message_queue.send_message(
-                    std::iter::once(user_index),
-                    NetworkMessageS2C::HUDUpdate {
-                        held_item: inventory.get(hotbar_slot).cloned().flatten(),
-                        items: inventory,
-                        properties: {
-                            let mut properties = HashMap::new();
-                            properties.insert("hotbar_slot".to_string(), hotbar_slot as f32);
-                            PropertyMap(properties)
-                        },
-                    },
-                );
+                for (i, item) in inventory.into_iter().enumerate() {
+                    server.message_queue.send_message(
+                        std::iter::once(user_index),
+                        NetworkMessageS2C::HUDSlot { slot: i, item },
+                    );
+                }
             }
             let mut screen_lock = user.screen.lock();
             if let Some(screen) = &mut *screen_lock {
@@ -869,12 +868,8 @@ impl Server {
             }
         };
         for chunk in (AABB {
-            min: ChunkPos {
-                x: -1,
-                y: -1,
-                z: -1,
-            },
-            max: ChunkPos { x: 1, y: 1, z: 1 },
+            min: ChunkPos::all(-1),
+            max: ChunkPos::all(1),
         }
         .offset(position.to_chunk_pos()))
         {
@@ -1017,6 +1012,7 @@ impl ChunkViewingManager {
                                 Some(entity)
                             })
                             .collect(),
+                        decorated: chunk.decorated,
                     },
                 )
             })
@@ -1040,14 +1036,15 @@ impl ChunkViewingManager {
             drop(statement);
             transaction.commit().unwrap();
         }
+        let mut to_decorate = Vec::new();
+        let db = db.lock();
+        let mut stmt = db
+            .prepare_cached("SELECT data FROM chunks WHERE x=?1 and y=?2 and z=?3")
+            .unwrap();
         for (position, users, load_message, (mut chunk, entities)) in self
             .load
             .into_iter()
-            .map(|(position, users)| {
-                let db = db.lock();
-                let mut stmt = db
-                    .prepare_cached("SELECT data FROM chunks WHERE x=?1 and y=?2 and z=?3")
-                    .unwrap();
+            .map(move |(position, users)| {
                 let data = stmt
                     .query_row((position.x, position.y, position.z), |row| {
                         row.get::<_, Vec<u8>>(0)
@@ -1055,7 +1052,8 @@ impl ChunkViewingManager {
                     .ok();
                 (position, users, data)
             })
-            .par_bridge()
+            .collect::<Vec<_>>()
+            .into_par_iter()
             .map(|(position, users, data)| {
                 let mut chunk = match data.and_then(|data| {
                     match serde_cbor::from_slice::<ChunkSaveData>(data.as_slice()) {
@@ -1074,6 +1072,7 @@ impl ChunkViewingManager {
                             position,
                             viewers: HashSet::new(),
                             entities: Vec::new(),
+                            decorated: data.decorated,
                         },
                         data.entities,
                     ),
@@ -1092,6 +1091,29 @@ impl ChunkViewingManager {
             })
             .collect::<Vec<_>>()
         {
+            for face in Face::all() {
+                let chunk_position = chunk.position + face.get_chunk_offset();
+                if let Some(chunk) = server.chunks.get(&chunk_position) {
+                    if !chunk.decorated {
+                        let mut failed = false;
+                        for offset in (AABB {
+                            min: ChunkPos::all(-1),
+                            max: ChunkPos::all(1),
+                        }
+                        .offset(chunk_position))
+                        {
+                            if !server.chunks.contains_key(&(chunk_position + offset)) {
+                                failed = true;
+                                break;
+                            }
+                        }
+                        if !failed {
+                            to_decorate.push(chunk_position);
+                            server.chunks.get_mut(&chunk_position).unwrap().decorated = true;
+                        }
+                    }
+                }
+            }
             chunk.viewers = users.iter().cloned().collect();
             for entity in entities {
                 server.send_message_multiple(users.iter(), entity.create_add_message());

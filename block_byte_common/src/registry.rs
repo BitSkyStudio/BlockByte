@@ -2,10 +2,12 @@ use std::cell::OnceCell;
 #[cfg(feature = "client")]
 use std::default;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
 use anyhow::anyhow;
+use image::DynamicImage;
+use image_overlay::overlay_dyn_img;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
@@ -127,7 +129,7 @@ macro_rules! create_registries{
             }
         )*
         pub trait RegistryConfigLoadable: Sized{
-            fn registry_load_from_config(config: &Path) -> anyhow::Result<Self>;
+            fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self>;
         }
         pub fn load_registries(asset_path: &Path) {
             let mut load_registry = LoadRegistryStorage {
@@ -159,7 +161,7 @@ macro_rules! create_registries{
                     let load_registry = &load_registry.$id;
                     let mut data_list = Vec::with_capacity(load_registry.data_list.len());
                     for (i, data) in load_registry.data_list.iter().enumerate(){
-                        match <$type as RegistryConfigLoadable>::registry_load_from_config(&data,){
+                        match <$type as RegistryConfigLoadable>::registry_load_from_config(&data,Key(unsafe{NonZero::new_unchecked(i+1)}, PhantomData)){
                             Ok(data) => {data_list.push(data);},
                             Err(error) => {
                                 eprintln!("error loading {} {} - {}", stringify!($id), load_registry.id_list[i], error);
@@ -245,15 +247,18 @@ where
         REGISTRIES.get().unwrap().get_registry().by_key(self)
     }
     pub fn text_id(self) -> &'static str {
-        REGISTRIES.get().unwrap().get_registry().id_list[self.numeric_id()].as_str()
+        LOAD_REGISTRIES.get().unwrap().get_load_registry().id_list[self.numeric_id()].as_str()
     }
     pub fn id(id: &str) -> Option<Self> {
         LOAD_REGISTRIES.get().unwrap().get_load_registry().key(id)
     }
+    pub fn path(self) -> &'static Path {
+        LOAD_REGISTRIES.get().unwrap().get_load_registry().data_list[self.numeric_id()].as_path()
+    }
 }
 
 impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
-    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
         ron::from_str::<T>(std::fs::read_to_string(config).unwrap().as_str())
             .map_err(|error| anyhow::anyhow!("{}", error))
     }
@@ -297,7 +302,16 @@ pub struct ItemData {
 #[derive(Deserialize)]
 pub enum ItemAction {
     Ignore,
-    Place(BlockKey),
+    Place(Vec<ItemBlockPlacement>),
+}
+fn default_use_count() -> u16 {
+    1
+}
+#[derive(Deserialize)]
+pub struct ItemBlockPlacement {
+    pub block: BlockKey,
+    #[serde(default = "default_use_count")]
+    pub use_count: u16,
 }
 impl Default for ItemAction {
     fn default() -> Self {
@@ -397,6 +411,8 @@ pub struct BlockHealthData {
     pub health: f32,
     pub health_regen: f32,
     pub table: DamageTable,
+    #[serde(default = "air_block")]
+    pub transform_block: BlockKey,
 }
 #[derive(Deserialize)]
 pub enum BlockInteractAction {
@@ -515,17 +531,59 @@ impl From<LookDirection> for BlockRotation {
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub struct BlockRotation(u8);
 
+//todo: config client
+static IMAGE_CACHE: OnceLock<Mutex<HashMap<TextureKey, Arc<DynamicImage>>>> = OnceLock::new();
+fn image_cache() -> MutexGuard<'static, HashMap<TextureKey, Arc<DynamicImage>>> {
+    IMAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+}
 pub struct TextureData {
-    #[cfg(feature = "client")]
-    pub texture: image::DynamicImage,
+    pub texture: Arc<DynamicImage>,
 }
 pub type TextureKey = Key<TextureData>;
 impl RegistryConfigLoadable for TextureData {
-    fn registry_load_from_config(config: &Path) -> anyhow::Result<TextureData> {
-        Ok(Self {
-            #[cfg(feature = "client")]
-            texture: image::open(config)?,
-        })
+    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<TextureData> {
+        let texture = match config.extension().unwrap().to_str().unwrap() {
+            "png" => Arc::new(image::open(config)?),
+            "ron" => {
+                let texture =
+                    ron::from_str::<ComposedTexture>(std::fs::read_to_string(config)?.as_str())?;
+                texture.resolve(config.parent().unwrap())
+            }
+            _ => panic!(),
+        };
+        image_cache().insert(key, texture.clone());
+        Ok(TextureData { texture })
+    }
+}
+#[derive(Deserialize)]
+enum ComposedTexture {
+    Image(TextureKey),
+    Overlay {
+        base: Box<ComposedTexture>,
+        overlay: Box<ComposedTexture>,
+    },
+}
+impl ComposedTexture {
+    pub fn resolve(&self, texture_path: &Path) -> Arc<DynamicImage> {
+        match self {
+            ComposedTexture::Image(key) => {
+                if let Some(image) = image_cache().get(key) {
+                    return Arc::clone(image);
+                }
+                TextureData::registry_load_from_config(key.path(), *key)
+                    .unwrap()
+                    .texture
+            }
+            ComposedTexture::Overlay { base, overlay } => {
+                let mut base = Arc::unwrap_or_clone(base.resolve(texture_path));
+                let overlay = overlay.resolve(texture_path);
+                overlay_dyn_img(&mut base, &overlay, 0, 0, image_overlay::BlendMode::Normal);
+                Arc::new(base)
+            }
+        }
     }
 }
 #[derive(Deserialize)]
@@ -622,7 +680,7 @@ pub struct ModelData {
 }
 pub type ModelKey = Key<ModelData>;
 impl RegistryConfigLoadable for ModelData {
-    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
         let json = std::fs::read_to_string(config).map_err(|_| anyhow!("error loading"))?;
         Ok(ModelData {
             model: serde_json::from_str(&json).map_err(|err| anyhow!("error loading {:?}", err))?,
@@ -642,7 +700,7 @@ impl TranslationLanguage {
     }
 }
 impl RegistryConfigLoadable for TranslationLanguage {
-    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
         let mut translation = TranslationLanguage {
             translations: HashMap::new(),
         };

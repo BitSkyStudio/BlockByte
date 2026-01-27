@@ -40,6 +40,7 @@ pub struct ChunkSaveData {
     pub block_events: Vec<(ChunkOffset, BlockEvent)>,
     pub components: ChunkBlockComponents,
     pub entities: Vec<Entity>,
+    pub decorated: bool,
 }
 pub struct Chunk {
     pub position: ChunkPos,
@@ -48,6 +49,7 @@ pub struct Chunk {
     pub block_events: Mutex<Vec<(ChunkOffset, BlockEvent)>>,
     pub components: ChunkBlockComponents,
     pub entities: Vec<EntityIndex>,
+    pub decorated: bool,
 }
 impl Chunk {
     pub fn generate(position: ChunkPos) -> Chunk {
@@ -60,6 +62,7 @@ impl Chunk {
             .set_lacunarity(2.0)
             .set_persistence(0.5);*/
         let height_noise = Perlin::new(seed);
+        let density_noise = Perlin::new(seed ^ 583279234);
 
         let mut blocks = BlockPalette::filled(
             BlockEntry {
@@ -71,23 +74,25 @@ impl Chunk {
         );
         let mut components = ChunkBlockComponents::default();
         let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
+        let mountain_spline = Spline::from_vec(vec![
+            splines::Key::new(-1., 60., Interpolation::Linear),
+            splines::Key::new(0., 80., Interpolation::Linear),
+            splines::Key::new(0.5, 100., Interpolation::Cosine),
+            splines::Key::new(1., 200., Interpolation::Linear),
+        ]);
+        let small_spline = Spline::from_vec(vec![
+            splines::Key::new(-1., -3., Interpolation::Linear),
+            splines::Key::new(1., 3., Interpolation::Linear),
+        ]);
         for z in 0..CHUNK_SIZE {
             for x in 0..CHUNK_SIZE {
                 let block_x = x as i32 + position.x as i32 * CHUNK_SIZE as i32;
                 let block_z = z as i32 + position.z as i32 * CHUNK_SIZE as i32;
-                let mountain_spline = Spline::from_vec(vec![
-                    splines::Key::new(-1., 60., Interpolation::Linear),
-                    splines::Key::new(0., 80., Interpolation::Linear),
-                    splines::Key::new(0.5, 100., Interpolation::Cosine),
-                    splines::Key::new(1., 200., Interpolation::Linear),
-                ]);
+
                 let mountain_height = height_noise
                     .get([block_x as f64 / 500., block_z as f64 / 500.])
                     .clamp(-0.99, 0.99);
-                let small_spline = Spline::from_vec(vec![
-                    splines::Key::new(-1., -3., Interpolation::Linear),
-                    splines::Key::new(1., 3., Interpolation::Linear),
-                ]);
+
                 let small_noise = height_noise
                     .get([block_x as f64 / 30., block_z as f64 / 30.])
                     .clamp(-0.99, 0.99);
@@ -96,6 +101,11 @@ impl Chunk {
                 height_map[x as usize][z as usize] = height as i32;
             }
         }
+        let hole_spline = Spline::from_vec(vec![
+            splines::Key::new(100., 0., Interpolation::Linear),
+            splines::Key::new(120., 0.8, Interpolation::Linear),
+            splines::Key::new(200., 0., Interpolation::Linear),
+        ]);
         let biome = BiomeKey::id("forest").unwrap().data();
         use rand::SeedableRng;
         let mut rng = StdRng::from_seed(Seeder::from((seed, position)).make_seed());
@@ -105,6 +115,24 @@ impl Chunk {
                     let offset = ChunkOffset::new(x, y, z);
                     let y_pos = y as i32 + position.y as i32 * CHUNK_SIZE as i32;
                     let height = height_map[x as usize][z as usize];
+                    /*let holes = hole_spline.clamped_sample(height as f32).unwrap();
+                    let density = density_noise.get([
+                        (position.x as f64 * CHUNK_SIZE as f64 + x as f64) / 10.,
+                        (position.y as f64 * CHUNK_SIZE as f64 + y as f64) / 10.,
+                        (position.z as f64 * CHUNK_SIZE as f64 + z as f64) / 10.,
+                    ]) as f32
+                        * holes
+                        + (height - y_pos) as f32 / 20.;
+                    if density > 0. {
+                        blocks.set(
+                            offset.index(),
+                            &BlockEntry {
+                                block: biome.bottom_block,
+                                color: Color::WHITE,
+                                rotation: BlockRotation::default(),
+                            },
+                        );
+                    }*/
                     if y_pos == height {
                         blocks.set(
                             offset.index(),
@@ -163,6 +191,7 @@ impl Chunk {
             block_events: Mutex::new(Vec::new()),
             components,
             entities: Vec::new(),
+            decorated: false,
         }
     }
     pub fn tick(&self, server: &Server) {
@@ -194,6 +223,17 @@ impl Chunk {
                             drop(damage_component);
                             let block_pos = self.position.to_block_pos() + block.xyz();
                             let drops = server.destroy(block_pos);
+                            if health.transform_block != air_block() {
+                                //todo: maybe apply overflow damage?
+                                server.place(
+                                    block_pos,
+                                    BlockEntry {
+                                        block: health.transform_block,
+                                        color: Color::WHITE,
+                                        rotation: BlockRotation::default(),
+                                    },
+                                );
+                            }
                             for item in drops {
                                 server.spawn_item(
                                     item,
@@ -350,7 +390,7 @@ impl Chunk {
                                 let (mut first_inventory, mut second_inventory) =
                                     lock_inventories(&machine.inventory, &other_machine.inventory);
                                 for slot in &view.slots {
-                                    if let Some(item) = first_inventory.items[*slot].as_mut() {
+                                    if let Some(item) = first_inventory.get_slot_mut_raw(*slot) {
                                         if second_inventory
                                             .add_item(&face_data.input, item.copy(1))
                                             .is_none()
@@ -377,7 +417,8 @@ impl Chunk {
                                     inventory.items[*slot].as_ref().map(|item| item.copy(1))
                                 {
                                     if inventory.add_item(&to, item).is_none() {
-                                        let item = inventory.items[*slot].as_mut().unwrap();
+                                        let item =
+                                            inventory.get_slot_mut_raw(*slot).as_mut().unwrap();
                                         item.count -= 1;
                                         if item.count == 0 {
                                             inventory.items[*slot] = None;
@@ -571,6 +612,9 @@ impl Entity {
                                             items_present = true;
                                         }
                                     }
+                                }
+                                for i in 0..inventory.items.len() {
+                                    inventory.slot_changed(i);
                                 }
                                 if !items_present {
                                     self.schedule_event(EntityEvent::Remove);

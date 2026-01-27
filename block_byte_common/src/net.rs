@@ -26,11 +26,11 @@ pub enum NetworkMessageC2S {
     PlaceBlock {
         position: BlockPos,
         face: Face,
+        variant: usize,
     },
     CloseUI,
     HotbarSelect {
-        slot: isize,
-        relative: bool,
+        slot: usize,
     },
     InteractBlock {
         position: BlockPos,
@@ -112,10 +112,9 @@ pub enum NetworkMessageS2C {
         item: Option<ClientItem>,
     },
     UIClose,
-    HUDUpdate {
-        items: Vec<Option<ClientItem>>,
-        properties: PropertyMap,
-        held_item: Option<ClientItem>,
+    HUDSlot {
+        slot: usize,
+        item: Option<ClientItem>,
     },
 }
 

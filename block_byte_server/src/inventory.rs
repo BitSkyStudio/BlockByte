@@ -312,6 +312,7 @@ impl ItemComponentManipulation for ItemMana {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Inventory {
     pub items: Box<[Option<ItemStack>]>,
+    pub slot_changes: Box<[u64]>,
 }
 impl Inventory {
     pub fn new(size: usize) -> Inventory {
@@ -320,13 +321,33 @@ impl Inventory {
                 .map(|_| None)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            slot_changes: (0..size).map(|_| 1).collect::<Vec<_>>().into_boxed_slice(),
         }
+    }
+    pub fn slot_changed(&mut self, index: usize) {
+        self.slot_changes[index] += 1;
+    }
+    pub fn view_change_count(&self, view: &InventoryView) -> u64 {
+        view.slots.iter().map(|slot| self.slot_changes[*slot]).sum()
     }
     pub fn full_view(&self) -> InventoryView {
         InventoryView::from_range(0..self.items.len())
     }
     pub fn get_slot<'a>(&'a self, view: &InventoryView, slot: usize) -> Option<&'a ItemStack> {
-        self.items[*view.slots.get(slot)?].as_ref()
+        self.items[*view.slots.get(slot).unwrap()].as_ref()
+    }
+    pub fn get_slot_mut<'a>(
+        &'a mut self,
+        view: &InventoryView,
+        slot: usize,
+    ) -> &'a mut Option<ItemStack> {
+        let index = *view.slots.get(slot).unwrap();
+        self.slot_changed(index);
+        &mut self.items[index]
+    }
+    pub fn get_slot_mut_raw<'a>(&'a mut self, slot: usize) -> &'a mut Option<ItemStack> {
+        self.slot_changed(slot);
+        &mut self.items[slot]
     }
     pub fn set_slot(
         &mut self,
@@ -337,6 +358,7 @@ impl Inventory {
         match view.slots.get(slot) {
             Some(slot) => {
                 self.items[*slot] = item;
+                self.slot_changed(*slot);
                 Ok(())
             }
             None => Err(()),
@@ -344,21 +366,24 @@ impl Inventory {
     }
     pub fn add_item(&mut self, view: &InventoryView, mut item: ItemStack) -> Option<ItemStack> {
         let stack_size = item.item.data().stack_size;
-        for slot in &view.slots {
-            let mut slot = &mut self.items[*slot];
+        for slot_index in &view.slots {
+            let mut slot = &mut self.items[*slot_index];
             if slot.is_none() {
                 if item.count > stack_size {
                     let (first, second) = item.split(stack_size);
                     *slot = Some(first);
+                    self.slot_changed(*slot_index);
                     item = second;
                 } else {
                     *slot = Some(item);
+                    self.slot_changed(*slot_index);
                     return None;
                 }
             } else {
                 let mut slot = slot.as_mut().unwrap();
                 if let Some((stack, rest)) = item.merge(&slot) {
                     *slot = stack;
+                    self.slot_changed(*slot_index);
                     match rest {
                         Some(rest) => {
                             item = rest;
@@ -390,8 +415,8 @@ impl Inventory {
         item: ItemKey,
         mut count: ItemCount,
     ) -> ItemCount {
-        for slot in &view.slots {
-            let mut slot = &mut self.items[*slot];
+        for slot_index in &view.slots {
+            let mut slot = &mut self.items[*slot_index];
             if slot.is_some() {
                 let mut item_slot = slot.as_mut().unwrap();
                 if item_slot.item != item {
@@ -402,6 +427,7 @@ impl Inventory {
                 if item_slot.count == 0 {
                     *slot = None;
                 }
+                self.slot_changed(*slot_index);
                 count -= take;
                 if count == 0 {
                     return 0;

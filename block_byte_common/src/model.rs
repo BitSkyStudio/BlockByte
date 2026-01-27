@@ -46,12 +46,28 @@ enum BBElement {
         rotation: [f32; 3],
         name: String,
     },
+    #[serde(rename = "mesh")]
+    Mesh {
+        uuid: String,
+        origin: [f32; 3],
+        #[serde(default)]
+        rotation: [f32; 3],
+        vertices: HashMap<String, [f32; 3]>,
+        faces: HashMap<String, BBMeshFace>,
+    },
+}
+#[derive(Deserialize, Clone, Debug)]
+struct BBMeshFace {
+    uv: HashMap<String, [f32; 2]>,
+    vertices: Vec<String>,
+    texture: usize,
 }
 impl BBElement {
     pub fn uuid(&self) -> &str {
         match self {
             BBElement::Cube { uuid, .. } => uuid.as_str(),
             BBElement::Locator { uuid, .. } => uuid.as_str(),
+            BBElement::Mesh { uuid, .. } => uuid.as_str(),
         }
     }
 }
@@ -220,6 +236,30 @@ impl Bone {
                         name.as_str(),
                     );
                 }
+                Element::Mesh {
+                    origin,
+                    rotation,
+                    faces,
+                } => {
+                    let o = Matrix4::from_translation(*origin);
+                    let world = world * o * Matrix4::from(*rotation);
+                    for face in faces {
+                        for (vertex_pos, uv) in &face.vertices {
+                            let point = Point3::from_vec(*vertex_pos);
+                            let point = world.transform_point(point);
+                            vertex_consumer(
+                                Pos {
+                                    x: point.x,
+                                    y: point.y,
+                                    z: point.z,
+                                },
+                                Pos::ZERO,
+                                *uv,
+                                face.texture,
+                            );
+                        }
+                    }
+                }
             }
         }
         for child in &self.children {
@@ -275,6 +315,15 @@ pub enum Element {
         position: Vector3<f32>,
         rotation: Euler<Deg<f32>>,
     },
+    Mesh {
+        origin: Vector3<f32>,
+        rotation: Euler<Deg<f32>>,
+        faces: Vec<MeshFace>,
+    },
+}
+pub struct MeshFace {
+    vertices: Vec<(Vector3<f32>, (f32, f32))>,
+    texture: usize,
 }
 
 pub struct Model {
@@ -454,6 +503,53 @@ impl Model {
                                     z: Deg(rotation[2]),
                                 },
                                 name: name.clone(),
+                            });
+                        }
+                        BBElement::Mesh {
+                            uuid,
+                            origin,
+                            rotation,
+                            vertices,
+                            faces,
+                        } => {
+                            bone.elements.push(Element::Mesh {
+                                origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,
+                                rotation: Euler {
+                                    x: Deg(rotation[0]),
+                                    y: Deg(rotation[1]),
+                                    z: Deg(rotation[2]),
+                                },
+                                faces: faces
+                                    .values()
+                                    .map(|face| {
+                                        let texture = &model.textures[face.texture];
+                                        let vertices = face
+                                            .vertices
+                                            .iter()
+                                            .map(|vertex| {
+                                                let uv = *face.uv.get(vertex.as_str()).unwrap();
+                                                (
+                                                    Vector3::<f32>::from(
+                                                        *vertices.get(vertex.as_str()).unwrap(),
+                                                    ) / BLOCKBENCH_SIZE,
+                                                    (
+                                                        uv[0] / texture.uv_width,
+                                                        uv[1] / texture.uv_height,
+                                                    ),
+                                                )
+                                            })
+                                            .collect::<Vec<_>>();
+                                        MeshFace {
+                                            vertices: [
+                                                0, 1, 2, 0, 2, 3, /* back*/ 2, 1, 0, 3, 2, 0,
+                                            ]
+                                            .into_iter()
+                                            .map(|i| vertices[i])
+                                            .collect(),
+                                            texture: face.texture,
+                                        }
+                                    })
+                                    .collect(),
                             });
                         }
                     }

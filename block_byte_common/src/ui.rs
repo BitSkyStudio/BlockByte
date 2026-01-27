@@ -15,7 +15,7 @@ pub struct UIScreen {
 }
 pub type UIScreenKey = Key<UIScreen>;
 impl RegistryConfigLoadable for UIScreen {
-    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
         let input = std::fs::read_to_string(config).unwrap();
         let doc = roxmltree::Document::parse(&input)?;
         Ok(UIScreen {
@@ -334,7 +334,7 @@ impl UIStyleList {
     }
 }
 impl RegistryConfigLoadable for UIStyleList {
-    fn registry_load_from_config(config: &Path) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
         Self::parse(&std::fs::read_to_string(config).unwrap())
     }
 }
