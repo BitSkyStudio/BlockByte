@@ -152,30 +152,7 @@ impl ApplicationHandler for App {
                     );
                 }
             }
-            _ => {}
-        }
-    }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        match event {
-            WindowEvent::CloseRequested => {
-                self.network_client.disconnect();
-                self.network_transport.disconnect();
-                event_loop.exit();
-            }
-            WindowEvent::CursorMoved {
-                device_id,
-                position,
-            } => {
-                self.game.cursor_position = position;
-            }
-            WindowEvent::Resized(new_size) => {
-                self.render_state.as_mut().unwrap().resize(new_size);
-            }
-            WindowEvent::KeyboardInput {
-                device_id,
-                event,
-                is_synthetic,
-            } => match event.physical_key {
+            DeviceEvent::Key(event) => match event.physical_key {
                 winit::keyboard::PhysicalKey::Code(key_code) => {
                     if event.state == ElementState::Pressed {
                         self.game.keys.press(key_code);
@@ -195,8 +172,27 @@ impl ApplicationHandler for App {
                         .enumerate()
                         {
                             if key_code == *key {
-                                self.game.hotbar_slot = slot;
-                                self.send_message(NetworkMessageC2S::HotbarSelect { slot });
+                                if self.game.keys.is_down(KeyCode::KeyG) {
+                                    if let Some(held_item) = self.game.held_item() {
+                                        let variation_count = match &held_item.item.data().action {
+                                            ItemAction::Ignore => 1,
+                                            ItemAction::Place(item_block_placements) => {
+                                                item_block_placements.len()
+                                            }
+                                        };
+                                        if slot < variation_count {
+                                            let variation = self
+                                                .game
+                                                .item_variation
+                                                .entry(held_item.item)
+                                                .or_insert(0);
+                                            *variation = slot;
+                                        }
+                                    }
+                                } else {
+                                    self.game.hotbar_slot = slot;
+                                    self.send_message(NetworkMessageC2S::HotbarSelect { slot });
+                                }
                             }
                         }
                         if key_code == KeyCode::KeyE && self.game.screen.is_none() {
@@ -226,6 +222,25 @@ impl ApplicationHandler for App {
                 }
                 winit::keyboard::PhysicalKey::Unidentified(native_key_code) => {}
             },
+            _ => {}
+        }
+    }
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                self.network_client.disconnect();
+                self.network_transport.disconnect();
+                event_loop.exit();
+            }
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {
+                self.game.cursor_position = position;
+            }
+            WindowEvent::Resized(new_size) => {
+                self.render_state.as_mut().unwrap().resize(new_size);
+            }
             WindowEvent::MouseWheel {
                 device_id,
                 delta,
@@ -260,6 +275,7 @@ impl ApplicationHandler for App {
                 if state == ElementState::Pressed && self.game.screen.is_none() {
                     match (self.camera.raycast(&self.game), button) {
                         (RayCastResult::Block(position, face), MouseButton::Right) => {
+                            self.game.build_animation = 0.5;
                             self.send_message(NetworkMessageC2S::PlaceBlock {
                                 position,
                                 face,
@@ -306,6 +322,7 @@ impl ApplicationHandler for App {
                     &mut viewmodel_mesh,
                     &mut damage_mesh,
                 );
+                self.game.build_animation = (self.game.build_animation - dt).max(0.);
                 {
                     let viewmodel_light = Matrix4::from_angle_x(Rad(self.camera.direction.pitch))
                         * Matrix4::from_angle_y(Rad(self.camera.direction.yaw));
@@ -1220,6 +1237,7 @@ pub struct ClientGame {
     pub selected_slot: Option<(usize, MouseButton)>,
     pub hotbar_slot: usize,
     pub item_variation: HashMap<ItemKey, usize>,
+    pub build_animation: f32,
 }
 impl Default for ClientGame {
     fn default() -> Self {
@@ -1242,6 +1260,7 @@ impl Default for ClientGame {
             selected_slot: None,
             hotbar_slot: 0,
             item_variation: HashMap::new(),
+            build_animation: 0.,
         }
     }
 }
@@ -1264,18 +1283,24 @@ impl ClientGame {
         viewmodel_mesh: &mut BaseMesh,
         damage_mesh: &mut DamageMesh,
     ) {
+        let (viewmodel_animation, viewmodel_time) = if self.build_animation > 0. {
+            (Some("place"), self.build_animation)
+        } else if let Some(hit_timer) = self.hit_timer {
+            (Some("hit"), hit_timer / self.active_tool().swing_time)
+        } else {
+            (None, 0.)
+        };
         render::draw_model(
             ModelKey::id("viewmodel").unwrap(),
             Matrix4::identity(),
             &mut viewmodel_mesh.vertex_consumer(),
-            Some("hit"),
-            self.hit_timer.unwrap_or(0.) / self.active_tool().swing_time,
+            viewmodel_animation,
+            viewmodel_time,
             |binding| match binding {
                 "hand" => self.held_item().clone(),
                 _ => None,
             },
         );
-
         let max_chunk_meshes_per_frame = 64;
         for (position, mesh) in self
             .modified_chunks
@@ -1337,7 +1362,7 @@ impl ClientGame {
         })
         .collect();*/
         let player_chunk = self.player_position.to_chunk_pos();
-        let view_distance = 2;
+        let view_distance = 4;
         for chunk_position in AABB::new(
             Vec3 {
                 x: player_chunk.x - view_distance,
@@ -1445,7 +1470,7 @@ impl ClientGame {
                     {
                         continue;
                     }
-                    for plant in &plants.plants {
+                    for (plant, stage) in &plants.plants {
                         let plant = plant.data();
                         let position = base_position
                             + Pos {
@@ -1453,6 +1478,7 @@ impl ClientGame {
                                 y: 1.,
                                 z: 0.5,
                             };
+                        let texture = plant.stages[*stage as usize].tex_coords();
                         for blade in 0..plant.blades * 2 {
                             let first_angle =
                                 f32::consts::PI * (blade as f32 / plant.blades as f32 + 0.25);
@@ -1469,7 +1495,6 @@ impl ClientGame {
                                 z: second_angle.sin(),
                             } * (plant.size / 2.)
                                 + position;
-                            let texture = plant.texture.tex_coords();
                             let vertices = [
                                 Vertex {
                                     position: [first.x, first.y, first.z],

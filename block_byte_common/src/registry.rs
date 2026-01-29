@@ -8,14 +8,14 @@ use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 use anyhow::anyhow;
 use image::DynamicImage;
 use image_overlay::overlay_dyn_img;
-use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
+use palettevec::PaletteVec;
 use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, BlockPos, Face, FaceMap, Orientation, Pos};
+use crate::coord::{BlockPos, Face, FaceMap, Orientation, Pos, AABB};
 use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
@@ -639,7 +639,7 @@ pub type EntityKey = Key<EntityData>;
 #[derive(Deserialize)]
 pub struct PlantData {
     #[cfg(feature = "client")]
-    pub texture: TextureKey,
+    pub stages: Vec<TextureKey>,
     #[cfg(feature = "client")]
     pub size: f32,
     #[cfg(feature = "client")]

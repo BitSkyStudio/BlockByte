@@ -147,7 +147,7 @@ impl Chunk {
                             .iter()
                             .filter_map(|spawner| {
                                 if rng.random_bool(spawner.chance as f64) {
-                                    Some((spawner.plant, 0.))
+                                    Some((spawner.plant, rng.random::<f32>()))
                                 } else {
                                     None
                                 }
@@ -831,7 +831,16 @@ pub struct BlockPlants {
 impl Into<ClientBlockPlants> for &BlockPlants {
     fn into(self) -> ClientBlockPlants {
         ClientBlockPlants {
-            plants: self.plants.iter().map(|(plant, _)| *plant).collect(),
+            plants: self
+                .plants
+                .iter()
+                .map(|(plant, growth)| {
+                    let plant_data = plant.data();
+                    let stage = ((*growth * plant_data.stages.len() as f32) as usize)
+                        .min(plant_data.stages.len() - 1);
+                    (*plant, stage as u8)
+                })
+                .collect(),
         }
     }
 }

@@ -131,6 +131,10 @@ fn main() {
                 &full_view,
                 ItemStack::new(ItemKey::id("leaves").unwrap(), 20),
             );
+            entity
+                .inventory
+                .get_mut()
+                .add_item(&full_view, ItemStack::new(ItemKey::id("wood").unwrap(), 20));
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();

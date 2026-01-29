@@ -26,7 +26,7 @@ fn vs_main(
     out.tex_coords = model.tex_coords;
     out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
     //let shading = dot(model.normal, normalize(vec3<f32>(1, -1, 0.5)));
-    let shade_color = 1. - abs(model.normal.x) * 0.3 - abs(model.normal.z) * 0.1;
+    let shade_color = 1. - abs(model.normal.x) * 0.5 - abs(model.normal.z) * 0.2;
     out.color = model.color * vec4<f32>(shade_color, shade_color, shade_color, 1.);
     return out;
 }
@@ -42,7 +42,7 @@ var s_diffuse: sampler;
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords) * in.color;
-    if color.w == 0.{
+    if color.w < 0.1{
         discard;
     }
     return color;

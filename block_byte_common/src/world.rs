@@ -103,5 +103,5 @@ pub struct ClientBlockDamage {
 }
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockPlants {
-    pub plants: Vec<PlantKey>,
+    pub plants: Vec<(PlantKey, u8)>,
 }

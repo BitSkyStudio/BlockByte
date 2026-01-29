@@ -94,6 +94,8 @@ struct BBGroup {
 struct BBFace {
     uv: [f32; 4],
     texture: usize,
+    #[serde(default)]
+    rotation: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -431,6 +433,13 @@ impl Model {
                             }
                         }
                     }
+                    for channel in [
+                        &mut bone_animation.position,
+                        &mut bone_animation.rotation,
+                        &mut bone_animation.scale,
+                    ] {
+                        channel.sort_by(|a, b| a.time.total_cmp(&b.time));
+                    }
                     bone_animation
                 })
                 .collect(),
@@ -477,6 +486,7 @@ impl Model {
                                     };
                                     let face = faces.as_ref().unwrap().get(face).unwrap();
                                     let texture = &model.textures[face.texture];
+                                    //todo: rotation
                                     (
                                         TexCoords {
                                             u1: face.uv[0] / texture.uv_width,
@@ -568,7 +578,7 @@ impl<'de> Deserialize<'de> for Model {
         Ok(Model::from_bbmodel(bbmodel))
     }
 }
-
+#[derive(Debug)]
 pub struct Keyframe {
     time: f32,
     data: Vector3<f32>,
