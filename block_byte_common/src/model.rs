@@ -25,7 +25,9 @@ struct BBTexture {
     uv_height: f32,
     source: String,
 }
-
+fn default_true() -> bool {
+    true
+}
 #[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
 enum BBElement {
@@ -38,6 +40,8 @@ enum BBElement {
         #[serde(default)]
         rotation: [f32; 3],
         faces: Option<HashMap<String, BBFace>>,
+        #[serde(default = "default_true")]
+        visibility: bool,
     },
     #[serde(rename = "locator")]
     Locator {
@@ -45,6 +49,8 @@ enum BBElement {
         position: [f32; 3],
         rotation: [f32; 3],
         name: String,
+        #[serde(default = "default_true")]
+        visibility: bool,
     },
     #[serde(rename = "mesh")]
     Mesh {
@@ -54,6 +60,8 @@ enum BBElement {
         rotation: [f32; 3],
         vertices: HashMap<String, [f32; 3]>,
         faces: HashMap<String, BBMeshFace>,
+        #[serde(default = "default_true")]
+        visibility: bool,
     },
 }
 #[derive(Deserialize, Clone, Debug)]
@@ -152,27 +160,33 @@ pub struct Bone {
     pub animators: Vec<BoneAnimation>,
 }
 impl Bone {
-    fn animation_transform(&self, animation: Option<usize>, time: f32) -> Matrix4<f32> {
+    fn animation_transform(&self, animations: &[ResolvedAnimation]) -> Matrix4<f32> {
         let mut transform = Matrix4::identity();
-        if let Some(animation) = animation {
-            let animator = &self.animators[animation];
-            if let Some(value) = animator.sample(AnimatorChannel::Translation, time) {
-                transform = transform * Matrix4::from_translation(value / BLOCKBENCH_SIZE);
+        for animation in animations {
+            let animator = &self.animators[animation.animation];
+            if let Some(value) = animator.sample(AnimatorChannel::Translation, animation.time) {
+                transform = transform
+                    * Matrix4::from_translation(value / BLOCKBENCH_SIZE * animation.weight);
             }
-            if let Some(value) = animator.sample(AnimatorChannel::Rotation, time) {
+            if let Some(value) = animator.sample(AnimatorChannel::Rotation, animation.time) {
                 let o = Matrix4::from_translation(self.origin);
                 let io = Matrix4::from_translation(-self.origin);
                 transform = transform
                     * o
                     * Matrix4::from(Euler {
-                        x: Deg(value.x),
-                        y: Deg(value.y),
-                        z: Deg(value.z),
+                        x: Deg(value.x * animation.weight),
+                        y: Deg(value.y * animation.weight),
+                        z: Deg(value.z * animation.weight),
                     })
                     * io;
             }
-            if let Some(value) = animator.sample(AnimatorChannel::Scale, time) {
-                transform = transform * Matrix4::from_nonuniform_scale(value.x, value.y, value.z);
+            if let Some(value) = animator.sample(AnimatorChannel::Scale, animation.time) {
+                transform = transform
+                    * Matrix4::from_nonuniform_scale(
+                        1. + (value.x - 1.) * animation.weight,
+                        1. + (value.y - 1.) * animation.weight,
+                        1. + (value.z - 1.) * animation.weight,
+                    );
             }
         }
         transform
@@ -180,12 +194,11 @@ impl Bone {
     fn draw(
         &self,
         parent: Matrix4<f32>,
-        animation: Option<usize>,
-        time: f32,
+        animations: &[ResolvedAnimation],
         mut vertex_consumer: &mut impl FnMut(Pos, Pos, (f32, f32), usize),
         mut binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
     ) {
-        let world = parent * self.animation_transform(animation, time);
+        let world = parent * self.animation_transform(animations);
 
         for elem in &self.elements {
             match elem {
@@ -200,8 +213,8 @@ impl Bone {
                     let io = Matrix4::from_translation(-*origin);
                     let world = world * o * Matrix4::from(*rotation) * io;
                     for face in Face::all() {
-                        let (uv, texture) = *uvs.by_face(*face);
-                        face.add_vertices(uv, |pos, uv| {
+                        let (uv, rotation, texture) = *uvs.by_face(*face);
+                        face.add_vertices(uv, rotation, |pos, uv| {
                             let pos = Vector3::new(pos.x, pos.y, pos.z);
                             let pos = world
                                 .transform_point(Point3::from_vec(
@@ -265,17 +278,16 @@ impl Bone {
             }
         }
         for child in &self.children {
-            child.draw(world, animation, time, vertex_consumer, binding_consumer);
+            child.draw(world, animations, vertex_consumer, binding_consumer);
         }
     }
     fn anchor(
         &self,
         anchor: &str,
         matrix: Matrix4<f32>,
-        animation: Option<usize>,
-        time: f32,
+        animations: &[ResolvedAnimation],
     ) -> Option<Matrix4<f32>> {
-        let transform = matrix * self.animation_transform(animation, time);
+        let transform = matrix * self.animation_transform(animations);
         for element in &self.elements {
             match element {
                 Element::Locator {
@@ -295,7 +307,7 @@ impl Bone {
             }
         }
         for child in &self.children {
-            if let Some(anchor) = child.anchor(anchor, transform, animation, time) {
+            if let Some(anchor) = child.anchor(anchor, transform, animations) {
                 return Some(anchor);
             }
         }
@@ -310,7 +322,7 @@ pub enum Element {
         to: Vector3<f32>,
         origin: Vector3<f32>,
         rotation: Euler<Deg<f32>>,
-        uvs: FaceMap<(TexCoords, usize)>,
+        uvs: FaceMap<(TexCoords, u8, usize)>,
     },
     Locator {
         name: String,
@@ -327,7 +339,16 @@ pub struct MeshFace {
     vertices: Vec<(Vector3<f32>, (f32, f32))>,
     texture: usize,
 }
-
+pub struct DrawAnimation<'a> {
+    pub animation: &'a str,
+    pub time: f32,
+    pub weight: f32,
+}
+struct ResolvedAnimation {
+    animation: usize,
+    time: f32,
+    weight: f32,
+}
 pub struct Model {
     root_bone: Bone,
     animations: HashMap<String, usize>,
@@ -337,16 +358,21 @@ impl Model {
     pub fn draw(
         &self,
         matrix: Matrix4<f32>,
-        animation_name: Option<&str>,
-        time: f32,
+        animations: &[DrawAnimation],
         mut vertex_consumer: impl FnMut(Pos, Pos, (f32, f32), usize),
         mut binding_consumer: impl FnMut(Matrix4<f32>, &str),
     ) {
-        let animation = animation_name.map(|animation| *self.animations.get(animation).unwrap());
+        let animations = animations
+            .iter()
+            .map(|animation| ResolvedAnimation {
+                animation: *self.animations.get(animation.animation).unwrap(),
+                time: animation.time,
+                weight: animation.weight,
+            })
+            .collect::<Vec<_>>();
         self.root_bone.draw(
             matrix,
-            animation,
-            time,
+            &animations[..],
             &mut vertex_consumer,
             &mut binding_consumer,
         );
@@ -355,11 +381,17 @@ impl Model {
         &self,
         name: &str,
         matrix: Matrix4<f32>,
-        animation_name: Option<&str>,
-        time: f32,
+        animations: &[DrawAnimation],
     ) -> Option<Matrix4<f32>> {
-        let animation = animation_name.map(|animation| *self.animations.get(animation).unwrap());
-        self.root_bone.anchor(name, matrix, animation, time)
+        let animations = animations
+            .iter()
+            .map(|animation| ResolvedAnimation {
+                animation: *self.animations.get(animation.animation).unwrap(),
+                time: animation.time,
+                weight: animation.weight,
+            })
+            .collect::<Vec<_>>();
+        self.root_bone.anchor(name, matrix, &animations[..])
     }
     pub fn from_bbmodel(bbmodel: BBModel) -> Model {
         let element_map: HashMap<_, _> = bbmodel
@@ -458,6 +490,15 @@ impl Model {
                 BBOutliner::Element(element) => {
                     let bbelement = element_map.get(element.as_str()).unwrap();
                     match bbelement {
+                        BBElement::Cube { visibility, .. }
+                        | BBElement::Locator { visibility, .. }
+                        | BBElement::Mesh { visibility, .. } => {
+                            if !*visibility {
+                                continue;
+                            }
+                        }
+                    }
+                    match bbelement {
                         BBElement::Cube {
                             uuid,
                             from,
@@ -465,6 +506,7 @@ impl Model {
                             faces,
                             origin,
                             rotation,
+                            visibility: _,
                         } => {
                             bone.elements.push(Element::Cube {
                                 from: Vector3::from(*from) / BLOCKBENCH_SIZE,
@@ -486,7 +528,6 @@ impl Model {
                                     };
                                     let face = faces.as_ref().unwrap().get(face).unwrap();
                                     let texture = &model.textures[face.texture];
-                                    //todo: rotation
                                     (
                                         TexCoords {
                                             u1: face.uv[0] / texture.uv_width,
@@ -494,6 +535,7 @@ impl Model {
                                             u2: face.uv[2] / texture.uv_width,
                                             v2: face.uv[3] / texture.uv_height,
                                         },
+                                        (face.rotation / 90) as u8 % 4,
                                         face.texture,
                                     )
                                 }),
@@ -504,6 +546,7 @@ impl Model {
                             position,
                             rotation,
                             name,
+                            visibility: _,
                         } => {
                             bone.elements.push(Element::Locator {
                                 position: Vector3::from(*position) / BLOCKBENCH_SIZE,
@@ -521,6 +564,7 @@ impl Model {
                             rotation,
                             vertices,
                             faces,
+                            visibility: _,
                         } => {
                             bone.elements.push(Element::Mesh {
                                 origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,

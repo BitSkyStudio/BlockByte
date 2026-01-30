@@ -20,6 +20,7 @@ use block_byte_common::{
         AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos, Ray,
         Vec3,
     },
+    model::DrawAnimation,
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockPalette, BlockRenderData, BlockRotation, EntityData, EntityKey, ItemAction,
@@ -54,9 +55,7 @@ use crate::{
 fn main() {
     load_registries(&Path::new("assets"));
     use block_byte_common::registry::RegistryProvider;
-    let registries = &registry::REGISTRIES.get().unwrap();
-    let (atlas, text_renderer, image) =
-        TextureAtlas::pack(registries.get_registry(), registries.get_registry());
+    let (atlas, text_renderer, image) = TextureAtlas::pack();
     TEXTURE_ATLAS.set(atlas);
     TEXT_RENDERER.set(text_renderer);
     let mut client = RenetClient::new(make_connection_config());
@@ -751,8 +750,8 @@ impl ApplicationHandler for App {
                 self.network_transport
                     .send_packets(&mut self.network_client)
                     .unwrap();
-                self.game.buttons.frame_clear();
-                self.game.keys.frame_clear();
+                self.game.buttons.frame_clear(dt);
+                self.game.keys.frame_clear(dt);
             }
             _ => (),
         }
@@ -762,6 +761,7 @@ pub struct InputContainer<T> {
     pub down: HashSet<T>,
     pub just_down: HashSet<T>,
     pub just_up: HashSet<T>,
+    pub held_for: HashMap<T, f32>,
 }
 impl<T> Default for InputContainer<T> {
     fn default() -> Self {
@@ -769,6 +769,7 @@ impl<T> Default for InputContainer<T> {
             down: HashSet::new(),
             just_down: HashSet::new(),
             just_up: HashSet::new(),
+            held_for: HashMap::new(),
         }
     }
 }
@@ -776,14 +777,19 @@ impl<T: Hash + Eq + Copy> InputContainer<T> {
     pub fn press(&mut self, input: T) {
         self.down.insert(input);
         self.just_down.insert(input);
+        self.held_for.insert(input, 0.);
     }
     pub fn release(&mut self, input: T) {
         self.down.remove(&input);
         self.just_up.insert(input);
+        self.held_for.remove(&input);
     }
-    pub fn frame_clear(&mut self) {
+    pub fn frame_clear(&mut self, dt: f32) {
         self.just_down.clear();
         self.just_up.clear();
+        for time in self.held_for.values_mut() {
+            *time += dt;
+        }
     }
     pub fn is_down(&self, input: T) -> bool {
         self.down.contains(&input)
@@ -794,6 +800,9 @@ impl<T: Hash + Eq + Copy> InputContainer<T> {
     pub fn is_just_up(&self, input: T) -> bool {
         self.just_up.contains(&input)
     }
+    pub fn held_time(&self, input: T) -> f32 {
+        self.held_for.get(&input).cloned().unwrap_or(0.)
+    }
 }
 
 pub struct TextureAtlas {
@@ -802,10 +811,7 @@ pub struct TextureAtlas {
 }
 
 impl TextureAtlas {
-    pub fn pack(
-        texture_registry: &Registry<TextureData>,
-        model_registry: &Registry<ModelData>,
-    ) -> (Self, TextRenderer, RgbaImage) {
+    pub fn pack() -> (Self, TextRenderer, RgbaImage) {
         #[derive(Hash, PartialEq, Eq, Clone)]
         enum TextureAtlasEntry {
             Texture(usize),
@@ -824,12 +830,14 @@ impl TextureAtlas {
                 texture_extrusion: 0,
                 force_max_dimensions: true,
             });
-        for (i, texture) in texture_registry.data_entries().enumerate() {
+        for (i, texture) in TextureKey::entries().enumerate() {
+            let texture = texture.data();
             packer
                 .pack_ref(TextureAtlasEntry::Texture(i), &*texture.texture)
                 .unwrap();
         }
-        for (i, model) in model_registry.data_entries().enumerate() {
+        for (i, model) in ModelKey::entries().enumerate() {
+            let model = model.data();
             for (j, texture) in model.model.textures.iter().enumerate() {
                 let image = image::load_from_memory_with_format(
                     BASE64_STANDARD
@@ -879,8 +887,7 @@ impl TextureAtlas {
         }
         (
             TextureAtlas {
-                textures: texture_registry
-                    .data_entries()
+                textures: TextureKey::entries()
                     .enumerate()
                     .map(|(i, _)| {
                         let frame = packer.get_frame(&TextureAtlasEntry::Texture(i)).unwrap();
@@ -892,10 +899,10 @@ impl TextureAtlas {
                         }
                     })
                     .collect(),
-                models: model_registry
-                    .data_entries()
+                models: ModelKey::entries()
                     .enumerate()
                     .map(|(i, model)| {
+                        let model = model.data();
                         model
                             .model
                             .textures
@@ -1283,19 +1290,29 @@ impl ClientGame {
         viewmodel_mesh: &mut BaseMesh,
         damage_mesh: &mut DamageMesh,
     ) {
-        let (viewmodel_animation, viewmodel_time) = if self.build_animation > 0. {
-            (Some("place"), self.build_animation)
+        let animation = if self.build_animation > 0. {
+            Some(DrawAnimation {
+                animation: "place",
+                time: self.build_animation,
+                weight: 1.,
+            })
         } else if let Some(hit_timer) = self.hit_timer {
-            (Some("hit"), hit_timer / self.active_tool().swing_time)
+            Some(DrawAnimation {
+                animation: "hit",
+                time: hit_timer / self.active_tool().swing_time,
+                weight: 1.,
+            })
         } else {
-            (None, 0.)
+            None
         };
         render::draw_model(
             ModelKey::id("viewmodel").unwrap(),
             Matrix4::identity(),
             &mut viewmodel_mesh.vertex_consumer(),
-            viewmodel_animation,
-            viewmodel_time,
+            match &animation {
+                Some(animation) => std::slice::from_ref(animation),
+                None => &[],
+            },
             |binding| match binding {
                 "hand" => self.held_item().clone(),
                 _ => None,
@@ -1349,8 +1366,7 @@ impl ClientGame {
                 Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
                     * Matrix4::from_angle_y(Rad(rotation)),
                 &mut entity_mesh.vertex_consumer(),
-                None,
-                0.,
+                &[],
                 |slot| entity.hand_item.clone(),
             );
         }
@@ -1410,6 +1426,7 @@ impl ClientGame {
                                         u2: 16.,
                                         v2: 16.,
                                     },
+                                    0,
                                     |position, coords| {
                                         let border = 0.;
                                         let vt_pos = base_position + position * (1. + border * 2.)
@@ -1446,8 +1463,7 @@ impl ClientGame {
                                     Vector4::new(-front.x, -front.y, -front.z, 0.),
                                     Vector4::new(0., 0., 0., 1.),
                                 ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
-                                None,
-                                0.,
+                                &[],
                                 |position, normal, uv, texture| {
                                     let (_, width, height) = textures[texture];
                                     damage_mesh.vertices.push(DamageVertex {
@@ -1599,7 +1615,7 @@ impl ClientGame {
                                                     r: 255,
                                                     g: 255,
                                                     b: 255,
-                                                    a: 100,
+                                                    a: 150,
                                                 }
                                             }
                                             .into(),
@@ -1773,7 +1789,7 @@ impl ClientChunk {
                                 }
 
                                 let texture = faces.by_face(*face).tex_coords();
-                                face.add_vertices(texture, |position, coords| {
+                                face.add_vertices(texture, 0, |position, coords| {
                                     let vt_pos = base_position + position;
                                     let normal = face.get_offset();
                                     mesh.vertices.push(Vertex {
@@ -1813,8 +1829,7 @@ impl ClientChunk {
                                         color: Color::WHITE.into(),
                                     });
                                 },
-                                None,
-                                0.,
+                                &[],
                                 |_| None,
                             );
                         }

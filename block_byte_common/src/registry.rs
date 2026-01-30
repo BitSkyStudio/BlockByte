@@ -1,4 +1,5 @@
 use std::cell::OnceCell;
+use std::collections::HashSet;
 #[cfg(feature = "client")]
 use std::default;
 use std::path::{Path, PathBuf};
@@ -8,14 +9,14 @@ use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 use anyhow::anyhow;
 use image::DynamicImage;
 use image_overlay::overlay_dyn_img;
+use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
-use palettevec::PaletteVec;
 use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{BlockPos, Face, FaceMap, Orientation, Pos, AABB};
+use crate::coord::{AABB, BlockPos, Face, FaceMap, Orientation, Pos};
 use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
@@ -43,30 +44,26 @@ impl<T> Hash for Key<T> {
         self.0.hash(state);
     }
 }
-
-pub struct LoadRegistry<T, D> {
+pub struct LoadRegistry<T> {
     id_map: HashMap<String, Key<T>>,
-    data_list: Vec<D>,
+    data_list: Vec<PathBuf>,
     id_list: Vec<String>,
+    group_id_map: HashMap<String, KeyGroup<T>>,
+    groups: Vec<(Vec<Key<T>>, HashSet<Key<T>>)>,
 }
-impl<T, D: Clone> Clone for LoadRegistry<T, D> {
-    fn clone(&self) -> Self {
-        LoadRegistry {
-            id_map: self.id_map.clone(),
-            data_list: self.data_list.clone(),
-            id_list: self.id_list.clone(),
-        }
-    }
-}
-impl<T, D> LoadRegistry<T, D> {
-    pub fn new() -> Self {
-        LoadRegistry {
+impl<T> Default for LoadRegistry<T> {
+    fn default() -> Self {
+        Self {
             id_map: Default::default(),
             data_list: Default::default(),
             id_list: Default::default(),
+            group_id_map: Default::default(),
+            groups: Default::default(),
         }
     }
-    pub fn register(&mut self, id: String, data: D) -> Key<T> {
+}
+impl<T> LoadRegistry<T> {
+    fn register(&mut self, id: String, data: PathBuf) -> Key<T> {
         self.id_list.push(id.clone());
         self.data_list.push(data);
         let key = Key(
@@ -76,28 +73,15 @@ impl<T, D> LoadRegistry<T, D> {
         self.id_map.insert(id, key);
         key
     }
-    pub fn key(&self, id: &str) -> Option<Key<T>> {
-        self.id_map.get(id).cloned()
-    }
-    pub fn id_of(&self, key: Key<T>) -> &str {
-        self.id_list[key.numeric_id()].as_str()
+    fn register_group(&mut self, id: String, group: HashSet<Key<T>>) -> KeyGroup<T> {
+        self.groups.push((group.iter().cloned().collect(), group));
+        let key_group = KeyGroup::Group(self.id_list.len());
+        self.group_id_map.insert(id, key_group);
+        key_group
     }
 }
 pub struct Registry<T> {
-    id_map: HashMap<String, Key<T>>,
-    data_list: Vec<T>,
-    id_list: Vec<String>,
-}
-impl<T> Registry<T> {
-    pub fn key(&self, id: &str) -> Option<Key<T>> {
-        self.id_map.get(id).cloned()
-    }
-    pub fn by_key(&self, key: Key<T>) -> &T {
-        &self.data_list[key.numeric_id()]
-    }
-    pub fn data_entries(&self) -> impl Iterator<Item = &T> {
-        self.data_list.iter()
-    }
+    pub data_list: Vec<T>,
 }
 macro_rules! create_registries{
     ($($type:ty,$id:ident);*) => {
@@ -109,12 +93,11 @@ macro_rules! create_registries{
             fn get_registry(&self) -> &Registry<T>;
         }
         #[allow(non_snake_case)]
-        #[derive(Clone)]
         pub struct LoadRegistryStorage{
-            $($id: LoadRegistry<$type, PathBuf>,)*
+            $($id: LoadRegistry<$type>,)*
         }
         pub trait LoadRegistryProvider<T> {
-            fn get_load_registry(&self) -> &LoadRegistry<T, PathBuf>;
+            fn get_load_registry(&self) -> &LoadRegistry<T>;
         }
         $(
             impl RegistryProvider<$type> for RegistryStorage{
@@ -123,7 +106,7 @@ macro_rules! create_registries{
                 }
             }
             impl LoadRegistryProvider<$type> for LoadRegistryStorage{
-                fn get_load_registry(&self) -> &LoadRegistry<$type, PathBuf>{
+                fn get_load_registry(&self) -> &LoadRegistry<$type>{
                     &self.$id
                 }
             }
@@ -133,10 +116,11 @@ macro_rules! create_registries{
         }
         pub fn load_registries(asset_path: &Path) {
             let mut load_registry = LoadRegistryStorage {
-                $($id: LoadRegistry::new(),)*
+                $($id: LoadRegistry::default(),)*
             };
             $({
                 let base_asset_path = asset_path.join(stringify!($id));
+                let mut groups = HashMap::new();
                 for entry in WalkDir::new(&base_asset_path) {
                     match entry {
                         Ok(entry) => {
@@ -147,14 +131,23 @@ macro_rules! create_registries{
                                     .as_os_str()
                                     .to_string_lossy()
                                     .replace("/", ".");
-                                load_registry.$id.register(id, entry.into_path());
+                                if id.starts_with("#"){
+                                    groups.insert(id[1..].to_string(), entry.into_path());
+                                } else {
+                                    load_registry.$id.register(id, entry.into_path());
+                                }
                             }
                         }
                         Err(_) => {}
                     }
                 }
+                for (id, group) in groups {
+                    //todo: missing error handling
+                    load_registry.$id.register_group(id, std::fs::read_to_string(group).unwrap().lines().map(|entry|Key::<$type>::id(entry).unwrap()).collect());
+                }
             })*
-            LOAD_REGISTRIES.set(load_registry.clone()).ok().unwrap();
+            LOAD_REGISTRIES.set(load_registry).ok().unwrap();
+            let load_registry = LOAD_REGISTRIES.get().unwrap();
             let mut encountered_error = false;
             let registries = RegistryStorage {
                 $($id: {
@@ -170,11 +163,8 @@ macro_rules! create_registries{
                         }
                     }
                     Registry {
-                        id_map: load_registry.id_map.clone(),
                         data_list,
-                        id_list: load_registry.id_list.clone(),
                     }
-
                 },)*
             };
             if encountered_error{
@@ -185,34 +175,32 @@ macro_rules! create_registries{
         }
     }
 }
-impl<T> Serialize for Key<T>
+impl<T: 'static> Serialize for Key<T>
 where
     LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let id = LOAD_REGISTRIES
-            .get()
-            .unwrap()
-            .get_load_registry()
-            .id_of(*self);
-        serializer.serialize_str(id)
+        serializer.serialize_str(self.text_id())
     }
 }
-impl<'de, T> Deserialize<'de> for Key<T>
+impl<'de, T: 'static> Deserialize<'de> for Key<T>
 where
     LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         struct KeyVisitor<T>(PhantomData<T>);
-        impl<'de, T> Visitor<'de> for KeyVisitor<T>
+        impl<'de, T: 'static> Visitor<'de> for KeyVisitor<T>
         where
             LoadRegistryStorage: LoadRegistryProvider<T>,
+            RegistryStorage: RegistryProvider<T>,
         {
             type Value = Key<T>;
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -222,11 +210,7 @@ where
             where
                 E: serde::de::Error,
             {
-                LOAD_REGISTRIES
-                    .get()
-                    .unwrap()
-                    .get_load_registry()
-                    .key(v)
+                Key::<T>::id(v)
                     .ok_or_else(|| serde::de::Error::custom(format!("id {} not found", v)))
             }
         }
@@ -236,7 +220,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language; Recipe, recipe; RecipeGroup, recipe_group);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language; Recipe, recipe);
 
 impl<T: 'static> Key<T>
 where
@@ -244,16 +228,27 @@ where
     RegistryStorage: RegistryProvider<T>,
 {
     pub fn data(self) -> &'static T {
-        REGISTRIES.get().unwrap().get_registry().by_key(self)
+        &REGISTRIES.get().unwrap().get_registry().data_list[self.numeric_id()]
     }
     pub fn text_id(self) -> &'static str {
         LOAD_REGISTRIES.get().unwrap().get_load_registry().id_list[self.numeric_id()].as_str()
     }
     pub fn id(id: &str) -> Option<Self> {
-        LOAD_REGISTRIES.get().unwrap().get_load_registry().key(id)
+        LOAD_REGISTRIES
+            .get()
+            .unwrap()
+            .get_load_registry()
+            .id_map
+            .get(id)
+            .cloned()
     }
     pub fn path(self) -> &'static Path {
         LOAD_REGISTRIES.get().unwrap().get_load_registry().data_list[self.numeric_id()].as_path()
+    }
+    pub fn entries() -> impl Iterator<Item = Self> {
+        let load_registry = LOAD_REGISTRIES.get().unwrap().get_load_registry();
+        (0..load_registry.data_list.len())
+            .map(|i| Key(unsafe { NonZero::new_unchecked(i + 1) }, PhantomData))
     }
 }
 
@@ -265,9 +260,10 @@ impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
 }
 
 #[derive(Deserialize)]
-pub enum OwnOrKey<T>
+pub enum OwnOrKey<T: 'static>
 where
     LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
 {
     Own(T),
     Key(Key<T>),
@@ -282,6 +278,103 @@ where
             OwnOrKey::Own(data) => &data,
             OwnOrKey::Key(key) => key.data(),
         }
+    }
+}
+pub enum KeyGroup<T> {
+    Single(Key<T>),
+    Group(usize),
+}
+impl<T: 'static> KeyGroup<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
+{
+    pub fn contains(self, key: Key<T>) -> bool {
+        match self {
+            KeyGroup::Single(v) => v == key,
+            KeyGroup::Group(group) => {
+                let (_, group) = &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[group];
+                group.contains(&key)
+            }
+        }
+    }
+    pub fn list(&self) -> &[Key<T>] {
+        match self {
+            KeyGroup::Single(key) => std::slice::from_ref(key),
+            KeyGroup::Group(group) => {
+                let (group, _) = &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[*group];
+                &group[..]
+            }
+        }
+    }
+}
+impl<T> Copy for KeyGroup<T> {}
+impl<T> Clone for KeyGroup<T> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Single(v) => Self::Single(*v),
+            Self::Group(v) => Self::Group(*v),
+        }
+    }
+}
+impl<T> PartialEq for KeyGroup<T> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Single(l0), Self::Single(r0)) => l0 == r0,
+            (Self::Group(l0), Self::Group(r0)) => l0 == r0,
+            _ => false,
+        }
+    }
+}
+impl<T> Eq for KeyGroup<T> {}
+impl<T> Hash for KeyGroup<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            KeyGroup::Single(key) => key.hash(state),
+            KeyGroup::Group(i) => i.hash(state),
+        }
+    }
+}
+impl<'de, T: 'static> Deserialize<'de> for KeyGroup<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct KeyVisitor<T>(PhantomData<T>);
+        impl<'de, T: 'static> Visitor<'de> for KeyVisitor<T>
+        where
+            LoadRegistryStorage: LoadRegistryProvider<T>,
+            RegistryStorage: RegistryProvider<T>,
+        {
+            type Value = KeyGroup<T>;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("valid string key")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(if v.starts_with("#") {
+                    *LOAD_REGISTRIES
+                        .get()
+                        .unwrap()
+                        .get_load_registry()
+                        .group_id_map
+                        .get(&v[1..])
+                        .ok_or_else(|| serde::de::Error::custom(format!("group {} not found", v)))?
+                } else {
+                    KeyGroup::Single(Key::<T>::id(v).ok_or_else(|| {
+                        serde::de::Error::custom(format!("group {} not found", v))
+                    })?)
+                })
+            }
+        }
+        deserializer.deserialize_str(KeyVisitor::<T>(PhantomData))
     }
 }
 
@@ -455,7 +548,7 @@ pub struct BlockMachineFace {
 pub enum BlockMachineAction {
     Craft {
         base_speed: f32,
-        recipes: OwnOrKey<RecipeGroup>,
+        recipes: KeyGroup<Recipe>,
         input_view: InventoryView,
         output_view: InventoryView,
     },
@@ -720,6 +813,3 @@ pub struct Recipe {
     pub craft_time: f32,
 }
 pub type RecipeKey = Key<Recipe>;
-#[derive(Deserialize)]
-pub struct RecipeGroup(pub Vec<RecipeKey>);
-pub type RecipeGroupKey = Key<RecipeGroup>;

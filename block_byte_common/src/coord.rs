@@ -786,7 +786,12 @@ pub struct AABBRaycastResult {
     pub face: Face,
 }
 impl Face {
-    pub fn add_vertices(self, coords: TexCoords, mut vertex_consumer: impl FnMut(Pos, (f32, f32))) {
+    pub fn add_vertices(
+        self,
+        coords: TexCoords,
+        rotation: u8,
+        mut vertex_consumer: impl FnMut(Pos, (f32, f32)),
+    ) {
         let (first, second, third, fourth) = match self {
             Face::Front => (
                 Pos {
@@ -921,13 +926,21 @@ impl Face {
                 },
             ),
         };
-        vertex_consumer(first, (coords.u1, coords.v1));
-        vertex_consumer(fourth, (coords.u1, coords.v2));
-        vertex_consumer(third, (coords.u2, coords.v2));
+        let get_uv = |id: u8| match (id + rotation) % 4 {
+            0 => (coords.u1, coords.v1),
+            1 => (coords.u2, coords.v1),
+            2 => (coords.u2, coords.v2),
+            3 => (coords.u1, coords.v2),
+            _ => unreachable!(),
+        };
 
-        vertex_consumer(third, (coords.u2, coords.v2));
-        vertex_consumer(second, (coords.u2, coords.v1));
-        vertex_consumer(first, (coords.u1, coords.v1));
+        vertex_consumer(first, get_uv(0));
+        vertex_consumer(fourth, get_uv(3));
+        vertex_consumer(third, get_uv(2));
+
+        vertex_consumer(third, get_uv(2));
+        vertex_consumer(second, get_uv(1));
+        vertex_consumer(first, get_uv(0));
     }
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]

@@ -331,7 +331,7 @@ impl Chunk {
                     } => {
                         let mut inventory = machine.inventory.write();
                         if *progress <= 0. {
-                            for recipe in &recipes.data().0 {
+                            for recipe in recipes.list() {
                                 let recipe = recipe.data();
                                 let mut failed = false;
                                 for (input, count) in &recipe.inputs {
