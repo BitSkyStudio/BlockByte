@@ -1,4 +1,5 @@
-use block_byte_common::coord::{Face, Pos, Vec3};
+use block_byte_common::coord::{AABB, CHUNK_SIZE, Face, Pos, Vec3};
+use block_byte_common::model::DrawAnimation;
 use block_byte_common::registry::{
     BlockKey, BlockRenderData, EntityData, ItemModel, Key, ModelData, ModelKey, TextureData,
     TextureKey,
@@ -34,6 +35,7 @@ pub struct RenderState {
     gui_render_pipeline: wgpu::RenderPipeline,
     damage_render_pipeline: wgpu::RenderPipeline,
     skybox_render_pipeline: wgpu::RenderPipeline,
+    shadow_render_pipeline: wgpu::RenderPipeline,
     skybox_buffer: Buffer,
     skybox_texture: GPUTexture,
     texture: GPUTexture,
@@ -45,6 +47,9 @@ pub struct RenderState {
     viewmodel_camera_bind_group: wgpu::BindGroup,
     gui_camera_bind_group: wgpu::BindGroup,
     depth_texture: (wgpu::Texture, Sampler, TextureView),
+    shadow_texture: (wgpu::Texture, Sampler, TextureView),
+    shadow_camera_buffer: Buffer,
+    shadow_camera_bind_group: wgpu::BindGroup,
 }
 
 impl RenderState {
@@ -52,7 +57,7 @@ impl RenderState {
         let window = Arc::new(window);
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: wgpu::Backends::VULKAN,
             ..Default::default()
         });
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -131,6 +136,11 @@ impl RenderState {
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let shadow_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Shadow Camera Buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -169,7 +179,23 @@ impl RenderState {
             }],
             label: Some("gui_camera_bind_group"),
         });
-        let depth_texture = create_depth_texture(&device, &config, "depth_texture");
+        let shadow_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: shadow_camera_buffer.as_entire_binding(),
+            }],
+            label: Some("shadow_camera_bind_group"),
+        });
+        let depth_texture = create_depth_texture(&device, size, "depth_texture");
+        let shadow_texture = create_depth_texture(
+            &device,
+            PhysicalSize {
+                width: 2048,
+                height: 2048,
+            },
+            "shadow_texture",
+        );
         let chunk_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Chunk Render Pipeline Layout"),
@@ -390,6 +416,7 @@ impl RenderState {
                     u1: (tx + 1) as f32 / 4.,
                     v2: (ty + 1) as f32 / 3.,
                 },
+                0,
                 |pos, (u, v)| {
                     skybox_mesh.vertices.push(SkyboxVertex {
                         position: [pos.x * 2. - 1., pos.y * 2. - 1., pos.z * 2. - 1.],
@@ -398,6 +425,46 @@ impl RenderState {
                 },
             );
         }
+        let shadow_render_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Shadow Render Pipeline"),
+                layout: Some(&chunk_render_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &chunk_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::desc()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &chunk_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
         let skybox_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Skybox Vertex Buffer"),
             contents: bytemuck::cast_slice(skybox_mesh.vertices.as_slice()),
@@ -425,6 +492,10 @@ impl RenderState {
             skybox_buffer,
             skybox_render_pipeline,
             skybox_texture,
+            shadow_texture,
+            shadow_camera_bind_group,
+            shadow_camera_buffer,
+            shadow_render_pipeline,
         }
     }
 
@@ -444,7 +515,7 @@ impl RenderState {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.depth_texture = create_depth_texture(&self.device, &self.config, "depth_texture");
+            self.depth_texture = create_depth_texture(&self.device, new_size, "depth_texture");
         }
     }
 
@@ -457,6 +528,7 @@ impl RenderState {
         gui_mesh: GUIMesh,
         viewmodel_mesh: BaseMesh,
         damage_mesh: DamageMesh,
+        frustum: &Frustum,
     ) -> Result<(), wgpu::SurfaceError> {
         self.camera_uniform.load_camera_proj_matrix(
             camera,
@@ -486,6 +558,13 @@ impl RenderState {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
+        self.camera_uniform.load_light(camera.position);
+        self.queue.write_buffer(
+            &self.shadow_camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -496,7 +575,33 @@ impl RenderState {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-        {
+        if false {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Shadow Render Pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_texture.2,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.shadow_render_pipeline);
+            render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.shadow_camera_bind_group, &[]);
+
+            for (_, chunk) in game.chunks.iter() {
+                if let Some((buffer, count)) = &chunk.buffer {
+                    render_pass.set_vertex_buffer(0, buffer.slice(..));
+                    render_pass.draw(0..*count, 0..1);
+                }
+            }
+        }
+        if true {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Skybox Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -554,8 +659,20 @@ impl RenderState {
 
             for (_, chunk) in &game.chunks {
                 if let Some((buffer, count)) = &chunk.buffer {
-                    render_pass.set_vertex_buffer(0, buffer.slice(..));
-                    render_pass.draw(0..*count, 0..1);
+                    if frustum.intersects_aabb(
+                        &AABB {
+                            min: Pos::all(0.),
+                            max: Pos::all(CHUNK_SIZE as f32),
+                        }
+                        .offset(chunk.position.to_block_pos().to_pos()),
+                    ) {
+                        render_pass.set_vertex_buffer(0, buffer.slice(..));
+                        render_pass.draw(0..*count, 0..1);
+                    }
+                    /*} else {
+                        culled += 1;
+                    }
+                    total += 1;*/
                 }
             }
             if !entity_mesh.vertices.is_empty() {
@@ -778,7 +895,7 @@ impl SkyboxVertex {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniform {
+pub struct CameraUniform {
     view_proj: [[f32; 4]; 4],
 }
 impl CameraUniform {
@@ -786,6 +903,25 @@ impl CameraUniform {
         Self {
             view_proj: cgmath::Matrix4::identity().into(),
         }
+    }
+    fn load_light(&mut self, player_pos: Pos) {
+        let eye = Point3 {
+            x: player_pos.x - 10.,
+            y: player_pos.y + 100.,
+            z: player_pos.z - 5.,
+        };
+        self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
+            * cgmath::ortho(-100., 100., -100., 100., 0.05, 500.)
+            * cgmath::Matrix4::look_at_rh(
+                eye,
+                cgmath::Point3 {
+                    x: player_pos.x,
+                    y: player_pos.y,
+                    z: player_pos.z,
+                },
+                Vector3::unit_y(),
+            ))
+        .into();
     }
     fn load_camera_proj_matrix(
         &mut self,
@@ -845,6 +981,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
+use crate::clipping::Frustum;
 use crate::ui::{ScreenData, render_screen, text_renderer};
 use crate::{
     BaseMesh, ClientGame, ClientPlayer, DamageMesh, GUIMesh, Mesh, TEXTURE_ATLAS, TexCoordsExt,
@@ -958,12 +1095,12 @@ impl GPUTexture {
 }
 pub fn create_depth_texture(
     device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
+    size: PhysicalSize<u32>,
     label: &str,
 ) -> (wgpu::Texture, Sampler, TextureView) {
     let size = wgpu::Extent3d {
-        width: config.width,
-        height: config.height,
+        width: size.width,
+        height: size.height,
         depth_or_array_layers: 1,
     };
     let desc = wgpu::TextureDescriptor {
@@ -1005,7 +1142,7 @@ pub fn draw_block_model(
         BlockRenderData::Air => {}
         BlockRenderData::Full { faces } => {
             for face in Face::all() {
-                face.add_vertices(faces.by_face(*face).tex_coords(), |pos, (u, v)| {
+                face.add_vertices(faces.by_face(*face).tex_coords(), 0, |pos, (u, v)| {
                     let result_pos = (pos
                         - Pos {
                             x: 0.5,
@@ -1026,7 +1163,7 @@ pub fn draw_block_model(
             }
         }
         BlockRenderData::Model(key) => {
-            draw_model(*key, matrix, vertex_consumer, None, 0., |_| None);
+            draw_model(*key, matrix, vertex_consumer, &[], |_| None);
         }
     }
 }
@@ -1034,8 +1171,7 @@ pub fn draw_model(
     model_key: ModelKey,
     matrix: Matrix4<f32>,
     vertex_consumer: &mut impl FnMut([f32; 3], [f32; 2], [f32; 3]),
-    animation: Option<&str>,
-    time: f32,
+    animations: &[DrawAnimation],
     item_query: impl Fn(&str) -> Option<ClientItem>,
 ) {
     let model = &model_key.data().model;
@@ -1043,8 +1179,7 @@ pub fn draw_model(
     let mut item_models = Vec::new();
     model.draw(
         matrix,
-        animation,
-        time,
+        animations,
         |position, normal, uv, texture| {
             let (texture, _, _) = textures[texture];
             let uv = texture.map((uv.0, uv.1));
@@ -1079,17 +1214,10 @@ pub fn draw_model(
             ItemModel::Model(key) => {
                 let model = &key.data().model;
                 let anchor = model
-                    .anchor(binding.as_str(), Matrix4::identity(), None, 0.)
+                    .anchor(binding.as_str(), Matrix4::identity(), &[])
                     .map(|matrix| matrix.invert().unwrap())
                     .unwrap_or(Matrix4::identity());
-                draw_model(
-                    key,
-                    matrix * anchor,
-                    vertex_consumer,
-                    None,
-                    0.,
-                    EMPTY_ITEM_QUERY,
-                );
+                draw_model(key, matrix * anchor, vertex_consumer, &[], EMPTY_ITEM_QUERY);
             }
         }
     }

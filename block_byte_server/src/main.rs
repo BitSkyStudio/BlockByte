@@ -11,17 +11,19 @@ use std::{
 
 use block_byte_common::{
     ClientItem, Color, InventoryView, LookDirection, MoveMode, PlayerAbilities,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockData, BlockEntry, BlockKey, BlockRotation, EntityKey, ItemAction, ItemKey,
-        ToolData, air_block, load_registries,
+        self, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructure, EntityKey,
+        ItemAction, ItemKey, ToolData, air_block, load_registries,
     },
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockDamage, ClientBlockPlants},
 };
 use palettevec::PaletteVec;
 use parking_lot::{Mutex, RwLock};
+use rand::{Rng, rngs::StdRng};
+use rand_seeder::Seeder;
 use rayon::iter::{
     IntoParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator,
 };
@@ -29,6 +31,7 @@ use renet::{
     Bytes, ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent,
 };
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
+use ron::ser::PrettyConfig;
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
 use uuid::Uuid;
@@ -36,7 +39,10 @@ use uuid::Uuid;
 use crate::{
     inventory::{Inventory, ItemDurability, ItemStack, generate_loot_table},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
-    world::{BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex},
+    world::{
+        BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex,
+        WorldGenerator,
+    },
 };
 
 mod inventory;
@@ -87,6 +93,19 @@ fn main() {
     }
     let database = Mutex::new(database);
 
+    let console = {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            loop {
+                let mut buffer = String::new();
+                std::io::stdin().read_line(&mut buffer).unwrap();
+                tx.send(buffer).unwrap();
+            }
+        });
+        rx
+    };
+
+    let world_generator = WorldGenerator::new(1);
     let mut server = Server {
         ticks_passed: 0,
         tps: 40,
@@ -155,7 +174,7 @@ fn main() {
                 user,
                 NetworkMessageS2C::PlayerAbilities {
                     abilities: PlayerAbilities {
-                        move_mode: MoveMode::Fly,
+                        move_mode: MoveMode::Normal,
                         speed: 1.2,
                     },
                 },
@@ -519,6 +538,52 @@ fn main() {
             }
         }
 
+        while let Ok(command) = console.try_recv() {
+            if command.is_empty() {
+                continue;
+            }
+            let command = command.trim().split(" ").collect::<Vec<_>>();
+            match command[0] {
+                "structure_export" => {
+                    let args = command[1..]
+                        .iter()
+                        .map(|n| n.parse().unwrap())
+                        .collect::<Vec<i32>>();
+                    let from = BlockPos {
+                        x: args[0],
+                        y: args[1],
+                        z: args[2],
+                    };
+                    let to = BlockPos {
+                        x: args[3],
+                        y: args[4],
+                        z: args[5],
+                    };
+                    let center = BlockPos {
+                        x: args[6],
+                        y: args[7],
+                        z: args[8],
+                    };
+                    let mut structure = BlockStructure {
+                        blocks: HashMap::new(),
+                    };
+                    for position in AABB::new(from, to) {
+                        let block = server.get_block(position).unwrap();
+                        if block.block != air_block() {
+                            structure.blocks.insert(position - center, block);
+                        }
+                    }
+                    println!(
+                        "{}",
+                        ron::ser::to_string_pretty(&structure, PrettyConfig::new()).unwrap()
+                    );
+                }
+                _ => {
+                    println!("unknown command");
+                }
+            }
+        }
+
         for (user_index, user) in &server.users {
             {
                 let inventory = match user
@@ -594,7 +659,7 @@ fn main() {
                 }
             }
         }
-        server.chunks.iter().for_each(|(_, chunk)| {
+        server.chunks.par_iter().for_each(|(_, chunk)| {
             chunk.tick(&server);
         });
 
@@ -679,7 +744,7 @@ fn main() {
             true
         });
 
-        chunk_viewing_manager.manage(&mut server, &database);
+        chunk_viewing_manager.manage(&mut server, &database, &world_generator);
 
         {
             let mut skipping_users = HashSet::new();
@@ -988,7 +1053,12 @@ impl ChunkViewingManager {
         }
         server.send_message(user, NetworkMessageS2C::UnloadChunk { position });
     }
-    pub fn manage(self, server: &mut Server, db: &Mutex<rusqlite::Connection>) {
+    pub fn manage(
+        self,
+        server: &mut Server,
+        db: &Mutex<rusqlite::Connection>,
+        world_generator: &WorldGenerator,
+    ) {
         use rayon::iter::ParallelIterator;
 
         let unloads = self
@@ -1041,97 +1111,172 @@ impl ChunkViewingManager {
             transaction.commit().unwrap();
         }
         let mut to_decorate = Vec::new();
-        let db = db.lock();
-        let mut stmt = db
-            .prepare_cached("SELECT data FROM chunks WHERE x=?1 and y=?2 and z=?3")
-            .unwrap();
-        for (position, users, load_message, (mut chunk, entities)) in self
-            .load
-            .into_iter()
-            .map(move |(position, users)| {
-                let data = stmt
-                    .query_row((position.x, position.y, position.z), |row| {
-                        row.get::<_, Vec<u8>>(0)
-                    })
-                    .ok();
-                (position, users, data)
-            })
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .map(|(position, users, data)| {
-                let mut chunk = match data.and_then(|data| {
-                    match serde_cbor::from_slice::<ChunkSaveData>(data.as_slice()) {
-                        Ok(data) => Some(data),
-                        Err(_) => {
-                            println!("loading {position:?} failed, regenerating");
-                            None
-                        }
-                    }
-                }) {
-                    Some(data) => (
-                        Chunk {
-                            blocks: RwLock::new(data.blocks),
-                            block_events: Mutex::new(data.block_events),
-                            components: data.components,
-                            position,
-                            viewers: HashSet::new(),
-                            entities: Vec::new(),
-                            decorated: data.decorated,
-                        },
-                        data.entities,
-                    ),
-                    None => (Chunk::generate(position), Vec::new()),
-                };
-                (
-                    position,
-                    users,
-                    MessageQueue::encode_message(NetworkMessageS2C::LoadChunk {
-                        position,
-                        blocks: chunk.0.blocks.get_mut().clone(),
-                        components: chunk.0.components.client(),
-                    }),
-                    chunk,
-                )
-            })
-            .collect::<Vec<_>>()
         {
-            for face in Face::all() {
-                let chunk_position = chunk.position + face.get_chunk_offset();
-                if let Some(chunk) = server.chunks.get(&chunk_position) {
-                    if !chunk.decorated {
-                        let mut failed = false;
-                        for offset in (AABB {
-                            min: ChunkPos::all(-1),
-                            max: ChunkPos::all(1),
-                        }
-                        .offset(chunk_position))
-                        {
-                            if !server.chunks.contains_key(&(chunk_position + offset)) {
-                                failed = true;
-                                break;
+            let db = db.lock();
+            let mut stmt = db
+                .prepare_cached("SELECT data FROM chunks WHERE x=?1 and y=?2 and z=?3")
+                .unwrap();
+            for (position, users, load_message, (mut chunk, entities)) in self
+                .load
+                .into_iter()
+                .map(move |(position, users)| {
+                    let data = stmt
+                        .query_row((position.x, position.y, position.z), |row| {
+                            row.get::<_, Vec<u8>>(0)
+                        })
+                        .ok();
+                    (position, users, data)
+                })
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .map(|(position, users, data)| {
+                    let mut chunk = match data.and_then(|data| {
+                        match serde_cbor::from_slice::<ChunkSaveData>(data.as_slice()) {
+                            Ok(data) => Some(data),
+                            Err(_) => {
+                                println!("loading {position:?} failed, regenerating");
+                                None
                             }
                         }
-                        if !failed {
-                            to_decorate.push(chunk_position);
-                            server.chunks.get_mut(&chunk_position).unwrap().decorated = true;
+                    }) {
+                        Some(data) => (
+                            Chunk {
+                                blocks: RwLock::new(data.blocks),
+                                block_events: Mutex::new(data.block_events),
+                                components: data.components,
+                                position,
+                                viewers: HashSet::new(),
+                                entities: Vec::new(),
+                                decorated: data.decorated,
+                            },
+                            data.entities,
+                        ),
+                        None => (Chunk::generate(position, world_generator), Vec::new()),
+                    };
+                    (
+                        position,
+                        users,
+                        MessageQueue::encode_message(NetworkMessageS2C::LoadChunk {
+                            position,
+                            blocks: chunk.0.blocks.get_mut().clone(),
+                            components: chunk.0.components.client(),
+                        }),
+                        chunk,
+                    )
+                })
+                .collect::<Vec<_>>()
+            {
+                chunk.viewers = users.iter().cloned().collect();
+                for entity in entities {
+                    server.send_message_multiple(users.iter(), entity.create_add_message());
+                    chunk.entities.push(server.entities.insert(entity));
+                }
+                for user in &users {
+                    server
+                        .message_queue
+                        .0
+                        .get_mut()
+                        .push((*user, load_message.clone()));
+                }
+                server.chunks.insert(position, chunk);
+
+                for chunk_position in (AABB {
+                    min: ChunkPos::all(-1),
+                    max: ChunkPos::all(1),
+                }
+                .offset(position))
+                {
+                    if let Some(chunk) = server.chunks.get(&chunk_position) {
+                        if !chunk.decorated {
+                            let mut failed = false;
+                            for neighbor in (AABB {
+                                min: ChunkPos::all(-1),
+                                max: ChunkPos::all(1),
+                            }
+                            .offset(chunk_position))
+                            {
+                                if !server.chunks.contains_key(&neighbor) {
+                                    failed = true;
+                                    break;
+                                }
+                            }
+                            if !failed {
+                                to_decorate.push(chunk_position);
+                                server.chunks.get_mut(&chunk_position).unwrap().decorated = true;
+                            }
                         }
                     }
                 }
             }
-            chunk.viewers = users.iter().cloned().collect();
-            for entity in entities {
-                server.send_message_multiple(users.iter(), entity.create_add_message());
-                chunk.entities.push(server.entities.insert(entity));
-            }
-            for user in &users {
-                server
-                    .message_queue
-                    .0
-                    .get_mut()
-                    .push((*user, load_message.clone()));
-            }
-            server.chunks.insert(position, chunk);
         }
+        to_decorate.par_iter().for_each(|position| {
+            let column_data = world_generator.get_column_generation(*position);
+            use rand::SeedableRng;
+            let mut rng = StdRng::from_seed(
+                Seeder::from((world_generator.seed as u32, *position)).make_seed(),
+            );
+            let mut chunks_blocks = (AABB {
+                min: ChunkPos::all(-1),
+                max: ChunkPos::all(1),
+            })
+            .offset(*position)
+            .into_iter()
+            .map(|pos| server.get_chunk(pos).unwrap().blocks.write())
+            .collect::<Vec<_>>();
+            let block_offset_position = position.to_block_pos();
+            let viewers = &server.get_chunk(*position).unwrap().viewers;
+            for biome in &column_data.unique_biomes {
+                for decorator in &biome.data().decorators {
+                    for i in 0..10 {
+                        let rotation = rng.random_range(0..4);
+                        let rotation = [Face::Front, Face::Back, Face::Left, Face::Right][rotation];
+                        let rotation = Orientation::from_front_up(rotation, Face::Up).unwrap();
+                        let offset_x = rng.random_range(0..CHUNK_SIZE) as i32;
+                        let offset_z = rng.random_range(0..CHUNK_SIZE) as i32;
+                        let height =
+                            column_data.height[offset_x as usize][offset_z as usize] as i32 + 1;
+                        if column_data.biomes[offset_x as usize][offset_z as usize] != *biome {
+                            continue;
+                        }
+                        let block_position = BlockPos {
+                            x: block_offset_position.x + offset_x,
+                            y: height,
+                            z: block_offset_position.z + offset_z,
+                        };
+                        if height >= block_offset_position.y
+                            && height < block_offset_position.y + CHUNK_SIZE as i32
+                        {
+                            let structure = decorator.structure.data();
+                            for (offset, block) in &structure.blocks {
+                                let offset = rotation.rotate_block_pos(*offset);
+                                let mut block = *block;
+                                block.rotation = block.block.data().rotation.get_nearest_valid(
+                                    rotation
+                                        .compose(Into::<Orientation>::into(block.rotation))
+                                        .into(),
+                                );
+                                let place_position = block_position + offset;
+                                let (place_chunk, place_chunk_offset) =
+                                    place_position.to_chunk_pos_offset();
+                                let place_chunk = place_chunk - *position;
+                                let place_chunk_index = (place_chunk.x + 1)
+                                    + (place_chunk.y + 1) * 3
+                                    + (place_chunk.z + 1) * 9;
+                                chunks_blocks[place_chunk_index as usize]
+                                    .set(place_chunk_offset.index(), &block);
+                                server.send_message_multiple(
+                                    viewers.iter(),
+                                    NetworkMessageS2C::SetBlock {
+                                        position: place_position,
+                                        block,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 

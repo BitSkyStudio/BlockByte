@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::TexCoords;
 
 pub const CHUNK_SIZE_BITS: u8 = 5;
-pub const CHUNK_SIZE: u8 = 32;
+pub const CHUNK_SIZE: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Vec3<T: Copy> {
@@ -234,6 +234,9 @@ impl Pos {
             y: lerp_number(self.y, other.y, v),
             z: lerp_number(self.z, other.z, v),
         }
+    }
+    pub fn normalize(self) -> Pos {
+        self / self.length()
     }
 }
 pub fn lerp_number(a: f32, b: f32, v: f32) -> f32 {
@@ -1008,7 +1011,7 @@ impl Orientation {
         let base = match axis {
             Axis::X => self.right,
             Axis::Y => self.up,
-            Axis::Z => self.forward,
+            Axis::Z => self.forward.opposite(),
         };
 
         if dir { base.opposite() } else { base }

@@ -220,7 +220,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language; Recipe, recipe);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language; Recipe, recipe; BlockStructure, structure);
 
 impl<T: 'static> Key<T>
 where
@@ -750,11 +750,16 @@ pub struct BiomeData {
     pub middle_block: BlockKey,
     pub bottom_block: BlockKey,
     pub plants: Vec<PlantSpawner>,
+    pub decorators: Vec<BiomeDecorator>,
 }
 #[derive(Deserialize)]
 pub struct PlantSpawner {
     pub chance: f32,
     pub plant: PlantKey,
+}
+#[derive(Deserialize)]
+pub struct BiomeDecorator {
+    pub structure: StructureKey,
 }
 pub type BiomeKey = Key<BiomeData>;
 
@@ -813,3 +818,9 @@ pub struct Recipe {
     pub craft_time: f32,
 }
 pub type RecipeKey = Key<Recipe>;
+
+#[derive(Serialize, Deserialize)]
+pub struct BlockStructure {
+    pub blocks: HashMap<BlockPos, BlockEntry>,
+}
+pub type StructureKey = Key<BlockStructure>;

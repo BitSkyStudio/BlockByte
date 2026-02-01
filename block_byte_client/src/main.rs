@@ -23,9 +23,9 @@ use block_byte_common::{
     model::DrawAnimation,
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockPalette, BlockRenderData, BlockRotation, EntityData, EntityKey, ItemAction,
-        ItemKey, Key, ModelData, ModelKey, Registry, TextureData, TextureKey, ToolData,
-        TranslationLanguage, air_block, load_registries,
+        self, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation, EntityData,
+        EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, ModelData, ModelKey, Registry,
+        TextureData, TextureKey, ToolData, TranslationLanguage, air_block, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -48,7 +48,8 @@ use winit::{
 };
 
 use crate::{
-    render::{DamageVertex, GUIVertex, RenderState, Vertex},
+    clipping::Frustum,
+    render::{CameraUniform, DamageVertex, GUIVertex, RenderState, Vertex},
     ui::{ScreenData, TEXT_RENDERER, TextRenderer, render_screen, text_renderer},
 };
 
@@ -198,12 +199,39 @@ impl ApplicationHandler for App {
                             match self.camera.raycast(&self.game) {
                                 RayCastResult::Empty => {}
                                 RayCastResult::Block(position, _) => {
-                                    self.send_message(NetworkMessageC2S::InteractBlock {
-                                        position,
-                                    });
+                                    let (chunk, offset) = position.to_chunk_pos_offset();
+                                    let block = self
+                                        .game
+                                        .chunks
+                                        .get(&chunk)
+                                        .unwrap()
+                                        .blocks
+                                        .get(offset.index())
+                                        .unwrap()
+                                        .block
+                                        .data();
+                                    match &block.interact_action {
+                                        BlockInteractAction::Ignore => {}
+                                        _ => {
+                                            self.game.build_animation = 1.;
+                                            self.send_message(NetworkMessageC2S::InteractBlock {
+                                                position,
+                                            });
+                                        }
+                                    }
                                 }
                                 RayCastResult::Entity(entity) => {
-                                    self.send_message(NetworkMessageC2S::InteractEntity { entity });
+                                    let entity_data =
+                                        self.game.entities.get(&entity).unwrap().key.data();
+                                    match &entity_data.interact_action {
+                                        EntityInteractAction::Ignore => {}
+                                        _ => {
+                                            self.game.build_animation = 1.;
+                                            self.send_message(NetworkMessageC2S::InteractEntity {
+                                                entity,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -274,19 +302,26 @@ impl ApplicationHandler for App {
                 if state == ElementState::Pressed && self.game.screen.is_none() {
                     match (self.camera.raycast(&self.game), button) {
                         (RayCastResult::Block(position, face), MouseButton::Right) => {
-                            self.game.build_animation = 0.5;
-                            self.send_message(NetworkMessageC2S::PlaceBlock {
-                                position,
-                                face,
-                                variant: self
-                                    .game
-                                    .held_item()
-                                    .as_ref()
-                                    .and_then(|item| {
-                                        self.game.item_variation.get(&item.item).cloned()
-                                    })
-                                    .unwrap_or(0),
-                            });
+                            if let Some(hand_item) =
+                                self.game.held_item().as_ref().map(|item| item.item)
+                            {
+                                match &hand_item.data().action {
+                                    ItemAction::Ignore => {}
+                                    _ => {
+                                        self.game.build_animation = 1.;
+                                        self.send_message(NetworkMessageC2S::PlaceBlock {
+                                            position,
+                                            face,
+                                            variant: self
+                                                .game
+                                                .item_variation
+                                                .get(&hand_item)
+                                                .cloned()
+                                                .unwrap_or(0),
+                                        });
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -309,6 +344,14 @@ impl ApplicationHandler for App {
                     .pre_present_notify();
 
                 let render_state = self.render_state.as_mut().unwrap();
+                let frustum = crate::clipping::Frustum::from_matrix(
+                    CameraUniform::OPENGL_TO_WGPU_MATRIX
+                        * ClientPlayer::create_projection_matrix(
+                            render_state.size().width as f32 / render_state.size().height as f32,
+                            90.,
+                        )
+                        * self.camera.create_view_matrix(self.game.get_player_data()),
+                );
                 let mut entity_mesh = Mesh::default();
                 let mut gui_mesh = Mesh::default();
                 let mut viewmodel_mesh = Mesh::default();
@@ -320,8 +363,9 @@ impl ApplicationHandler for App {
                     &mut gui_mesh,
                     &mut viewmodel_mesh,
                     &mut damage_mesh,
+                    &frustum,
                 );
-                self.game.build_animation = (self.game.build_animation - dt).max(0.);
+                self.game.build_animation = (self.game.build_animation - dt * 4.).max(0.);
                 {
                     let viewmodel_light = Matrix4::from_angle_x(Rad(self.camera.direction.pitch))
                         * Matrix4::from_angle_y(Rad(self.camera.direction.yaw));
@@ -498,6 +542,7 @@ impl ApplicationHandler for App {
                     gui_mesh,
                     viewmodel_mesh,
                     damage_mesh,
+                    &frustum,
                 ) {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -1095,9 +1140,8 @@ impl ClientPlayer {
         }
         move_vector *= abilities.speed;
         move_vector *= 7.;
-        let total_move = match abilities.move_mode {
+        match abilities.move_mode {
             MoveMode::Normal => {
-                move_vector.y = 0.;
                 if game.keys.is_down(KeyCode::ShiftLeft) {
                     move_vector /= 2.;
                 }
@@ -1105,11 +1149,21 @@ impl ClientPlayer {
                     self.velocity.y += 5.;
                 }
                 self.velocity.y -= 10. * delta_time;
-                (move_vector + self.velocity) * delta_time
             }
-            MoveMode::Fly | MoveMode::NoClip => move_vector * delta_time,
-        };
-
+            MoveMode::Fly | MoveMode::NoClip => {}
+        }
+        let acceleration = if self.on_ground { 1. } else { 0.5 } * 40.;
+        let mut error = (move_vector - self.velocity);
+        match abilities.move_mode {
+            MoveMode::Normal => {
+                error.y = 0.;
+            }
+            MoveMode::Fly | MoveMode::NoClip => {}
+        }
+        if error.length() > 0. {
+            self.velocity += (error.normalize() * (error.length().min(acceleration * delta_time)));
+        }
+        let total_move = self.velocity * delta_time;
         match abilities.move_mode {
             MoveMode::Normal | MoveMode::Fly => {
                 if !Self::collides_at(
@@ -1289,11 +1343,12 @@ impl ClientGame {
         gui_mesh: &mut GUIMesh,
         viewmodel_mesh: &mut BaseMesh,
         damage_mesh: &mut DamageMesh,
+        frustum: &Frustum,
     ) {
         let animation = if self.build_animation > 0. {
             Some(DrawAnimation {
                 animation: "place",
-                time: self.build_animation,
+                time: self.build_animation / 2.,
                 weight: 1.,
             })
         } else if let Some(hit_timer) = self.hit_timer {
@@ -1391,6 +1446,15 @@ impl ClientGame {
                 z: player_chunk.z + view_distance,
             },
         ) {
+            if !frustum.intersects_aabb(
+                &(AABB {
+                    min: Pos::all(0.),
+                    max: Pos::all(CHUNK_SIZE as f32),
+                })
+                .offset(chunk_position.to_block_pos().to_pos()),
+            ) {
+                continue;
+            }
             if let Some(chunk) = self.chunks.get(&chunk_position) {
                 for (offset, damage) in &chunk.components.damage.components {
                     let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
@@ -1745,9 +1809,9 @@ impl ClientChunk {
             return mesh;
         }
 
-        for x in 0..CHUNK_SIZE {
-            for y in 0..CHUNK_SIZE {
-                for z in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE as u8 {
+            for y in 0..CHUNK_SIZE as u8 {
+                for z in 0..CHUNK_SIZE as u8 {
                     let block = *self.blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = block.block.data();
                     match &block_data.render_data {
@@ -1847,4 +1911,83 @@ pub fn translate<'a>(key: &'a str) -> &'a str {
         .unwrap()
         .data()
         .translate(key)
+}
+pub mod clipping {
+    use block_byte_common::coord::AABB;
+    use cgmath::InnerSpace;
+    use cgmath::Vector3;
+
+    #[derive(Clone, Copy)]
+    pub struct Plane {
+        pub normal: Vector3<f32>,
+        pub d: f32,
+    }
+    pub struct Frustum {
+        pub planes: [Plane; 6],
+    }
+    impl Plane {
+        fn normalize(self) -> Plane {
+            let len = self.normal.magnitude();
+            Plane {
+                normal: self.normal / len,
+                d: self.d / len,
+            }
+        }
+        pub fn distance(&self, p: Vector3<f32>) -> f32 {
+            self.normal.dot(p) + self.d
+        }
+    }
+    impl Frustum {
+        pub fn from_matrix(m: cgmath::Matrix4<f32>) -> Self {
+            use cgmath::Matrix;
+            //let m = m.transpose(); // cgmath is column-major
+
+            let rows = [m.row(0), m.row(1), m.row(2), m.row(3)];
+
+            let planes = [
+                // Left
+                Self::plane_from_row(rows[3] + rows[0]),
+                // Right
+                Self::plane_from_row(rows[3] - rows[0]),
+                // Bottom
+                Self::plane_from_row(rows[3] + rows[1]),
+                // Top
+                Self::plane_from_row(rows[3] - rows[1]),
+                // Near
+                Self::plane_from_row(/*rows[3] + */ rows[2]),
+                // Far
+                Self::plane_from_row(rows[3] - rows[2]),
+            ];
+
+            Frustum { planes }
+        }
+        fn plane_from_row(v: cgmath::Vector4<f32>) -> Plane {
+            Plane {
+                normal: Vector3::new(v.x, v.y, v.z),
+                d: v.w,
+            }
+            .normalize()
+        }
+        pub fn intersects_aabb(&self, aabb: &AABB<f32>) -> bool {
+            for plane in &self.planes {
+                let center = (aabb.min + aabb.max) * 0.5;
+                let extents = aabb.max - center;
+
+                let r = extents.x * plane.normal.x.abs()
+                    + extents.y * plane.normal.y.abs()
+                    + extents.z * plane.normal.z.abs();
+
+                if plane.normal.dot(Vector3 {
+                    x: center.x,
+                    y: center.y,
+                    z: center.z,
+                }) + plane.d
+                    < -r
+                {
+                    return false;
+                }
+            }
+            true
+        }
+    }
 }

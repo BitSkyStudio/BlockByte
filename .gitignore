@@ -1,4 +1,4 @@
 target/
 .vscode
 perf.*
-save.db3
+*.db3

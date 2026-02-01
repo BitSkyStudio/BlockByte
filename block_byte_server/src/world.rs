@@ -1,8 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
+    mem::MaybeUninit,
     ops::Deref,
     path::Path,
-    sync::{OnceLock, atomic::AtomicBool},
+    sync::{Arc, OnceLock, atomic::AtomicBool},
 };
 
 use block_byte_common::{
@@ -52,17 +53,15 @@ pub struct Chunk {
     pub decorated: bool,
 }
 impl Chunk {
-    pub fn generate(position: ChunkPos) -> Chunk {
-        let seed = 1;
-
+    pub fn generate(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         /*use noise::MultiFractal;
         let height_noise: BasicMulti<Perlin> = BasicMulti::new(seed)
             .set_octaves(4)
             .set_frequency(1.0)
             .set_lacunarity(2.0)
             .set_persistence(0.5);*/
-        let height_noise = Perlin::new(seed);
-        let density_noise = Perlin::new(seed ^ 583279234);
+
+        let column_data = generator.get_column_generation(position);
 
         let mut blocks = BlockPalette::filled(
             BlockEntry {
@@ -70,51 +69,20 @@ impl Chunk {
                 color: Color::WHITE,
                 rotation: BlockRotation::default(),
             },
-            CHUNK_SIZE as usize * CHUNK_SIZE as usize * CHUNK_SIZE as usize,
+            CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
         );
         let mut components = ChunkBlockComponents::default();
-        let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
-        let mountain_spline = Spline::from_vec(vec![
-            splines::Key::new(-1., 60., Interpolation::Linear),
-            splines::Key::new(0., 80., Interpolation::Linear),
-            splines::Key::new(0.5, 100., Interpolation::Cosine),
-            splines::Key::new(1., 200., Interpolation::Linear),
-        ]);
-        let small_spline = Spline::from_vec(vec![
-            splines::Key::new(-1., -3., Interpolation::Linear),
-            splines::Key::new(1., 3., Interpolation::Linear),
-        ]);
-        for z in 0..CHUNK_SIZE {
-            for x in 0..CHUNK_SIZE {
-                let block_x = x as i32 + position.x as i32 * CHUNK_SIZE as i32;
-                let block_z = z as i32 + position.z as i32 * CHUNK_SIZE as i32;
 
-                let mountain_height = height_noise
-                    .get([block_x as f64 / 500., block_z as f64 / 500.])
-                    .clamp(-0.99, 0.99);
-
-                let small_noise = height_noise
-                    .get([block_x as f64 / 30., block_z as f64 / 30.])
-                    .clamp(-0.99, 0.99);
-                let height = (mountain_spline.sample(mountain_height).unwrap()
-                    + small_spline.sample(small_noise).unwrap());
-                height_map[x as usize][z as usize] = height as i32;
-            }
-        }
-        let hole_spline = Spline::from_vec(vec![
-            splines::Key::new(100., 0., Interpolation::Linear),
-            splines::Key::new(120., 0.8, Interpolation::Linear),
-            splines::Key::new(200., 0., Interpolation::Linear),
-        ]);
-        let biome = BiomeKey::id("forest").unwrap().data();
         use rand::SeedableRng;
-        let mut rng = StdRng::from_seed(Seeder::from((seed, position)).make_seed());
-        for z in 0..CHUNK_SIZE {
-            for y in 0..CHUNK_SIZE {
-                for x in 0..CHUNK_SIZE {
+        let mut rng =
+            StdRng::from_seed(Seeder::from((generator.seed as u32, position)).make_seed());
+        for z in 0..CHUNK_SIZE as u8 {
+            for y in 0..CHUNK_SIZE as u8 {
+                for x in 0..CHUNK_SIZE as u8 {
                     let offset = ChunkOffset::new(x, y, z);
                     let y_pos = y as i32 + position.y as i32 * CHUNK_SIZE as i32;
-                    let height = height_map[x as usize][z as usize];
+                    let biome = column_data.biomes[x as usize][y as usize].data();
+                    let height = column_data.height[x as usize][z as usize] as i32;
                     /*let holes = hole_spline.clamped_sample(height as f32).unwrap();
                     let density = density_noise.get([
                         (position.x as f64 * CHUNK_SIZE as f64 + x as f64) / 10.,
@@ -849,4 +817,68 @@ pub struct BlockMachine {
     pub inventory: RwLock<Inventory>,
     #[serde(default)]
     pub progress_bars: Mutex<Vec<f32>>,
+}
+pub struct ChunkColumnGeneration {
+    pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
+    pub height: [[u16; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
+    pub unique_biomes: Vec<BiomeKey>,
+}
+pub struct WorldGenerator {
+    pub seed: u64,
+    pub biome_height_cache: moka::sync::Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
+}
+impl WorldGenerator {
+    pub fn new(seed: u64) -> WorldGenerator {
+        WorldGenerator {
+            seed,
+            biome_height_cache: moka::sync::Cache::new(1024),
+        }
+    }
+    pub fn get_column_generation(&self, chunk: ChunkPos) -> Arc<ChunkColumnGeneration> {
+        self.biome_height_cache.get_with((chunk.x, chunk.z), || {
+            let height_noise = Perlin::new(self.seed as u32);
+            let density_noise = Perlin::new(self.seed as u32 ^ 583279234);
+            let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
+            let forest = BiomeKey::id("forest").unwrap();
+            let mut biome_map = [[forest; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
+            let mountain_spline = Spline::from_vec(vec![
+                splines::Key::new(-1., 60., Interpolation::Linear),
+                splines::Key::new(0., 80., Interpolation::Linear),
+                splines::Key::new(0.5, 100., Interpolation::Cosine),
+                splines::Key::new(1., 200., Interpolation::Linear),
+            ]);
+            let small_spline = Spline::from_vec(vec![
+                splines::Key::new(-1., -3., Interpolation::Linear),
+                splines::Key::new(1., 3., Interpolation::Linear),
+            ]);
+            for z in 0..CHUNK_SIZE {
+                for x in 0..CHUNK_SIZE {
+                    let block_x = x as i32 + chunk.x as i32 * CHUNK_SIZE as i32;
+                    let block_z = z as i32 + chunk.z as i32 * CHUNK_SIZE as i32;
+
+                    let mountain_height = height_noise
+                        .get([block_x as f64 / 500., block_z as f64 / 500.])
+                        .clamp(-0.99, 0.99);
+
+                    let small_noise = height_noise
+                        .get([block_x as f64 / 30., block_z as f64 / 30.])
+                        .clamp(-0.99, 0.99);
+                    let height = (mountain_spline.sample(mountain_height).unwrap()
+                        + small_spline.sample(small_noise).unwrap());
+                    height_map[x as usize][z as usize] = height as u16;
+                    //biome_map[x as usize][z as usize] = biome;
+                }
+            }
+            let hole_spline = Spline::from_vec(vec![
+                splines::Key::new(100., 0., Interpolation::Linear),
+                splines::Key::new(120., 0.8, Interpolation::Linear),
+                splines::Key::new(200., 0., Interpolation::Linear),
+            ]);
+            Arc::new(ChunkColumnGeneration {
+                biomes: biome_map,
+                height: height_map,
+                unique_biomes: vec![forest],
+            })
+        })
+    }
 }
