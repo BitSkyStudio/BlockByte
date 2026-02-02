@@ -9,7 +9,7 @@ use std::{
     net::{SocketAddr, UdpSocket},
     ops::ControlFlow,
     path::Path,
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -23,16 +23,17 @@ use block_byte_common::{
     model::DrawAnimation,
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation, EntityData,
-        EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, ModelData, ModelKey, Registry,
-        TextureData, TextureKey, ToolData, TranslationLanguage, air_block, load_registries,
+        self, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation,
+        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, ModelData, ModelKey,
+        Registry, TextureData, TextureKey, ToolData, TranslationLanguage, air_block,
+        load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
 };
 use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
 use image::{DynamicImage, RgbaImage};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
@@ -199,17 +200,7 @@ impl ApplicationHandler for App {
                             match self.camera.raycast(&self.game) {
                                 RayCastResult::Empty => {}
                                 RayCastResult::Block(position, _) => {
-                                    let (chunk, offset) = position.to_chunk_pos_offset();
-                                    let block = self
-                                        .game
-                                        .chunks
-                                        .get(&chunk)
-                                        .unwrap()
-                                        .blocks
-                                        .get(offset.index())
-                                        .unwrap()
-                                        .block
-                                        .data();
+                                    let block = self.game.get_block(position).unwrap().block.data();
                                     match &block.interact_action {
                                         BlockInteractAction::Ignore => {}
                                         _ => {
@@ -388,12 +379,13 @@ impl ApplicationHandler for App {
                         z: 0.,
                     },
                     &format!(
-                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2}",
+                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2} mesh_queue: {}",
                         self.game.player_position.x,
                         self.game.player_position.y,
                         self.game.player_position.z,
                         1. / dt,
                         self.mspt,
+                        self.game.scheduled_chunks.len()
                     ),
                     0.05,
                     Color::WHITE,
@@ -490,20 +482,14 @@ impl ApplicationHandler for App {
 
                     if let Some(tooltip) = match self.camera.raycast(&self.game) {
                         RayCastResult::Empty => None,
-                        RayCastResult::Block(pos, face) => {
-                            let (chunk, offset) = pos.to_chunk_pos_offset();
-                            self.game
-                                .chunks
-                                .get(&chunk)
-                                .unwrap()
-                                .blocks
-                                .get(offset.index())
-                                .unwrap()
-                                .block
-                                .data()
-                                .interact_action
-                                .tooltip()
-                        }
+                        RayCastResult::Block(pos, face) => self
+                            .game
+                            .get_block(pos)
+                            .unwrap()
+                            .block
+                            .data()
+                            .interact_action
+                            .tooltip(),
                         RayCastResult::Entity(uuid) => self
                             .game
                             .entities
@@ -624,17 +610,17 @@ impl ApplicationHandler for App {
                                 self.game.chunks.insert(
                                     position,
                                     ClientChunk {
-                                        blocks,
+                                        mesh_build_data: Arc::new(RwLock::new(
+                                            ChunkMeshBuildData { blocks, version: 0 },
+                                        )),
                                         buffer: None,
                                         position,
                                         components,
                                     },
                                 );
-                                self.game.modified_chunks.insert(position);
+                                self.game.mark_modified(position);
                                 for face in Face::all() {
-                                    self.game
-                                        .modified_chunks
-                                        .insert(position + face.get_chunk_offset());
+                                    self.game.mark_modified(position + face.get_chunk_offset());
                                 }
                             }
                             NetworkMessageS2C::UnloadChunk { position } => {
@@ -643,10 +629,14 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::SetBlock { position, block } => {
                                 let (chunk, offset) = position.to_chunk_pos_offset();
                                 {
-                                    let chunk = self.game.chunks.get_mut(&chunk).unwrap();
-                                    chunk.blocks.set(offset.index(), &block);
+                                    let chunk = self.game.chunks.get(&chunk).unwrap();
+                                    chunk
+                                        .mesh_build_data
+                                        .write()
+                                        .blocks
+                                        .set(offset.index(), &block);
                                 }
-                                self.game.modified_chunks.insert(chunk);
+                                self.game.mark_modified(chunk);
                                 let offset_xyz = offset.xyz();
                                 for face in Face::all() {
                                     let face_offset = face.get_block_offset();
@@ -663,9 +653,7 @@ impl ApplicationHandler for App {
                                         || o(offset_xyz.y) == face_offset.y
                                         || o(offset_xyz.z) == face_offset.z
                                     {
-                                        self.game
-                                            .modified_chunks
-                                            .insert(chunk + face.get_chunk_offset());
+                                        self.game.mark_modified(chunk + face.get_chunk_offset());
                                     }
                                 }
                             }
@@ -1065,19 +1053,7 @@ impl ClientPlayer {
         let mut raycast_result = RayCastResult::Empty;
 
         if let Some((block, position, face)) = ray.block_raycast(|block, position, face| {
-            let (chunk, offset) = block.to_chunk_pos_offset();
-            if world
-                .chunks
-                .get(&chunk)?
-                .blocks
-                .get(offset.index())
-                .unwrap()
-                .block
-                .data()
-                .selection
-                .len()
-                > 0
-            {
+            if world.get_block(block)?.block.data().selection.len() > 0 {
                 Some((block, position, face))
             } else {
                 None
@@ -1225,22 +1201,13 @@ impl ClientPlayer {
             Some(player_entity_data) => {
                 let collider = player_entity_data.hitbox().offset(position).to_block();
                 for block in collider {
-                    let (chunk, offset) = block.to_chunk_pos_offset();
-                    match world.chunks.get(&chunk) {
-                        Some(chunk) => {
-                            if !chunk
-                                .blocks
-                                .get(offset.index())
-                                .unwrap()
-                                .block
-                                .data()
-                                .selection
-                                .is_empty()
-                            {
+                    match world.get_block(block) {
+                        Some(block) => {
+                            if !block.block.data().selection.is_empty() {
                                 return true;
                             }
                         }
-                        None => return true,
+                        None => return false,
                     }
                 }
                 false
@@ -1287,6 +1254,7 @@ pub struct ClientGame {
     pub player_position: Pos,
     pub chunks: HashMap<ChunkPos, ClientChunk>,
     pub modified_chunks: HashSet<ChunkPos>,
+    pub scheduled_chunks: HashSet<ChunkPos>,
     pub entities: HashMap<Uuid, ClientEntity>,
     pub player_entity: Option<Uuid>,
     pub screen: Option<ScreenData>,
@@ -1299,6 +1267,10 @@ pub struct ClientGame {
     pub hotbar_slot: usize,
     pub item_variation: HashMap<ItemKey, usize>,
     pub build_animation: f32,
+    pub chunk_mesh_channels: (
+        std::sync::mpsc::Sender<(ChunkPos, BaseMesh, u64)>,
+        std::sync::mpsc::Receiver<(ChunkPos, BaseMesh, u64)>,
+    ),
 }
 impl Default for ClientGame {
     fn default() -> Self {
@@ -1322,10 +1294,18 @@ impl Default for ClientGame {
             hotbar_slot: 0,
             item_variation: HashMap::new(),
             build_animation: 0.,
+            scheduled_chunks: HashSet::new(),
+            chunk_mesh_channels: std::sync::mpsc::channel(),
         }
     }
 }
 impl ClientGame {
+    pub fn mark_modified(&mut self, chunk_position: ChunkPos) {
+        if let Some(chunk) = self.chunks.get(&chunk_position) {
+            chunk.mesh_build_data.write().version += 1;
+            self.modified_chunks.insert(chunk_position);
+        }
+    }
     pub fn held_item(&self) -> &Option<ClientItem> {
         &self.hud.slots[self.hotbar_slot]
     }
@@ -1334,6 +1314,19 @@ impl ClientGame {
             .as_ref()
             .and_then(|item| item.item.data().tool)
             .unwrap_or(ToolData::hand())
+    }
+    pub fn get_block(&self, position: BlockPos) -> Option<BlockEntry> {
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        Some(
+            *self
+                .chunks
+                .get(&chunk)?
+                .mesh_build_data
+                .read()
+                .blocks
+                .get(offset.index())
+                .unwrap(),
+        )
     }
     pub fn tick_client(
         &mut self,
@@ -1373,37 +1366,49 @@ impl ClientGame {
                 _ => None,
             },
         );
-        let max_chunk_meshes_per_frame = 64;
-        for (position, mesh) in self
-            .modified_chunks
-            .extract_if(|_| true)
-            .take(max_chunk_meshes_per_frame)
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .filter_map(|chunk_position| {
-                let chunk = self.chunks.get(&chunk_position);
-                let neighbors = FaceMap::init(|face| {
-                    self.chunks.get(&(chunk_position + face.get_chunk_offset()))
-                });
-                match chunk {
-                    Some(chunk) => Some((chunk_position, chunk.rebuild_chunk_mesh(neighbors))),
-                    None => None,
+        while let Ok((position, mesh, version)) = self.chunk_mesh_channels.1.try_recv() {
+            self.scheduled_chunks.remove(&position);
+            if let Some(chunk) = self.chunks.get_mut(&position) {
+                chunk.buffer = if mesh.vertices.len() == 0 {
+                    None
+                } else {
+                    Some((
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Chunk Vertex Buffer"),
+                            contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        }),
+                        mesh.vertices.len() as u32,
+                    ))
+                };
+                if version < chunk.mesh_build_data.read().version {
+                    self.modified_chunks.insert(position);
                 }
-            })
-            .collect::<Vec<_>>()
-        {
-            self.chunks.get_mut(&position).unwrap().buffer = if mesh.vertices.len() == 0 {
-                None
-            } else {
-                Some((
-                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Chunk Vertex Buffer"),
-                        contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    }),
-                    mesh.vertices.len() as u32,
-                ))
-            };
+            }
+        }
+        for modified_chunk in self.modified_chunks.drain() {
+            if let Some(chunk) = self.chunks.get(&modified_chunk) {
+                if self.scheduled_chunks.insert(modified_chunk) {
+                    let tx = self.chunk_mesh_channels.0.clone();
+                    let build_data = chunk.mesh_build_data.clone();
+                    let neighbor_chunks = FaceMap::init(|face| {
+                        Some(
+                            self.chunks
+                                .get(&(face.get_chunk_offset() + modified_chunk))?
+                                .mesh_build_data
+                                .clone(),
+                        )
+                    });
+                    rayon::spawn(move || {
+                        let (mesh, version) = ClientChunk::build_chunk_mesh(
+                            modified_chunk,
+                            build_data,
+                            neighbor_chunks,
+                        );
+                        tx.send((modified_chunk, mesh, version));
+                    });
+                }
+            }
         }
         for (id, entity) in &self.entities {
             if Some(*id) == self.player_entity {
@@ -1465,7 +1470,8 @@ impl ClientGame {
                     {
                         continue;
                     }
-                    let block = chunk.blocks.get(offset.index()).unwrap();
+                    let blocks = chunk.mesh_build_data.read();
+                    let block = blocks.blocks.get(offset.index()).unwrap();
                     let block_data = block.block.data();
                     let progress = (damage.damage
                         / block_data
@@ -1639,7 +1645,13 @@ impl ClientGame {
                         }
                         let (chunk, offset) = block_position.to_chunk_pos_offset();
                         if let Some(chunk) = self.chunks.get(&chunk) {
-                            let block = chunk.blocks.get(offset.index()).unwrap().block;
+                            let block = chunk
+                                .mesh_build_data
+                                .read()
+                                .blocks
+                                .get(offset.index())
+                                .unwrap()
+                                .block;
                             if block == air_block() {
                                 let rotation = place_block
                                     .block
@@ -1702,10 +1714,11 @@ impl ClientGame {
                 .damage
                 .components
                 .retain_mut(|(offset, health)| {
-                    let data = chunk.blocks.get(offset.index()).unwrap().block.data();
+                    let blocks = chunk.mesh_build_data.read();
+                    let data = blocks.blocks.get(offset.index()).unwrap().block.data();
                     if let Some(health_data) = &data.health {
                         health.damage -= dt
-                            * chunk
+                            * blocks
                                 .blocks
                                 .get(offset.index())
                                 .unwrap()
@@ -1735,9 +1748,13 @@ pub struct ClientEntity {
     update_timestamp: Instant,
     hand_item: Option<ClientItem>,
 }
+struct ChunkMeshBuildData {
+    pub blocks: BlockPalette,
+    pub version: u64,
+}
 pub struct ClientChunk {
     pub position: ChunkPos,
-    pub blocks: BlockPalette,
+    pub mesh_build_data: Arc<RwLock<ChunkMeshBuildData>>,
     pub components: ClientChunkBlockComponents,
     pub buffer: Option<(Buffer, u32)>,
 }
@@ -1800,27 +1817,38 @@ impl GUIMesh {
     }
 }
 impl ClientChunk {
-    pub fn rebuild_chunk_mesh(&self, neighbor_chunks: FaceMap<Option<&ClientChunk>>) -> BaseMesh {
+    pub fn build_chunk_mesh(
+        position: ChunkPos,
+        chunk_data: Arc<RwLock<ChunkMeshBuildData>>,
+        neighbor_chunks: FaceMap<Option<Arc<RwLock<ChunkMeshBuildData>>>>,
+    ) -> (BaseMesh, u64) {
         let mut mesh: BaseMesh = Mesh {
             vertices: Vec::new(),
         };
+        let chunk_data = chunk_data.read();
+        let neighbor_chunks = neighbor_chunks.map(|chunk| chunk.as_ref().map(|chunk| chunk.read()));
 
-        if self.blocks.unique_values() == 1 && self.blocks.get(0).unwrap().block == air_block() {
-            return mesh;
+        if chunk_data.blocks.unique_values() == 1
+            && chunk_data.blocks.get(0).unwrap().block == air_block()
+        {
+            return (mesh, chunk_data.version);
         }
 
         for x in 0..CHUNK_SIZE as u8 {
             for y in 0..CHUNK_SIZE as u8 {
                 for z in 0..CHUNK_SIZE as u8 {
-                    let block = *self.blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
+                    let block = *chunk_data
+                        .blocks
+                        .get(ChunkOffset::new(x, y, z).index())
+                        .unwrap();
                     let block_data = block.block.data();
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { faces } => {
                             let base_position = Pos {
-                                x: (self.position.x as f32 * CHUNK_SIZE as f32) + x as f32,
-                                y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32,
-                                z: (self.position.z as f32 * CHUNK_SIZE as f32) + z as f32,
+                                x: (position.x as f32 * CHUNK_SIZE as f32) + x as f32,
+                                y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32,
+                                z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32,
                             };
                             for face in Face::all() {
                                 let neighbor_position = BlockPos {
@@ -1830,12 +1858,12 @@ impl ClientChunk {
                                 } + face.get_block_offset();
                                 let (neighbor_chunk, neighbor_offset) =
                                     neighbor_position.to_chunk_pos_offset();
-                                let neighbor_chunk: Option<&ClientChunk> = match Face::all()
+                                let neighbor_chunk = match Face::all()
                                     .iter()
                                     .find(|f| f.get_chunk_offset() == neighbor_chunk)
                                 {
-                                    Some(face) => *neighbor_chunks.by_face(*face),
-                                    None => Some(self),
+                                    Some(face) => neighbor_chunks.by_face(*face).as_ref(),
+                                    None => Some(&chunk_data),
                                 };
                                 if let Some(neighbor_chunk) = neighbor_chunk {
                                     let neighbor_block_data = neighbor_chunk
@@ -1867,9 +1895,9 @@ impl ClientChunk {
                         }
                         BlockRenderData::Model(model) => {
                             let position = Pos {
-                                x: (self.position.x as f32 * CHUNK_SIZE as f32) + x as f32 + 0.5,
-                                y: (self.position.y as f32 * CHUNK_SIZE as f32) + y as f32 + 0.5,
-                                z: (self.position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
+                                x: (position.x as f32 * CHUNK_SIZE as f32) + x as f32 + 0.5,
+                                y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32 + 0.5,
+                                z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
                             };
                             let orientation: Orientation = block.rotation.into();
                             let right = orientation.right.get_offset();
@@ -1902,7 +1930,7 @@ impl ClientChunk {
             }
         }
 
-        mesh
+        (mesh, chunk_data.version)
     }
 }
 
