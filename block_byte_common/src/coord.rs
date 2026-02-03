@@ -508,7 +508,7 @@ impl<T> FaceMap<T> {
             Face::Down => &mut self.down,
         }
     }
-    pub fn map<'a, U>(&'a self, mut mapper: impl FnMut(&'a T) -> U + 'a) -> FaceMap<U> {
+    pub fn map<'a, U>(&'a self, mut mapper: impl FnMut(&'a T) -> U) -> FaceMap<U> {
         FaceMap::init(|face| mapper(self.by_face(face)))
     }
 }

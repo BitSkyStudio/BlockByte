@@ -1122,9 +1122,9 @@ impl ClientPlayer {
                     move_vector /= 2.;
                 }
                 if game.keys.is_down(KeyCode::Space) && self.on_ground {
-                    self.velocity.y += 5.;
+                    self.velocity.y += 8.2;
                 }
-                self.velocity.y -= 10. * delta_time;
+                self.velocity.y -= 25. * delta_time;
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }
