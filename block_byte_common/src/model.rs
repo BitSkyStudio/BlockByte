@@ -146,9 +146,9 @@ struct BBVec3 {
 impl BBVec3 {
     fn to_vec(&self) -> Vector3<f32> {
         Vector3::new(
-            self.x.parse().unwrap(),
-            self.y.parse().unwrap(),
-            self.z.parse().unwrap(),
+            self.x.trim().parse().unwrap(),
+            self.y.trim().parse().unwrap(),
+            self.z.trim().parse().unwrap(),
         )
     }
 }
@@ -339,8 +339,8 @@ pub struct MeshFace {
     vertices: Vec<(Vector3<f32>, (f32, f32))>,
     texture: usize,
 }
-pub struct DrawAnimation<'a> {
-    pub animation: &'a str,
+pub struct DrawAnimation {
+    pub animation: String,
     pub time: f32,
     pub weight: f32,
 }
@@ -365,7 +365,7 @@ impl Model {
         let animations = animations
             .iter()
             .map(|animation| ResolvedAnimation {
-                animation: *self.animations.get(animation.animation).unwrap(),
+                animation: *self.animations.get(&animation.animation).unwrap(),
                 time: animation.time,
                 weight: animation.weight,
             })
@@ -386,7 +386,7 @@ impl Model {
         let animations = animations
             .iter()
             .map(|animation| ResolvedAnimation {
-                animation: *self.animations.get(animation.animation).unwrap(),
+                animation: *self.animations.get(&animation.animation).unwrap(),
                 time: animation.time,
                 weight: animation.weight,
             })

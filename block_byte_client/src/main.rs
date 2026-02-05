@@ -54,6 +54,14 @@ use crate::{
     ui::{ScreenData, TEXT_RENDERER, TextRenderer, render_screen, text_renderer},
 };
 
+static START_TIMER: OnceLock<Instant> = OnceLock::new();
+fn secs_since_start() -> f32 {
+    START_TIMER
+        .get_or_init(|| Instant::now())
+        .elapsed()
+        .as_secs_f32()
+}
+
 fn main() {
     load_registries(&Path::new("assets"));
     use block_byte_common::registry::RegistryProvider;
@@ -191,6 +199,8 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                 } else {
+                                    self.game.viewmodel_player.trigger("equip");
+                                    self.game.swap_hand_item = self.game.held_item().clone();
                                     self.game.hotbar_slot = slot;
                                     self.send_message(NetworkMessageC2S::HotbarSelect { slot });
                                 }
@@ -204,7 +214,7 @@ impl ApplicationHandler for App {
                                     match &block.interact_action {
                                         BlockInteractAction::Ignore => {}
                                         _ => {
-                                            self.game.build_animation = 1.;
+                                            self.game.viewmodel_player.trigger("build");
                                             self.send_message(NetworkMessageC2S::InteractBlock {
                                                 position,
                                             });
@@ -217,7 +227,7 @@ impl ApplicationHandler for App {
                                     match &entity_data.interact_action {
                                         EntityInteractAction::Ignore => {}
                                         _ => {
-                                            self.game.build_animation = 1.;
+                                            self.game.viewmodel_player.trigger("build");
                                             self.send_message(NetworkMessageC2S::InteractEntity {
                                                 entity,
                                             });
@@ -266,6 +276,8 @@ impl ApplicationHandler for App {
             } => match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, scroll) => {
                     if self.game.screen.is_none() {
+                        self.game.viewmodel_player.trigger("equip");
+                        self.game.swap_hand_item = self.game.held_item().clone();
                         let mut new_slot = self.game.hotbar_slot as isize;
                         new_slot += -scroll as isize;
                         new_slot = ((new_slot % 10) + 10) % 10;
@@ -299,7 +311,7 @@ impl ApplicationHandler for App {
                                 match &hand_item.data().action {
                                     ItemAction::Ignore => {}
                                     _ => {
-                                        self.game.build_animation = 1.;
+                                        self.game.viewmodel_player.trigger("build");
                                         self.send_message(NetworkMessageC2S::PlaceBlock {
                                             position,
                                             face,
@@ -355,8 +367,8 @@ impl ApplicationHandler for App {
                     &mut viewmodel_mesh,
                     &mut damage_mesh,
                     &frustum,
+                    dt,
                 );
-                self.game.build_animation = (self.game.build_animation - dt * 4.).max(0.);
                 {
                     let viewmodel_light = Matrix4::from_angle_x(Rad(self.camera.direction.pitch))
                         * Matrix4::from_angle_y(Rad(self.camera.direction.yaw));
@@ -1115,7 +1127,9 @@ impl ClientPlayer {
             move_vector.z /= xz_mag;
         }
         move_vector *= abilities.speed;
-        move_vector *= 7.;
+        move_vector *= 4.5;
+        let running = game.keys.is_down(KeyCode::ControlLeft);
+        move_vector *= if running { 1.5 } else { 1. };
         match abilities.move_mode {
             MoveMode::Normal => {
                 if game.keys.is_down(KeyCode::ShiftLeft) {
@@ -1266,7 +1280,8 @@ pub struct ClientGame {
     pub selected_slot: Option<(usize, MouseButton)>,
     pub hotbar_slot: usize,
     pub item_variation: HashMap<ItemKey, usize>,
-    pub build_animation: f32,
+    pub viewmodel_player: AnimationPlayer,
+    pub swap_hand_item: Option<ClientItem>,
     pub chunk_mesh_channels: (
         std::sync::mpsc::Sender<(ChunkPos, BaseMesh, u64)>,
         std::sync::mpsc::Receiver<(ChunkPos, BaseMesh, u64)>,
@@ -1293,9 +1308,10 @@ impl Default for ClientGame {
             selected_slot: None,
             hotbar_slot: 0,
             item_variation: HashMap::new(),
-            build_animation: 0.,
             scheduled_chunks: HashSet::new(),
             chunk_mesh_channels: std::sync::mpsc::channel(),
+            viewmodel_player: AnimationPlayer::new(viewmodel_graph()),
+            swap_hand_item: None,
         }
     }
 }
@@ -1337,8 +1353,15 @@ impl ClientGame {
         viewmodel_mesh: &mut BaseMesh,
         damage_mesh: &mut DamageMesh,
         frustum: &Frustum,
+        dt: f32,
     ) {
-        let animation = if self.build_animation > 0. {
+        /*let animation = if self.equip_animation > 0. {
+            Some(DrawAnimation {
+                animation: "equip",
+                time: self.equip_animation,
+                weight: 1.,
+            })
+        } else if self.build_animation > 0. {
             Some(DrawAnimation {
                 animation: "place",
                 time: self.build_animation / 2.,
@@ -1351,18 +1374,46 @@ impl ClientGame {
                 weight: 1.,
             })
         } else {
-            None
-        };
+            Some(DrawAnimation {
+                animation: "idle",
+                time: (((secs_since_start() / 2.) % 2.) - 1.).abs(),
+                weight: 0.3,
+            })
+            /*Some(DrawAnimation {
+                animation: "running",
+                time: (secs_since_start() * 1.5) % 1.,
+                weight: 1.,
+            })*/
+        };*/
+        if self.keys.is_down(KeyCode::ControlLeft) {
+            self.viewmodel_player.trigger("run");
+        }
+        let (mut animation, observers) = self.viewmodel_player.evaluate(viewmodel_graph(), dt);
+        if let Some(hit_timer) = self.hit_timer {
+            animation.clear();
+            animation.push(DrawAnimation {
+                animation: "hit".to_string(),
+                time: hit_timer / self.active_tool().swing_time,
+                weight: 1.,
+            });
+        }
+        for observer in observers {
+            if observer == "swap_hand_item" {
+                self.swap_hand_item = self.held_item().clone();
+            }
+        }
+        if self.viewmodel_player.current_animation == "idle"
+            || self.viewmodel_player.current_animation == "running"
+        {
+            self.swap_hand_item = self.held_item().clone();
+        }
         render::draw_model(
             ModelKey::id("viewmodel").unwrap(),
             Matrix4::identity(),
             &mut viewmodel_mesh.vertex_consumer(),
-            match &animation {
-                Some(animation) => std::slice::from_ref(animation),
-                None => &[],
-            },
+            &animation,
             |binding| match binding {
-                "hand" => self.held_item().clone(),
+                "hand" => self.swap_hand_item.clone(),
                 _ => None,
             },
         );
@@ -2018,4 +2069,169 @@ pub mod clipping {
             true
         }
     }
+}
+
+pub struct AnimationTransition {
+    pub to: String,
+    pub condition: String,
+    pub inverted: bool,
+    pub reset: bool,
+}
+pub struct AnimationNode {
+    pub next: String,
+    pub length: f32,
+    pub speed: f32,
+    pub transitions: Vec<AnimationTransition>,
+    pub observers: Vec<(f32, String)>,
+}
+pub struct AnimationGraph {
+    pub default_animation: String,
+    pub animations: HashMap<String, AnimationNode>,
+}
+pub struct AnimationPlayer {
+    pub current_animation: String,
+    pub time: f32,
+    pub triggers: HashSet<String>,
+}
+impl AnimationPlayer {
+    pub fn new(graph: &AnimationGraph) -> AnimationPlayer {
+        AnimationPlayer {
+            current_animation: graph.default_animation.clone(),
+            time: 0.,
+            triggers: HashSet::new(),
+        }
+    }
+    pub fn trigger(&mut self, name: impl ToString) {
+        self.triggers.insert(name.to_string());
+    }
+    pub fn evaluate(
+        &mut self,
+        graph: &AnimationGraph,
+        dt: f32,
+    ) -> (Vec<DrawAnimation>, Vec<String>) {
+        let current_node = graph.animations.get(&self.current_animation).unwrap();
+        let mut activated_observers = Vec::new();
+        let previous_time = self.time;
+        self.time += dt * current_node.speed;
+        for (time, observer) in &current_node.observers {
+            if previous_time < *time * current_node.speed && self.time >= *time * current_node.speed
+            {
+                activated_observers.push(observer.to_string());
+            }
+        }
+        if self.time > current_node.length * current_node.speed {
+            self.current_animation = current_node.next.clone();
+            self.time = 0.;
+        }
+        for trigger in &current_node.transitions {
+            if self.triggers.contains(&trigger.condition) ^ trigger.inverted {
+                self.current_animation = trigger.to.clone();
+                self.time = 0.;
+            }
+            if trigger.reset {
+                self.triggers.remove(&trigger.condition);
+            }
+        }
+        (
+            vec![DrawAnimation {
+                animation: self.current_animation.clone(),
+                time: self.time,
+                weight: 1.,
+            }],
+            activated_observers,
+        )
+    }
+}
+static VIEWMODEL_GRAPH: OnceLock<AnimationGraph> = OnceLock::new();
+pub fn viewmodel_graph() -> &'static AnimationGraph {
+    VIEWMODEL_GRAPH.get_or_init(|| {
+        let mut animations = HashMap::new();
+        animations.insert(
+            "idle".to_string(),
+            AnimationNode {
+                next: "idle".to_string(),
+                length: 8.,
+                speed: 0.25,
+                transitions: vec![
+                    AnimationTransition {
+                        condition: "build".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "place".to_string(),
+                    },
+                    AnimationTransition {
+                        condition: "equip".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "equip".to_string(),
+                    },
+                    AnimationTransition {
+                        condition: "run".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "running".to_string(),
+                    },
+                ],
+                observers: vec![],
+            },
+        );
+        animations.insert(
+            "place".to_string(),
+            AnimationNode {
+                next: "idle".to_string(),
+                length: 0.5,
+                speed: 1.,
+                transitions: vec![],
+                observers: vec![(0.25, "swap_hand_item".to_string())],
+            },
+        );
+        animations.insert(
+            "equip".to_string(),
+            AnimationNode {
+                next: "idle".to_string(),
+                length: 0.5,
+                speed: 1.,
+                transitions: vec![AnimationTransition {
+                    condition: "equip".to_string(),
+                    reset: true,
+                    inverted: false,
+                    to: "equip".to_string(),
+                }],
+                observers: vec![(0.25, "swap_hand_item".to_string())],
+            },
+        );
+        animations.insert(
+            "running".to_string(),
+            AnimationNode {
+                next: "running".to_string(),
+                length: 1.,
+                speed: 1.,
+                transitions: vec![
+                    AnimationTransition {
+                        condition: "run".to_string(),
+                        reset: true,
+                        inverted: true,
+                        to: "idle".to_string(),
+                    },
+                    AnimationTransition {
+                        condition: "build".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "place".to_string(),
+                    },
+                    AnimationTransition {
+                        condition: "equip".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "equip".to_string(),
+                    },
+                ],
+                observers: vec![],
+            },
+        );
+        AnimationGraph {
+            default_animation: "idle".to_string(),
+            animations,
+        }
+    })
 }
