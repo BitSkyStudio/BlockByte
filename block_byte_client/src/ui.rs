@@ -15,7 +15,7 @@ use winit::{
     event::MouseButton,
 };
 
-use crate::{ClientGame, GUIMesh, TexCoordsExt, translate};
+use crate::{ClientGame, GUIMesh, TexCoordsExt, TexCoordsIndexExt, translate};
 
 pub struct ScreenData {
     pub screen: UIScreenKey,
@@ -308,7 +308,7 @@ fn render_element(
                     ItemModel::Block(key) => match &key.data().render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { faces } => {
-                            let texture = faces.front.tex_coords();
+                            let texture = faces.front.tex_coords(0);
                             mesh.add_quad(
                                 Pos {
                                     x: (layout.content_box_x() + border + parent_offset.x)

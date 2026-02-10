@@ -25,8 +25,8 @@ use block_byte_common::{
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation,
-        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, ModelData, ModelKey,
-        Registry, TextureData, TextureKey, ToolData, TranslationLanguage, air_block,
+        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, KeyGroup, ModelData,
+        ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguage, air_block,
         load_registries,
     },
     ui::PropertyMap,
@@ -35,6 +35,8 @@ use block_byte_common::{
 use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
 use image::{DynamicImage, RgbaImage};
 use parking_lot::{Mutex, RwLock};
+use rand::{Rng, rngs::StdRng};
+use rand_seeder::Seeder;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
@@ -611,11 +613,13 @@ impl ApplicationHandler for App {
                             self.game.hit_timer = None;
                         }
                     }
-                    while let Some(message) = self
+                    while let Some(mut message) = self
                         .network_client
                         .receive_message(DefaultChannel::ReliableOrdered)
                     {
-                        let message: NetworkMessageS2C = serde_cbor::from_slice(&message).unwrap();
+                        let mut message = &message[..];
+                        let mut rdr = lz4_flex::frame::FrameDecoder::new(&mut message);
+                        let message: NetworkMessageS2C = serde_cbor::from_reader(&mut rdr).unwrap();
                         match message {
                             NetworkMessageS2C::LoadChunk {
                                 position,
@@ -1013,6 +1017,14 @@ trait TexCoordsExt {
 impl TexCoordsExt for TextureKey {
     fn tex_coords(self) -> TexCoords {
         TEXTURE_ATLAS.get().unwrap()[self]
+    }
+}
+trait TexCoordsIndexExt {
+    fn tex_coords(self, index: usize) -> TexCoords;
+}
+impl TexCoordsIndexExt for KeyGroup<TextureData> {
+    fn tex_coords(self, index: usize) -> TexCoords {
+        self.list()[index % self.list().len()].tex_coords()
     }
 }
 pub enum RayCastResult {
@@ -1908,6 +1920,15 @@ impl ClientChunk {
                                 y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32,
                                 z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32,
                             };
+                            let mut rng = StdRng::from_seed(
+                                Seeder::from((
+                                    base_position.x as i32,
+                                    base_position.y as i32,
+                                    base_position.z as i32,
+                                ))
+                                .make_seed(),
+                            );
+                            use rand::SeedableRng;
                             for face in Face::all() {
                                 let neighbor_position = BlockPos {
                                     x: x as i32,
@@ -1937,8 +1958,9 @@ impl ClientChunk {
                                         }
                                     }
                                 }
-
-                                let texture = faces.by_face(*face).tex_coords();
+                                let texture = faces
+                                    .by_face(*face)
+                                    .tex_coords(rng.random::<u32>() as usize);
                                 face.add_vertices(texture, 0, |position, coords| {
                                     let vt_pos = base_position + position;
                                     let normal = face.get_offset();

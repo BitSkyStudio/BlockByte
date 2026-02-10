@@ -24,3 +24,9 @@ rusttype = "0.9.3"
 taffy = "0.9.2"
 base64 = "0.22.1"
 serde_cbor = "0.11.2"
+rand = "0.9.2"
+rand_seeder = "0.4.0"
+lz4_flex = { version = "0.12", default-features = false, features = [
+    "frame",
+    "std",
+] }

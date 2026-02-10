@@ -130,7 +130,8 @@ macro_rules! create_registries{
                                     .with_extension("")
                                     .as_os_str()
                                     .to_string_lossy()
-                                    .replace("/", ".");
+                                    .replace("/", ".")
+                                    .replace("\\", ".");
                                 if id.starts_with("#"){
                                     groups.insert(id[1..].to_string(), entry.into_path());
                                 } else {
@@ -581,7 +582,9 @@ pub enum BlockMachineAction {
 #[cfg(feature = "client")]
 pub enum BlockRenderData {
     Air,
-    Full { faces: FaceMap<TextureKey> },
+    Full {
+        faces: FaceMap<KeyGroup<TextureData>>,
+    },
     Model(ModelKey),
 }
 

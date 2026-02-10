@@ -785,12 +785,11 @@ fn main() {
 
         network_server.broadcast_message(
             DefaultChannel::ReliableOrdered,
-            serde_cbor::to_vec(&NetworkMessageS2C::GameTick {
+            MessageQueue::encode_message(NetworkMessageS2C::GameTick {
                 ticks_passed: server.ticks_passed,
                 dt: server.delta_time(),
                 mspt: tick_start_time.elapsed().as_secs_f32() * 1000.,
-            })
-            .unwrap(),
+            }),
         );
 
         network_transport.send_packets(&mut network_server);
@@ -809,7 +808,9 @@ fn main() {
 pub struct MessageQueue(Mutex<Vec<(UserIndex, renet::Bytes)>>);
 impl MessageQueue {
     pub fn encode_message(message: NetworkMessageS2C) -> Bytes {
-        serde_cbor::to_vec(&message).unwrap().into()
+        let mut wtr = lz4_flex::frame::FrameEncoder::new(Vec::new());
+        let mut message = serde_cbor::to_writer(&mut wtr, &message).unwrap();
+        wtr.finish().unwrap().into()
     }
     pub fn send_message<T: std::borrow::Borrow<UserIndex>>(
         &self,
@@ -1097,8 +1098,9 @@ impl ChunkViewingManager {
             })
             .par_bridge()
             .map(|(position, data)| {
-                let chunk_data = serde_cbor::to_vec(&data).unwrap();
-                (position, chunk_data)
+                let mut wtr = lz4_flex::frame::FrameEncoder::new(Vec::new());
+                serde_cbor::to_writer(&mut wtr, &data).unwrap();
+                (position, wtr.finish().unwrap())
             })
             .collect::<Vec<_>>();
         {
@@ -1136,7 +1138,9 @@ impl ChunkViewingManager {
                 .into_par_iter()
                 .map(|(position, users, data)| {
                     let mut chunk = match data.and_then(|data| {
-                        match serde_cbor::from_slice::<ChunkSaveData>(data.as_slice()) {
+                        let mut data = &data[..];
+                        let mut rdr = lz4_flex::frame::FrameDecoder::new(&mut data);
+                        match serde_cbor::from_reader::<ChunkSaveData, _>(rdr) {
                             Ok(data) => Some(data),
                             Err(_) => {
                                 println!("loading {position:?} failed, regenerating");

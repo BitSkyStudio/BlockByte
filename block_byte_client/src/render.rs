@@ -8,6 +8,8 @@ use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
 use cgmath::{Deg, EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
+use rand::rngs::StdRng;
+use rand_seeder::Seeder;
 use std::f64::consts::PI;
 use std::iter;
 use std::mem::size_of;
@@ -982,6 +984,7 @@ use crate::clipping::Frustum;
 use crate::ui::{ScreenData, render_screen, text_renderer};
 use crate::{
     BaseMesh, ClientGame, ClientPlayer, DamageMesh, GUIMesh, Mesh, TEXTURE_ATLAS, TexCoordsExt,
+    TexCoordsIndexExt,
 };
 
 pub struct GPUTexture {
@@ -1139,7 +1142,7 @@ pub fn draw_block_model(
         BlockRenderData::Air => {}
         BlockRenderData::Full { faces } => {
             for face in Face::all() {
-                face.add_vertices(faces.by_face(*face).tex_coords(), 0, |pos, (u, v)| {
+                face.add_vertices(faces.by_face(*face).tex_coords(0), 0, |pos, (u, v)| {
                     let result_pos = (pos
                         - Pos {
                             x: 0.5,
