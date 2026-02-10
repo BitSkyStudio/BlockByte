@@ -324,11 +324,12 @@ impl Chunk {
                             *progress -= server.delta_time();
                         }
                     }
-                    BlockMachineAction::PushItem {
+                    BlockMachineAction::TransferItem {
                         view,
                         speed,
                         face,
                         offset: push_offset,
+                        pull,
                     } => {
                         if *progress <= 0. {
                             let orientation = Into::<Orientation>::into(block.rotation);
@@ -357,6 +358,9 @@ impl Chunk {
                                 }
                                 let (mut first_inventory, mut second_inventory) =
                                     lock_inventories(&machine.inventory, &other_machine.inventory);
+                                if *pull {
+                                    std::mem::swap(&mut first_inventory, &mut second_inventory);
+                                }
                                 for slot in &view.slots {
                                     if let Some(item) = first_inventory.get_slot_mut_raw(*slot) {
                                         if second_inventory
@@ -403,6 +407,15 @@ impl Chunk {
                 }
             }
         }
+        /*let chunk_id =
+            (self.position.x * 5823 + self.position.y * 9547 + self.position.z * 12782) as u64;
+        if (chunk_id + server.ticks_passed) % (server.tps * 10) == 0 {
+            let blocks = self.blocks.read();
+            let mut plants = self.components.plant.write();
+            for plant in &mut plants.components {
+
+            }
+        }*/
         for entity in &self.entities {
             let entity = server.entities.get(*entity).unwrap();
             entity.tick(server);

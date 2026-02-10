@@ -26,7 +26,7 @@ use winit::window::Window;
 
 pub struct RenderState {
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
+    pub device: Arc<wgpu::Device>,
     pub queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
@@ -484,7 +484,7 @@ impl RenderState {
             camera_bind_group,
             gui_camera_bind_group,
             depth_texture,
-            device,
+            device: Arc::new(device),
             gui_camera_buffer,
             viewmodel_camera_bind_group,
             viewmodel_camera_buffer,
@@ -501,9 +501,6 @@ impl RenderState {
 
     pub fn window(&self) -> &Window {
         &self.window
-    }
-    pub fn device(&self) -> &Device {
-        &self.device
     }
     pub fn size(&self) -> PhysicalSize<u32> {
         self.size

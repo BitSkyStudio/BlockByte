@@ -11,7 +11,6 @@ parking_lot = { version = "0.12.5", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 rusqlite = "0.37.0"
 slotmap = "1.1.1"
-bincode = { version = "2.0.1", features = ["serde"] }
 renet = "1.2.0"
 renet_netcode = "1.2.0"
 rayon = "1.11.0"

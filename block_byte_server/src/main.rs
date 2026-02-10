@@ -14,8 +14,8 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructure, EntityKey,
-        ItemAction, ItemKey, ToolData, air_block, load_registries,
+        self, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructure, BlockStructurePart,
+        EntityKey, ItemAction, ItemKey, ToolData, air_block, load_registries,
     },
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockDamage, ClientBlockPlants},
@@ -150,6 +150,14 @@ fn main() {
                 &full_view,
                 ItemStack::new(ItemKey::id("leaves").unwrap(), 20),
             );
+            entity.inventory.get_mut().add_item(
+                &full_view,
+                ItemStack::new(ItemKey::id("stone").unwrap(), 20),
+            );
+            entity.inventory.get_mut().add_item(
+                &full_view,
+                ItemStack::new(ItemKey::id("cobblestone").unwrap(), 20),
+            );
             entity
                 .inventory
                 .get_mut()
@@ -175,7 +183,7 @@ fn main() {
                 NetworkMessageS2C::PlayerAbilities {
                     abilities: PlayerAbilities {
                         move_mode: MoveMode::Normal,
-                        speed: 1.2,
+                        speed: 1.,
                     },
                 },
             );
@@ -240,9 +248,7 @@ fn main() {
             while let Some(message) =
                 network_server.receive_message(user.client_id, DefaultChannel::ReliableOrdered)
             {
-                let (message, _): (NetworkMessageC2S, _) =
-                    bincode::serde::decode_from_slice(&message, bincode::config::standard())
-                        .unwrap();
+                let message: NetworkMessageC2S = serde_cbor::from_slice(&message).unwrap();
                 let find_entity_next_to_player = |entity_id: Uuid| {
                     for chunk in (AABB {
                         min: ChunkPos::all(-1),
@@ -564,18 +570,22 @@ fn main() {
                         y: args[7],
                         z: args[8],
                     };
-                    let mut structure = BlockStructure {
-                        blocks: HashMap::new(),
-                    };
+                    let mut blocks = HashMap::new();
                     for position in AABB::new(from, to) {
                         let block = server.get_block(position).unwrap();
                         if block.block != air_block() {
-                            structure.blocks.insert(position - center, block);
+                            blocks.insert(position - center, block);
                         }
                     }
                     println!(
                         "{}",
-                        ron::ser::to_string_pretty(&structure, PrettyConfig::new()).unwrap()
+                        ron::ser::to_string_pretty(
+                            &BlockStructure {
+                                parts: vec![BlockStructurePart { blocks, chance: 1. }]
+                            },
+                            PrettyConfig::new()
+                        )
+                        .unwrap()
                     );
                 }
                 _ => {
@@ -775,14 +785,11 @@ fn main() {
 
         network_server.broadcast_message(
             DefaultChannel::ReliableOrdered,
-            bincode::serde::encode_to_vec(
-                NetworkMessageS2C::GameTick {
-                    ticks_passed: server.ticks_passed,
-                    dt: server.delta_time(),
-                    mspt: tick_start_time.elapsed().as_secs_f32() * 1000.,
-                },
-                bincode::config::standard(),
-            )
+            serde_cbor::to_vec(&NetworkMessageS2C::GameTick {
+                ticks_passed: server.ticks_passed,
+                dt: server.delta_time(),
+                mspt: tick_start_time.elapsed().as_secs_f32() * 1000.,
+            })
             .unwrap(),
         );
 
@@ -802,9 +809,7 @@ fn main() {
 pub struct MessageQueue(Mutex<Vec<(UserIndex, renet::Bytes)>>);
 impl MessageQueue {
     pub fn encode_message(message: NetworkMessageS2C) -> Bytes {
-        bincode::serde::encode_to_vec(message, bincode::config::standard())
-            .unwrap()
-            .into()
+        serde_cbor::to_vec(&message).unwrap().into()
     }
     pub fn send_message<T: std::borrow::Borrow<UserIndex>>(
         &self,
@@ -1227,7 +1232,10 @@ impl ChunkViewingManager {
             let viewers = &server.get_chunk(*position).unwrap().viewers;
             for biome in &column_data.unique_biomes {
                 for decorator in &biome.data().decorators {
-                    for i in 0..10 {
+                    for i in 0..decorator.count {
+                        if !rng.random_bool(decorator.chance as f64) {
+                            continue;
+                        }
                         let rotation = rng.random_range(0..4);
                         let rotation = [Face::Front, Face::Back, Face::Left, Face::Right][rotation];
                         let rotation = Orientation::from_front_up(rotation, Face::Up).unwrap();
@@ -1247,30 +1255,43 @@ impl ChunkViewingManager {
                             && height < block_offset_position.y + CHUNK_SIZE as i32
                         {
                             let structure = decorator.structure.data();
-                            for (offset, block) in &structure.blocks {
-                                let offset = rotation.rotate_block_pos(*offset);
-                                let mut block = *block;
-                                block.rotation = block.block.data().rotation.get_nearest_valid(
-                                    rotation
-                                        .compose(Into::<Orientation>::into(block.rotation))
-                                        .into(),
-                                );
-                                let place_position = block_position + offset;
-                                let (place_chunk, place_chunk_offset) =
-                                    place_position.to_chunk_pos_offset();
-                                let place_chunk = place_chunk - *position;
-                                let place_chunk_index = (place_chunk.x + 1)
-                                    + (place_chunk.y + 1) * 3
-                                    + (place_chunk.z + 1) * 9;
-                                chunks_blocks[place_chunk_index as usize]
-                                    .set(place_chunk_offset.index(), &block);
-                                server.send_message_multiple(
-                                    viewers.iter(),
-                                    NetworkMessageS2C::SetBlock {
-                                        position: place_position,
-                                        block,
-                                    },
-                                );
+                            for part in &structure.parts {
+                                if !rng.random_bool(part.chance as f64) {
+                                    continue;
+                                }
+                                for (offset, block) in &part.blocks {
+                                    let offset = rotation.rotate_block_pos(*offset);
+                                    let mut block = *block;
+                                    block.rotation = block.block.data().rotation.get_nearest_valid(
+                                        rotation
+                                            .compose(Into::<Orientation>::into(block.rotation))
+                                            .into(),
+                                    );
+                                    let place_position = block_position + offset;
+                                    let (place_chunk, place_chunk_offset) =
+                                        place_position.to_chunk_pos_offset();
+                                    let place_chunk = place_chunk - *position;
+                                    let place_chunk_index = (place_chunk.x + 1)
+                                        + (place_chunk.y + 1) * 3
+                                        + (place_chunk.z + 1) * 9;
+                                    //todo: check tag
+                                    if chunks_blocks[place_chunk_index as usize]
+                                        .get(place_chunk_offset.index())
+                                        .unwrap()
+                                        .block
+                                        == air_block()
+                                    {
+                                        chunks_blocks[place_chunk_index as usize]
+                                            .set(place_chunk_offset.index(), &block);
+                                        server.send_message_multiple(
+                                            viewers.iter(),
+                                            NetworkMessageS2C::SetBlock {
+                                                position: place_position,
+                                                block,
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }
                     }

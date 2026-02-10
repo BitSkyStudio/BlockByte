@@ -45,5 +45,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if color.w < 0.1{
         discard;
     }
-    return color;
+    return color ;//* vec4<f32>(5.5,5.5, 5.5, 1.);
 }

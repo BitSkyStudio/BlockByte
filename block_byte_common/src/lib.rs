@@ -72,6 +72,11 @@ impl Color {
         }
     }
 }
+impl Default for Color {
+    fn default() -> Self {
+        Color::WHITE
+    }
+}
 impl Into<[u8; 4]> for Color {
     fn into(self) -> [u8; 4] {
         [self.r, self.g, self.b, self.a]

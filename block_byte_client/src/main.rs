@@ -5,6 +5,7 @@ use core::f32;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    fmt::format,
     hash::Hash,
     net::{SocketAddr, UdpSocket},
     ops::ControlFlow,
@@ -119,7 +120,7 @@ impl App {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
         self.network_client.send_message(
             DefaultChannel::ReliableOrdered,
-            bincode::serde::encode_to_vec(message, bincode::config::standard()).unwrap(),
+            serde_cbor::to_vec(&message).unwrap(),
         );
     }
 }
@@ -199,10 +200,12 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                 } else {
-                                    self.game.viewmodel_player.trigger("equip");
-                                    self.game.swap_hand_item = self.game.held_item().clone();
-                                    self.game.hotbar_slot = slot;
-                                    self.send_message(NetworkMessageC2S::HotbarSelect { slot });
+                                    if self.game.hotbar_slot != slot {
+                                        self.game.viewmodel_player.trigger("equip");
+                                        self.game.swap_hand_item = self.game.held_item().clone();
+                                        self.game.hotbar_slot = slot;
+                                        self.send_message(NetworkMessageC2S::HotbarSelect { slot });
+                                    }
                                 }
                             }
                         }
@@ -360,7 +363,7 @@ impl ApplicationHandler for App {
                 let mut viewmodel_mesh = Mesh::default();
                 let mut damage_mesh = Mesh::default();
                 self.game.tick_client(
-                    render_state.device(),
+                    &render_state.device,
                     &self.camera,
                     &mut entity_mesh,
                     &mut gui_mesh,
@@ -391,12 +394,17 @@ impl ApplicationHandler for App {
                         z: 0.,
                     },
                     &format!(
-                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2} mesh_queue: {}",
+                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2} {}mesh_queue: {}",
                         self.game.player_position.x,
                         self.game.player_position.y,
                         self.game.player_position.z,
                         1. / dt,
                         self.mspt,
+                        match self.camera.raycast(&self.game) {
+                            RayCastResult::Empty | RayCastResult::Entity(_) => String::new(),
+                            RayCastResult::Block(position, face) =>
+                                format!("looking at {:?} {:?} ", position, face),
+                        },
                         self.game.scheduled_chunks.len()
                     ),
                     0.05,
@@ -607,12 +615,7 @@ impl ApplicationHandler for App {
                         .network_client
                         .receive_message(DefaultChannel::ReliableOrdered)
                     {
-                        let (message, _): (NetworkMessageS2C, _) =
-                            bincode::serde::decode_from_slice(
-                                &message,
-                                bincode::config::standard(),
-                            )
-                            .unwrap();
+                        let message: NetworkMessageS2C = serde_cbor::from_slice(&message).unwrap();
                         match message {
                             NetworkMessageS2C::LoadChunk {
                                 position,
@@ -926,7 +929,7 @@ impl TextureAtlas {
         }
         use texture_packer::exporter::ImageExporter;
         use texture_packer::texture::Texture;
-        let exporter = ImageExporter::export(&packer, None).unwrap();
+        let exporter: DynamicImage = ImageExporter::export(&packer, None).unwrap();
         if false {
             exporter.save(Path::new("textureatlasdump.png")).unwrap();
         }
@@ -1127,7 +1130,7 @@ impl ClientPlayer {
             move_vector.z /= xz_mag;
         }
         move_vector *= abilities.speed;
-        move_vector *= 4.5;
+        move_vector *= 4.5 * 1.2;
         let running = game.keys.is_down(KeyCode::ControlLeft);
         move_vector *= if running { 1.5 } else { 1. };
         match abilities.move_mode {
@@ -1283,8 +1286,8 @@ pub struct ClientGame {
     pub viewmodel_player: AnimationPlayer,
     pub swap_hand_item: Option<ClientItem>,
     pub chunk_mesh_channels: (
-        std::sync::mpsc::Sender<(ChunkPos, BaseMesh, u64)>,
-        std::sync::mpsc::Receiver<(ChunkPos, BaseMesh, u64)>,
+        std::sync::mpsc::Sender<(ChunkPos, Option<(Buffer, u32)>, u64)>,
+        std::sync::mpsc::Receiver<(ChunkPos, Option<(Buffer, u32)>, u64)>,
     ),
 }
 impl Default for ClientGame {
@@ -1346,7 +1349,7 @@ impl ClientGame {
     }
     pub fn tick_client(
         &mut self,
-        device: &Device,
+        device: &Arc<Device>,
         camera: &ClientPlayer,
         entity_mesh: &mut BaseMesh,
         gui_mesh: &mut GUIMesh,
@@ -1392,7 +1395,7 @@ impl ClientGame {
         if let Some(hit_timer) = self.hit_timer {
             animation.clear();
             animation.push(DrawAnimation {
-                animation: "hit".to_string(),
+                animation: "hit",
                 time: hit_timer / self.active_tool().swing_time,
                 weight: 1.,
             });
@@ -1402,8 +1405,9 @@ impl ClientGame {
                 self.swap_hand_item = self.held_item().clone();
             }
         }
-        if self.viewmodel_player.current_animation == "idle"
-            || self.viewmodel_player.current_animation == "running"
+        if (self.viewmodel_player.current_animation == "idle"
+            || self.viewmodel_player.current_animation == "running")
+            && self.viewmodel_player.transition.is_none()
         {
             self.swap_hand_item = self.held_item().clone();
         }
@@ -1417,21 +1421,10 @@ impl ClientGame {
                 _ => None,
             },
         );
-        while let Ok((position, mesh, version)) = self.chunk_mesh_channels.1.try_recv() {
+        while let Ok((position, buffer, version)) = self.chunk_mesh_channels.1.try_recv() {
             self.scheduled_chunks.remove(&position);
             if let Some(chunk) = self.chunks.get_mut(&position) {
-                chunk.buffer = if mesh.vertices.len() == 0 {
-                    None
-                } else {
-                    Some((
-                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Chunk Vertex Buffer"),
-                            contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        }),
-                        mesh.vertices.len() as u32,
-                    ))
-                };
+                chunk.buffer = buffer;
                 if version < chunk.mesh_build_data.read().version {
                     self.modified_chunks.insert(position);
                 }
@@ -1450,13 +1443,27 @@ impl ClientGame {
                                 .clone(),
                         )
                     });
+                    let device = device.clone();
                     rayon::spawn(move || {
                         let (mesh, version) = ClientChunk::build_chunk_mesh(
                             modified_chunk,
                             build_data,
                             neighbor_chunks,
                         );
-                        tx.send((modified_chunk, mesh, version));
+                        let buffer = if mesh.vertices.len() == 0 {
+                            None
+                        } else {
+                            Some((
+                                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Chunk Vertex Buffer"),
+                                    contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
+                                    usage: wgpu::BufferUsages::VERTEX
+                                        | wgpu::BufferUsages::COPY_DST,
+                                }),
+                                mesh.vertices.len() as u32,
+                            ))
+                        };
+                        tx.send((modified_chunk, buffer, version));
                     });
                 }
             }
@@ -2076,9 +2083,11 @@ pub struct AnimationTransition {
     pub condition: String,
     pub inverted: bool,
     pub reset: bool,
+    pub time: f32,
 }
 pub struct AnimationNode {
     pub next: String,
+    pub model_animation: String,
     pub length: f32,
     pub speed: f32,
     pub transitions: Vec<AnimationTransition>,
@@ -2088,10 +2097,16 @@ pub struct AnimationGraph {
     pub default_animation: String,
     pub animations: HashMap<String, AnimationNode>,
 }
+struct AnimationPlayerTransition {
+    pub time: f32,
+    pub length: f32,
+    pub to: String,
+}
 pub struct AnimationPlayer {
     pub current_animation: String,
     pub time: f32,
     pub triggers: HashSet<String>,
+    pub transition: Option<AnimationPlayerTransition>,
 }
 impl AnimationPlayer {
     pub fn new(graph: &AnimationGraph) -> AnimationPlayer {
@@ -2099,47 +2114,93 @@ impl AnimationPlayer {
             current_animation: graph.default_animation.clone(),
             time: 0.,
             triggers: HashSet::new(),
+            transition: None,
         }
     }
     pub fn trigger(&mut self, name: impl ToString) {
         self.triggers.insert(name.to_string());
     }
-    pub fn evaluate(
+    pub fn evaluate<'a>(
         &mut self,
-        graph: &AnimationGraph,
+        graph: &'a AnimationGraph,
         dt: f32,
-    ) -> (Vec<DrawAnimation>, Vec<String>) {
-        let current_node = graph.animations.get(&self.current_animation).unwrap();
+    ) -> (Vec<DrawAnimation<'a>>, Vec<String>) {
         let mut activated_observers = Vec::new();
-        let previous_time = self.time;
-        self.time += dt * current_node.speed;
-        for (time, observer) in &current_node.observers {
-            if previous_time < *time * current_node.speed && self.time >= *time * current_node.speed
-            {
-                activated_observers.push(observer.to_string());
+        match &mut self.transition {
+            Some(transition) => {
+                transition.time += dt;
+                if transition.time > transition.length {
+                    self.current_animation = self.transition.take().unwrap().to;
+                    self.time = 0.;
+                }
+            }
+            None => {
+                let current_node = graph.animations.get(&self.current_animation).unwrap();
+                let previous_time = self.time;
+                self.time += dt * current_node.speed;
+                for (time, observer) in &current_node.observers {
+                    if previous_time < *time * current_node.speed
+                        && self.time >= *time * current_node.speed
+                    {
+                        activated_observers.push(observer.to_string());
+                    }
+                }
+                if self.time > current_node.length * current_node.speed {
+                    self.current_animation = current_node.next.clone();
+                    self.time = 0.;
+                }
+                for trigger in &current_node.transitions {
+                    if self.triggers.contains(&trigger.condition) ^ trigger.inverted {
+                        self.transition = Some(AnimationPlayerTransition {
+                            time: 0.,
+                            length: trigger.time,
+                            to: trigger.to.clone(),
+                        });
+                    }
+                }
+                self.triggers.clear();
             }
         }
-        if self.time > current_node.length * current_node.speed {
-            self.current_animation = current_node.next.clone();
-            self.time = 0.;
-        }
-        for trigger in &current_node.transitions {
-            if self.triggers.contains(&trigger.condition) ^ trigger.inverted {
-                self.current_animation = trigger.to.clone();
-                self.time = 0.;
+        match &self.transition {
+            Some(transition) => {
+                let progress = transition.time / transition.length;
+                (
+                    vec![
+                        DrawAnimation {
+                            animation: &graph
+                                .animations
+                                .get(&self.current_animation)
+                                .unwrap()
+                                .model_animation,
+                            time: self.time,
+                            weight: 1. - progress,
+                        },
+                        DrawAnimation {
+                            animation: &graph
+                                .animations
+                                .get(&transition.to)
+                                .unwrap()
+                                .model_animation,
+                            time: 0.,
+                            weight: progress,
+                        },
+                    ],
+                    Vec::new(),
+                )
             }
-            if trigger.reset {
-                self.triggers.remove(&trigger.condition);
-            }
+            None => (
+                vec![DrawAnimation {
+                    animation: &graph
+                        .animations
+                        .get(&self.current_animation)
+                        .unwrap()
+                        .model_animation,
+                    time: self.time,
+                    weight: 1.,
+                }],
+                activated_observers,
+            ),
         }
-        (
-            vec![DrawAnimation {
-                animation: self.current_animation.clone(),
-                time: self.time,
-                weight: 1.,
-            }],
-            activated_observers,
-        )
     }
 }
 static VIEWMODEL_GRAPH: OnceLock<AnimationGraph> = OnceLock::new();
@@ -2150,6 +2211,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
             "idle".to_string(),
             AnimationNode {
                 next: "idle".to_string(),
+                model_animation: "idle".to_string(),
                 length: 8.,
                 speed: 0.25,
                 transitions: vec![
@@ -2158,18 +2220,21 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         inverted: false,
                         reset: true,
                         to: "place".to_string(),
+                        time: 0.1,
                     },
                     AnimationTransition {
                         condition: "equip".to_string(),
                         inverted: false,
                         reset: true,
                         to: "equip".to_string(),
+                        time: 0.1,
                     },
                     AnimationTransition {
                         condition: "run".to_string(),
                         inverted: false,
                         reset: true,
                         to: "running".to_string(),
+                        time: 0.1,
                     },
                 ],
                 observers: vec![],
@@ -2179,6 +2244,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
             "place".to_string(),
             AnimationNode {
                 next: "idle".to_string(),
+                model_animation: "place".to_string(),
                 length: 0.5,
                 speed: 1.,
                 transitions: vec![],
@@ -2189,6 +2255,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
             "equip".to_string(),
             AnimationNode {
                 next: "idle".to_string(),
+                model_animation: "equip".to_string(),
                 length: 0.5,
                 speed: 1.,
                 transitions: vec![AnimationTransition {
@@ -2196,6 +2263,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                     reset: true,
                     inverted: false,
                     to: "equip".to_string(),
+                    time: 0.1,
                 }],
                 observers: vec![(0.25, "swap_hand_item".to_string())],
             },
@@ -2204,6 +2272,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
             "running".to_string(),
             AnimationNode {
                 next: "running".to_string(),
+                model_animation: "running".to_string(),
                 length: 1.,
                 speed: 1.,
                 transitions: vec![
@@ -2212,18 +2281,21 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         reset: true,
                         inverted: true,
                         to: "idle".to_string(),
+                        time: 0.1,
                     },
                     AnimationTransition {
                         condition: "build".to_string(),
                         inverted: false,
                         reset: true,
                         to: "place".to_string(),
+                        time: 0.1,
                     },
                     AnimationTransition {
                         condition: "equip".to_string(),
                         inverted: false,
                         reset: true,
                         to: "equip".to_string(),
+                        time: 0.1,
                     },
                 ],
                 observers: vec![],

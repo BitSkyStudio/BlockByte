@@ -141,9 +141,21 @@ macro_rules! create_registries{
                         Err(_) => {}
                     }
                 }
-                for (id, group) in groups {
+                let groups: HashMap<_, _> = groups.into_iter().map(|(id, group)|(id, std::fs::read_to_string(group).unwrap())).collect();
+                for id in groups.keys() {
+                    let mut entries = HashSet::new();
                     //todo: missing error handling
-                    load_registry.$id.register_group(id, std::fs::read_to_string(group).unwrap().lines().map(|entry|Key::<$type>::id(entry).unwrap()).collect());
+                    fn recursively_load(registry: &LoadRegistry<$type>, groups: &HashMap<String, String>, entries: &mut HashSet<Key<$type>>, id: &str){
+                        for line in groups.get(id).unwrap().lines(){
+                            if line.starts_with("#"){
+                                recursively_load(registry, groups, entries, &line[1..]);
+                            } else {
+                                entries.insert(registry.id_map.get(line).cloned().unwrap());
+                            }
+                        }
+                    }
+                    recursively_load(&load_registry.$id, &groups, &mut entries, &id);
+                    load_registry.$id.register_group(id.to_string(), entries);
                 }
             })*
             LOAD_REGISTRIES.set(load_registry).ok().unwrap();
@@ -552,11 +564,12 @@ pub enum BlockMachineAction {
         input_view: InventoryView,
         output_view: InventoryView,
     },
-    PushItem {
+    TransferItem {
         view: InventoryView,
         speed: f32,
         face: Face,
         offset: BlockPos,
+        pull: bool,
     },
     MoveItem {
         from: InventoryView,
@@ -577,8 +590,13 @@ pub type BlockPalette = PaletteVec<BlockEntry, HybridPalette<16, BlockEntry>, Al
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub struct BlockEntry {
     pub block: BlockKey,
+    #[serde(default, skip_serializing_if = "skip_if_default")]
     pub color: Color,
+    #[serde(default, skip_serializing_if = "skip_if_default")]
     pub rotation: BlockRotation,
+}
+pub fn skip_if_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 impl Default for BlockRotation {
     fn default() -> Self {
@@ -760,6 +778,8 @@ pub struct PlantSpawner {
 #[derive(Deserialize)]
 pub struct BiomeDecorator {
     pub structure: StructureKey,
+    pub count: u32,
+    pub chance: f32,
 }
 pub type BiomeKey = Key<BiomeData>;
 
@@ -818,9 +838,13 @@ pub struct Recipe {
     pub craft_time: f32,
 }
 pub type RecipeKey = Key<Recipe>;
-
+#[derive(Serialize, Deserialize)]
+pub struct BlockStructurePart {
+    pub blocks: HashMap<BlockPos, BlockEntry>,
+    pub chance: f32,
+}
 #[derive(Serialize, Deserialize)]
 pub struct BlockStructure {
-    pub blocks: HashMap<BlockPos, BlockEntry>,
+    pub parts: Vec<BlockStructurePart>,
 }
 pub type StructureKey = Key<BlockStructure>;
