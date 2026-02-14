@@ -21,6 +21,8 @@ use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
 
+use serde_default_utils::*;
+
 pub struct Key<T>(NonZero<usize>, PhantomData<T>);
 impl<T> Key<T> {
     pub fn numeric_id(self) -> usize {
@@ -233,7 +235,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguage, language; Recipe, recipe; BlockStructure, structure);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; BlockStructureData, structure; ResearchData, research);
 
 impl<T: 'static> Key<T>
 where
@@ -302,6 +304,19 @@ where
     LoadRegistryStorage: LoadRegistryProvider<T>,
     RegistryStorage: RegistryProvider<T>,
 {
+    pub fn parse(id: &str) -> Option<Self> {
+        if id.starts_with("#") {
+            LOAD_REGISTRIES
+                .get()
+                .unwrap()
+                .get_load_registry()
+                .group_id_map
+                .get(&id[1..])
+                .cloned()
+        } else {
+            Some(KeyGroup::Single(Key::<T>::id(id)?))
+        }
+    }
     pub fn contains(self, key: Key<T>) -> bool {
         match self {
             KeyGroup::Single(v) => v == key,
@@ -372,19 +387,10 @@ where
             where
                 E: serde::de::Error,
             {
-                Ok(if v.starts_with("#") {
-                    *LOAD_REGISTRIES
-                        .get()
-                        .unwrap()
-                        .get_load_registry()
-                        .group_id_map
-                        .get(&v[1..])
-                        .ok_or_else(|| serde::de::Error::custom(format!("group {} not found", v)))?
-                } else {
-                    KeyGroup::Single(Key::<T>::id(v).ok_or_else(|| {
-                        serde::de::Error::custom(format!("group {} not found", v))
-                    })?)
-                })
+                match KeyGroup::parse(v) {
+                    Some(group) => Ok(group),
+                    None => Err(serde::de::Error::custom(format!("group {} not found", v))),
+                }
             }
         }
         deserializer.deserialize_str(KeyVisitor::<T>(PhantomData))
@@ -410,14 +416,13 @@ pub enum ItemAction {
     Ignore,
     Place(Vec<ItemBlockPlacement>),
 }
-fn default_use_count() -> u16 {
-    1
-}
 #[derive(Deserialize)]
 pub struct ItemBlockPlacement {
     pub block: BlockKey,
-    #[serde(default = "default_use_count")]
+    #[serde(default = "default_u16::<1>")]
     pub use_count: u16,
+    #[serde(default)]
+    pub research: Option<ResearchKey>,
 }
 impl Default for ItemAction {
     fn default() -> Self {
@@ -561,7 +566,7 @@ pub struct BlockMachineFace {
 pub enum BlockMachineAction {
     Craft {
         base_speed: f32,
-        recipes: KeyGroup<Recipe>,
+        recipes: KeyGroup<RecipeData>,
         input_view: InventoryView,
         output_view: InventoryView,
     },
@@ -809,10 +814,10 @@ impl RegistryConfigLoadable for ModelData {
     }
 }
 
-pub struct TranslationLanguage {
+pub struct TranslationLanguageData {
     pub translations: HashMap<String, String>,
 }
-impl TranslationLanguage {
+impl TranslationLanguageData {
     pub fn translate<'a>(&'a self, key: &'a str) -> &'a str {
         self.translations
             .get(key)
@@ -820,9 +825,9 @@ impl TranslationLanguage {
             .unwrap_or(key)
     }
 }
-impl RegistryConfigLoadable for TranslationLanguage {
+impl RegistryConfigLoadable for TranslationLanguageData {
     fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
-        let mut translation = TranslationLanguage {
+        let mut translation = TranslationLanguageData {
             translations: HashMap::new(),
         };
         for line in std::fs::read_to_string(config).unwrap().lines() {
@@ -835,19 +840,26 @@ impl RegistryConfigLoadable for TranslationLanguage {
     }
 }
 #[derive(Deserialize)]
-pub struct Recipe {
+pub struct RecipeData {
     pub inputs: HashMap<ItemKey, u16>,
     pub outputs: OwnOrKey<LootTableData>,
     pub craft_time: f32,
+    #[serde(default)]
+    pub research: Option<ResearchKey>,
+    #[serde(default)]
+    pub icon_override: Option<ItemModel>,
 }
-pub type RecipeKey = Key<Recipe>;
+pub type RecipeKey = Key<RecipeData>;
 #[derive(Serialize, Deserialize)]
 pub struct BlockStructurePart {
     pub blocks: HashMap<BlockPos, BlockEntry>,
     pub chance: f32,
 }
 #[derive(Serialize, Deserialize)]
-pub struct BlockStructure {
+pub struct BlockStructureData {
     pub parts: Vec<BlockStructurePart>,
 }
-pub type StructureKey = Key<BlockStructure>;
+pub type StructureKey = Key<BlockStructureData>;
+#[derive(Serialize, Deserialize)]
+pub struct ResearchData {}
+pub type ResearchKey = Key<ResearchData>;

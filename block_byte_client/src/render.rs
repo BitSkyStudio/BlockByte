@@ -1,8 +1,8 @@
 use block_byte_common::coord::{AABB, CHUNK_SIZE, Face, Pos, Vec3};
 use block_byte_common::model::DrawAnimation;
 use block_byte_common::registry::{
-    BlockKey, BlockRenderData, EntityData, ItemModel, Key, ModelData, ModelKey, TextureData,
-    TextureKey,
+    BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key, ModelData, ModelKey,
+    TextureData, TextureKey,
 };
 use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
@@ -1196,30 +1196,38 @@ pub fn draw_model(
         },
     );
     for (matrix, item, binding) in item_models {
-        match item.item.data().model {
-            ItemModel::Block(key) => {
-                draw_block_model(
-                    key,
-                    matrix
-                        * Matrix4::from_angle_x(Deg(-90.))
-                        * Matrix4::from_translation(Vector3::new(
-                            0.,
-                            if binding == "hand" { -0.1 } else { 0. },
-                            0.,
-                        ))
-                        * Matrix4::from_scale(0.35),
-                    vertex_consumer,
-                );
-            }
-            ItemModel::Model(key) => {
-                let model = &key.data().model;
-                let anchor = model
-                    .anchor(binding.as_str(), Matrix4::identity(), &[])
-                    .map(|matrix| matrix.invert().unwrap())
-                    .unwrap_or(Matrix4::identity());
-                draw_model(key, matrix * anchor, vertex_consumer, &[], EMPTY_ITEM_QUERY);
-            }
+        let anchor = match &item.item.data().model {
+            ItemModel::Block(key) => match &key.data().render_data {
+                BlockRenderData::Air => Matrix4::identity(),
+                BlockRenderData::Full { faces } => Matrix4::identity(),
+                BlockRenderData::Model(key) => key
+                    .data()
+                    .model
+                    .anchor(binding.as_str(), Matrix4::from_scale(0.35), &[])
+                    .map(|matrix| Matrix4::from_scale(0.35) * matrix.invert().unwrap())
+                    .unwrap_or(Matrix4::identity()),
+            },
+            ItemModel::Model(key) => key
+                .data()
+                .model
+                .anchor(binding.as_str(), Matrix4::identity(), &[])
+                .map(|matrix| matrix.invert().unwrap())
+                .unwrap_or(Matrix4::identity()),
+        };
+        draw_item_model(&item.item.data().model, matrix * anchor, vertex_consumer);
+    }
+}
+pub fn draw_item_model(
+    model: &ItemModel,
+    matrix: Matrix4<f32>,
+    vertex_consumer: &mut impl FnMut([f32; 3], [f32; 2], [f32; 3]),
+) {
+    match model {
+        ItemModel::Block(key) => {
+            draw_block_model(*key, matrix * Matrix4::from_scale(0.35), vertex_consumer);
+        }
+        ItemModel::Model(key) => {
+            draw_model(*key, matrix, vertex_consumer, &[], |_| None);
         }
     }
 }
-static EMPTY_ITEM_QUERY: fn(&str) -> Option<ClientItem> = |_| None;

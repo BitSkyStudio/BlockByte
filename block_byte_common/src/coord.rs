@@ -78,6 +78,9 @@ impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Vec3<T> {
     pub fn distance_squared(self, other: Self) -> T {
         (self - other).length_squared()
     }
+    pub fn dot(self, other: Self) -> T {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
 }
 trait Sqrtable {
     fn square_root(self) -> f32;

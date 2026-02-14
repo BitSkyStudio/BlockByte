@@ -14,8 +14,8 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructure, BlockStructurePart,
-        EntityKey, ItemAction, ItemKey, ToolData, air_block, load_registries,
+        self, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructureData,
+        BlockStructurePart, EntityKey, ItemAction, ItemKey, ToolData, air_block, load_registries,
     },
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockDamage, ClientBlockPlants},
@@ -580,7 +580,7 @@ fn main() {
                     println!(
                         "{}",
                         ron::ser::to_string_pretty(
-                            &BlockStructure {
+                            &BlockStructureData {
                                 parts: vec![BlockStructurePart { blocks, chance: 1. }]
                             },
                             PrettyConfig::new()

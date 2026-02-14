@@ -6,6 +6,7 @@ use block_byte_common::{
     registry::{BlockRenderData, ItemModel, Key, TextureKey},
     ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
 };
+use cgmath::{Matrix4, SquareMatrix, Transform, Vector3};
 use taffy::{
     AlignItems, AvailableSpace, Dimension, FlexDirection, JustifyContent, Layout, LengthPercentage,
     LengthPercentageAuto, NodeId, Rect, Style, TaffyTree, prelude::TaffyZero,
@@ -15,7 +16,11 @@ use winit::{
     event::MouseButton,
 };
 
-use crate::{ClientGame, GUIMesh, TexCoordsExt, TexCoordsIndexExt, translate};
+use crate::{
+    ClientGame, ClientPlayer, GUIMesh, TexCoordsExt, TexCoordsIndexExt,
+    render::{CameraUniform, GUIVertex},
+    translate,
+};
 
 pub struct ScreenData {
     pub screen: UIScreenKey,
@@ -134,6 +139,8 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
             width: 50.,
             height: 50.,
         },
+        UIElementType::CraftArea { recipes } => todo!(),
+        UIElementType::ResearchTree => todo!(),
     }
 }
 fn resolve_hovering<'a>(
@@ -304,38 +311,56 @@ fn render_element(
             }
             if let Some(item) = data.slots.get(*slot).cloned().flatten() {
                 let border = 3.;
-                match &item.item.data().model {
-                    ItemModel::Block(key) => match &key.data().render_data {
-                        BlockRenderData::Air => {}
-                        BlockRenderData::Full { faces } => {
-                            let texture = faces.front.tex_coords(0);
-                            mesh.add_quad(
-                                Pos {
-                                    x: (layout.content_box_x() + border + parent_offset.x)
-                                        / size.height as f32
-                                        * 2.
-                                        - aspect_ratio,
-                                    y: -((layout.content_box_y() - border
-                                        + parent_offset.y
-                                        + layout.content_box_height())
-                                        / size.height as f32
-                                        * 2.
-                                        - 1.),
-                                    z: 0.,
-                                },
-                                Pos {
-                                    x: (50. - border * 2.) / size.height as f32 * 2.,
-                                    y: (50. - border * 2.) / size.height as f32 * 2.,
-                                    z: 0.,
-                                },
-                                texture,
-                                Color::WHITE,
-                            );
+                let mut vertex_consumer = || {};
+                let distance = 1.;
+                let matrix = cgmath::perspective(cgmath::Deg(20.), 1., 0.05, 5.)
+                    * cgmath::Matrix4::look_at_rh(
+                        cgmath::point3(distance, distance + (0.5 * 0.35), distance),
+                        cgmath::point3(0., 0.5 * 0.35, 0.),
+                        ClientPlayer::UP,
+                    );
+                crate::render::draw_item_model(
+                    &item.item.data().model,
+                    Matrix4::identity(),
+                    &mut |pos, texture, normal| {
+                        let x = (layout.content_box_x() + border + parent_offset.x)
+                            / size.height as f32
+                            * 2.
+                            - aspect_ratio;
+                        let y = -((layout.content_box_y() - border
+                            + parent_offset.y
+                            + layout.content_box_height())
+                            / size.height as f32
+                            * 2.
+                            - 1.);
+                        let s = (50. - border * 2.) / size.height as f32 * 2.;
+                        let pos = matrix.transform_point(cgmath::Point3 {
+                            x: pos[0],
+                            y: pos[1],
+                            z: pos[2],
+                        });
+                        let normal = Pos {
+                            x: normal[0],
+                            y: normal[1],
+                            z: normal[2],
+                        };
+                        let light = Pos {
+                            x: 1.,
+                            y: 1.,
+                            z: 1.,
                         }
-                        BlockRenderData::Model(key) => {}
+                        .normalize();
+                        let dot = normal.dot(light);
+                        if dot > 0. {
+                            let shade_color = 1. - normal.x.abs() * 0.5 - normal.z.abs() * 0.2;
+                            mesh.vertices.push(GUIVertex {
+                                color: Color::grayscale((shade_color * 255.) as u8).into(),
+                                tex_coords: texture,
+                                position: [x + (pos.x + 1.) / 2. * s, y + (pos.y + 1.) / 2. * s],
+                            });
+                        }
                     },
-                    ItemModel::Model(key) => {}
-                }
+                );
                 text_renderer().draw(
                     Pos {
                         x: (layout.content_box_x() + border + parent_offset.x) / size.height as f32
@@ -356,6 +381,8 @@ fn render_element(
                 );
             }
         }
+        UIElementType::CraftArea { recipes } => todo!(),
+        UIElementType::ResearchTree => todo!(),
     }
 }
 fn add_element_to_taffy<'a>(

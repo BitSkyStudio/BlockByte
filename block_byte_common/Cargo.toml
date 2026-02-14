@@ -21,6 +21,7 @@ cgmath = "0.18"
 serde_json = "1.0.149"
 renet = "1.2.0"
 image-overlay = "2.0.0"
+serde_default_utils = "0.3.1"
 
 [features]
 client = ["dep:image"]

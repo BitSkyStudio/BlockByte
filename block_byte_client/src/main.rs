@@ -26,7 +26,7 @@ use block_byte_common::{
     registry::{
         self, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation,
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, KeyGroup, ModelData,
-        ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguage, air_block,
+        ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguageData, air_block,
         load_registries,
     },
     ui::PropertyMap,
@@ -1857,7 +1857,7 @@ impl BaseMesh {
 
 impl GUIMesh {
     pub fn add_quad(&mut self, position: Pos, size: Pos, texture: TexCoords, color: Color) {
-        let color = [color.r, color.g, color.b, color.a];
+        let color: [u8; 4] = color.into();
         let a = GUIVertex {
             position: [position.x, position.y],
             tex_coords: [texture.u1, texture.v2],
@@ -2015,7 +2015,7 @@ impl ClientChunk {
 }
 
 pub fn translate<'a>(key: &'a str) -> &'a str {
-    Key::<TranslationLanguage>::id("en")
+    Key::<TranslationLanguageData>::id("en")
         .unwrap()
         .data()
         .translate(key)
