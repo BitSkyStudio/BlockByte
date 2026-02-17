@@ -162,6 +162,7 @@ fn main() {
                 .inventory
                 .get_mut()
                 .add_item(&full_view, ItemStack::new(ItemKey::id("wood").unwrap(), 20));
+            entity.controller = Some(user);
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
@@ -185,6 +186,12 @@ fn main() {
                         move_mode: MoveMode::Normal,
                         speed: 1.,
                     },
+                },
+            );
+            server.send_message(
+                user,
+                NetworkMessageS2C::UpdateResearch {
+                    research: HashSet::new(), //todo: load
                 },
             );
         }
@@ -521,6 +528,60 @@ fn main() {
                                         let (a, b) = source.split(count);
                                         *to_item = Some(a);
                                         *source = b;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    NetworkMessageC2S::Research { research } => {
+                        if let Some(entity) = user.entity {
+                            let entity = server.entities.get_mut(entity).unwrap();
+                            entity.state.get_mut().research.insert(research);
+                            server.send_message(
+                                user_id,
+                                NetworkMessageS2C::UpdateResearch {
+                                    research: entity.state.get_mut().research.clone(),
+                                },
+                            );
+                        }
+                    }
+                    NetworkMessageC2S::Craft { recipe, count } => {
+                        let recipe = recipe.data();
+                        if let Some(screen) = user.screen.lock().as_ref() {
+                            let mut failed = false;
+                            for (input, input_count) in recipe.inputs.iter().cloned() {
+                                if screen.inventories.iter().map(|(inventory, view)| {
+                                    inventory
+                                        .get_inventory(&mut server.entities, &mut server.chunks)
+                                        .unwrap()
+                                        .count_item(view, input)
+                                }) < input_count
+                                {
+                                    failed = true;
+                                    break;
+                                }
+                            }
+                            for (input, mut input_count) in recipe.inputs.iter().cloned() {
+                                for (inventory, view) in screen.inventories.iter() {
+                                    let inventory = inventory
+                                        .get_inventory(&mut server.entities, &mut server.chunks)
+                                        .unwrap();
+                                    input_count = inventory.remove_item(view, input, input_count);
+                                    if input_count == 0 {
+                                        break;
+                                    }
+                                }
+                            }
+                            for mut item in generate_loot_table(recipe.outputs.data()) {
+                                for (inventory, view) in screen.inventories.iter() {
+                                    let inventory = inventory
+                                        .get_inventory(&mut server.entities, &mut server.chunks)
+                                        .unwrap();
+                                    match inventory.add_item(view, item) {
+                                        Some(rest) => {
+                                            item = rest;
+                                        }
+                                        None => break,
                                     }
                                 }
                             }

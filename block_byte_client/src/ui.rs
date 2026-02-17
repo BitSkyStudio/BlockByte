@@ -82,11 +82,10 @@ pub fn render_screen(
                     let mut shift = 0.;
                     shift += text_renderer()
                         .draw(
-                            Pos {
+                            UIPos {
                                 x: game.cursor_position.x as f32 / size.height as f32 * 2.
                                     - aspect_ratio,
                                 y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
-                                z: 0.,
                             },
                             translate(format!("item.{}", item.item.text_id()).as_str()),
                             40. / size.height as f32 * 2.,
@@ -97,13 +96,12 @@ pub fn render_screen(
                     for line in item.description.lines() {
                         shift += text_renderer()
                             .draw(
-                                Pos {
+                                UIPos {
                                     x: game.cursor_position.x as f32 / size.height as f32 * 2.
                                         - aspect_ratio,
                                     y: -((game.cursor_position.y) as f32 / size.height as f32 * 2.
                                         - 1.
                                         + shift),
-                                    z: 0.,
                                 },
                                 line,
                                 40. / size.height as f32 * 2.,
@@ -139,8 +137,10 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
             width: 50.,
             height: 50.,
         },
-        UIElementType::CraftArea { recipes } => todo!(),
-        UIElementType::ResearchTree => todo!(),
+        UIElementType::CraftArea { .. } | UIElementType::ResearchTree { .. } => taffy::Size {
+            width: 100.,
+            height: 100.,
+        },
     }
 }
 fn resolve_hovering<'a>(
@@ -193,20 +193,21 @@ fn render_element(
         let height = layout.size.height - layout.border.top - layout.border.bottom;
 
         mesh.add_quad(
-            Pos {
-                x: (layout.location.x + layout.border.left + parent_offset.x) / size.height as f32
-                    * 2.
-                    - aspect_ratio,
-                y: -((layout.location.y + layout.border.top + parent_offset.y + height)
-                    / size.height as f32
-                    * 2.
-                    - 1.),
-                z: 0.,
-            },
-            Pos {
-                x: width / size.height as f32 * 2.,
-                y: height / size.height as f32 * 2.,
-                z: 0.,
+            UIRect {
+                pos: UIPos {
+                    x: (layout.location.x + layout.border.left + parent_offset.x)
+                        / size.height as f32
+                        * 2.
+                        - aspect_ratio,
+                    y: -((layout.location.y + layout.border.top + parent_offset.y + height)
+                        / size.height as f32
+                        * 2.
+                        - 1.),
+                },
+                size: UIPos {
+                    x: width / size.height as f32 * 2.,
+                    y: height / size.height as f32 * 2.,
+                },
             },
             background.tex_coords(),
             Color::WHITE,
@@ -233,14 +234,13 @@ fn render_element(
         }
         UIElementType::Label(text) => {
             text_renderer().draw(
-                Pos {
+                UIPos {
                     x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
                         - aspect_ratio,
                     y: -((layout.content_box_y() + parent_offset.y + layout.content_box_height())
                         / size.height as f32
                         * 2.
                         - 1.),
-                    z: 0.,
                 },
                 &text,
                 style.font_size / size.height as f32 * 2.,
@@ -250,46 +250,8 @@ fn render_element(
         }
         UIElementType::Image(key, width, height) => {
             mesh.add_quad(
-                Pos {
-                    x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
-                        - aspect_ratio,
-                    y: -((layout.content_box_y() + parent_offset.y + layout.content_box_height())
-                        / size.height as f32
-                        * 2.
-                        - 1.),
-                    z: 0.,
-                },
-                Pos {
-                    x: width / size.height as f32 * 2.,
-                    y: height / size.height as f32 * 2.,
-                    z: 0.,
-                },
-                key.tex_coords(),
-                Color::WHITE,
-            );
-        }
-        UIElementType::ItemSlot { slot } => {
-            mesh.add_quad(
-                Pos {
-                    x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
-                        - aspect_ratio,
-                    y: -((layout.content_box_y() + parent_offset.y + layout.content_box_height())
-                        / size.height as f32
-                        * 2.
-                        - 1.),
-                    z: 0.,
-                },
-                Pos {
-                    x: 50. / size.height as f32 * 2.,
-                    y: 50. / size.height as f32 * 2.,
-                    z: 0.,
-                },
-                TextureKey::id("slot").unwrap().tex_coords(),
-                Color::WHITE,
-            );
-            if let Some(background) = style.background {
-                mesh.add_quad(
-                    Pos {
+                UIRect {
+                    pos: UIPos {
                         x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
                             - aspect_ratio,
                         y: -((layout.content_box_y()
@@ -298,12 +260,54 @@ fn render_element(
                             / size.height as f32
                             * 2.
                             - 1.),
-                        z: 0.,
                     },
-                    Pos {
+                    size: UIPos {
+                        x: width / size.height as f32 * 2.,
+                        y: height / size.height as f32 * 2.,
+                    },
+                },
+                key.tex_coords(),
+                Color::WHITE,
+            );
+        }
+        UIElementType::ItemSlot { slot } => {
+            mesh.add_quad(
+                UIRect {
+                    pos: UIPos {
+                        x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
+                            - aspect_ratio,
+                        y: -((layout.content_box_y()
+                            + parent_offset.y
+                            + layout.content_box_height())
+                            / size.height as f32
+                            * 2.
+                            - 1.),
+                    },
+                    size: UIPos {
                         x: 50. / size.height as f32 * 2.,
                         y: 50. / size.height as f32 * 2.,
-                        z: 0.,
+                    },
+                },
+                TextureKey::id("slot").unwrap().tex_coords(),
+                Color::WHITE,
+            );
+            if let Some(background) = style.background {
+                mesh.add_quad(
+                    UIRect {
+                        pos: UIPos {
+                            x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
+                                - aspect_ratio,
+                            y: -((layout.content_box_y()
+                                + parent_offset.y
+                                + layout.content_box_height())
+                                / size.height as f32
+                                * 2.
+                                - 1.),
+                        },
+                        size: UIPos {
+                            x: 50. / size.height as f32 * 2.,
+                            y: 50. / size.height as f32 * 2.,
+                        },
                     },
                     background.tex_coords(),
                     Color::WHITE,
@@ -362,7 +366,7 @@ fn render_element(
                     },
                 );
                 text_renderer().draw(
-                    Pos {
+                    UIPos {
                         x: (layout.content_box_x() + border + parent_offset.x) / size.height as f32
                             * 2.
                             - aspect_ratio,
@@ -372,7 +376,6 @@ fn render_element(
                             / size.height as f32
                             * 2.
                             - 1.),
-                        z: 0.,
                     },
                     &format!("{}", item.count),
                     20. / size.height as f32 * 2.,
@@ -382,7 +385,7 @@ fn render_element(
             }
         }
         UIElementType::CraftArea { recipes } => todo!(),
-        UIElementType::ResearchTree => todo!(),
+        UIElementType::ResearchTree { research } => todo!(),
     }
 }
 fn add_element_to_taffy<'a>(
@@ -569,12 +572,12 @@ impl TextRenderer {
     }
     pub fn draw(
         &self,
-        position: Pos,
+        position: UIPos,
         text: &str,
         size: f32,
         color: Color,
         mesh: &mut GUIMesh,
-    ) -> Pos {
+    ) -> UIPos {
         let layout = self.font.layout(
             text,
             rusttype::Scale::uniform(size),
@@ -608,25 +611,35 @@ impl TextRenderer {
                 let x = glyph.position().x + bb.min.x + position.x;
                 let y = glyph.position().y + bb.min.y + position.y;
                 mesh.add_quad(
-                    Pos { x: x, y: y, z: 0. },
-                    Pos {
-                        x: size_x,
-                        y: size_y,
-                        z: 0.,
+                    UIRect {
+                        pos: UIPos { x, y },
+                        size: UIPos {
+                            x: size_x,
+                            y: size_y,
+                        },
                     },
                     texture,
                     color,
                 );
             }
         }
-        Pos {
+        UIPos {
             x: width,
             y: height,
-            z: 0.,
         }
     }
 }
 pub static TEXT_RENDERER: OnceLock<TextRenderer> = OnceLock::new();
 pub fn text_renderer() -> &'static TextRenderer {
     TEXT_RENDERER.get().unwrap()
+}
+#[derive(Copy, Clone)]
+pub struct UIPos {
+    pub x: f32,
+    pub y: f32,
+}
+#[derive(Copy, Clone)]
+pub struct UIRect {
+    pub pos: UIPos,
+    pub size: UIPos,
 }

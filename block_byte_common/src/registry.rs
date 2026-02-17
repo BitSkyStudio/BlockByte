@@ -860,6 +860,10 @@ pub struct BlockStructureData {
     pub parts: Vec<BlockStructurePart>,
 }
 pub type StructureKey = Key<BlockStructureData>;
-#[derive(Serialize, Deserialize)]
-pub struct ResearchData {}
+#[derive(Deserialize)]
+pub struct ResearchData {
+    pub icon: ItemModel,
+    #[serde(default)]
+    pub dependencies: Vec<ResearchKey>,
+}
 pub type ResearchKey = Key<ResearchData>;

@@ -10,10 +10,11 @@ use std::{
     net::{SocketAddr, UdpSocket},
     ops::ControlFlow,
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, atomic::AtomicU64},
     time::{Duration, Instant, SystemTime},
 };
 
+use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
     ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities, TexCoords,
@@ -26,8 +27,8 @@ use block_byte_common::{
     registry::{
         self, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation,
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, KeyGroup, ModelData,
-        ModelKey, Registry, TextureData, TextureKey, ToolData, TranslationLanguageData, air_block,
-        load_registries,
+        ModelKey, Registry, ResearchKey, TextureData, TextureKey, ToolData,
+        TranslationLanguageData, air_block, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -54,7 +55,7 @@ use winit::{
 use crate::{
     clipping::Frustum,
     render::{CameraUniform, DamageVertex, GUIVertex, RenderState, Vertex},
-    ui::{ScreenData, TEXT_RENDERER, TextRenderer, render_screen, text_renderer},
+    ui::{ScreenData, TEXT_RENDERER, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
 };
 
 static START_TIMER: OnceLock<Instant> = OnceLock::new();
@@ -71,20 +72,8 @@ fn main() {
     let (atlas, text_renderer, image) = TextureAtlas::pack();
     TEXTURE_ATLAS.set(atlas);
     TEXT_RENDERER.set(text_renderer);
-    let mut client = RenetClient::new(make_connection_config());
-    let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
-    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let current_time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap();
-    let authentication = ClientAuthentication::Unsecure {
-        server_addr,
-        client_id: current_time.as_millis() as u64,
-        user_data: None,
-        protocol_id: 0,
-    };
 
-    let mut transport = NetcodeClientTransport::new(current_time, authentication, socket).unwrap();
+    let connection = ClientConnection::connect("127.0.0.1:5000".parse().unwrap());
 
     let event_loop = EventLoop::new().unwrap();
     event_loop
@@ -93,8 +82,7 @@ fn main() {
             render_state: None,
             texture_image: Some(image),
             game: ClientGame::default(),
-            network_client: client,
-            network_transport: transport,
+            connection,
             teleport_id: 0,
             last_update: Instant::now(),
             player_abilities: PlayerAbilities {
@@ -111,8 +99,7 @@ struct App {
     render_state: Option<RenderState>,
     game: ClientGame,
     camera: ClientPlayer,
-    network_client: RenetClient,
-    network_transport: NetcodeClientTransport,
+    connection: ClientConnection,
     player_abilities: PlayerAbilities,
     last_update: Instant,
     teleport_id: u32,
@@ -120,10 +107,7 @@ struct App {
 }
 impl App {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
-        self.network_client.send_message(
-            DefaultChannel::ReliableOrdered,
-            serde_cbor::to_vec(&message).unwrap(),
-        );
+        self.connection.tx.send(message);
     }
 }
 impl ApplicationHandler for App {
@@ -261,8 +245,7 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                self.network_client.disconnect();
-                self.network_transport.disconnect();
+                *self.connection.state.lock() = ClientConnectionState::Disconnect;
                 event_loop.exit();
             }
             WindowEvent::CursorMoved {
@@ -390,13 +373,12 @@ impl ApplicationHandler for App {
                 let aspect_ratio =
                     render_state.size().width as f32 / render_state.size().height as f32;
                 text_renderer().draw(
-                    Vec3 {
+                    UIPos {
                         x: -aspect_ratio + 0.1,
                         y: 0.9,
-                        z: 0.,
                     },
                     &format!(
-                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2} {}mesh_queue: {}",
+                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2} {}",
                         self.game.player_position.x,
                         self.game.player_position.y,
                         self.game.player_position.z,
@@ -407,7 +389,6 @@ impl ApplicationHandler for App {
                             RayCastResult::Block(position, face) =>
                                 format!("looking at {:?} {:?} ", position, face),
                         },
-                        self.game.scheduled_chunks.len()
                     ),
                     0.05,
                     Color::WHITE,
@@ -489,15 +470,19 @@ impl ApplicationHandler for App {
                 let render_state = self.render_state.as_mut().unwrap();
 
                 if self.game.screen.is_none() {
-                    let crosshair_size = Vec3 {
-                        x: 0.02,
-                        y: 0.02,
-                        z: 0.,
-                    };
+                    let crosshair_size = 0.02;
                     let crosshair_texture = TextureKey::id("crosshair").unwrap().tex_coords();
                     gui_mesh.add_quad(
-                        -crosshair_size / 2.,
-                        crosshair_size,
+                        UIRect {
+                            pos: UIPos {
+                                x: -crosshair_size / 2.,
+                                y: -crosshair_size / 2.,
+                            },
+                            size: UIPos {
+                                x: crosshair_size,
+                                y: crosshair_size,
+                            },
+                        },
                         crosshair_texture,
                         Color::WHITE,
                     );
@@ -530,10 +515,9 @@ impl ApplicationHandler for App {
                             ..
                         } = text_renderer().get_size(&text, size);
                         text_renderer().draw(
-                            Pos {
+                            UIPos {
                                 x: -width / 2.,
                                 y: -height - size,
-                                z: 0.,
                             },
                             &text,
                             size,
@@ -567,14 +551,7 @@ impl ApplicationHandler for App {
                     .unwrap()
                     .window()
                     .request_redraw();
-                if !self.network_client.is_disconnected() {
-                    let delta_time_duration = Duration::from_secs_f32(dt);
-                    self.network_client.update(delta_time_duration);
-                    self.network_transport
-                        .update(delta_time_duration, &mut self.network_client)
-                        .unwrap();
-                }
-                if self.network_client.is_connected() {
+                if self.connection.state() == ClientConnectionState::Connected {
                     if self.game.buttons.is_down(MouseButton::Left)
                         && self.game.hit_timer.is_none()
                         && self.game.screen.is_none()
@@ -613,13 +590,7 @@ impl ApplicationHandler for App {
                             self.game.hit_timer = None;
                         }
                     }
-                    while let Some(mut message) = self
-                        .network_client
-                        .receive_message(DefaultChannel::ReliableOrdered)
-                    {
-                        let mut message = &message[..];
-                        let mut rdr = lz4_flex::frame::FrameDecoder::new(&mut message);
-                        let message: NetworkMessageS2C = serde_cbor::from_reader(&mut rdr).unwrap();
+                    while let Ok(mut message) = self.connection.rx.try_recv() {
                         match message {
                             NetworkMessageS2C::LoadChunk {
                                 position,
@@ -629,12 +600,15 @@ impl ApplicationHandler for App {
                                 self.game.chunks.insert(
                                     position,
                                     ClientChunk {
-                                        mesh_build_data: Arc::new(RwLock::new(
-                                            ChunkMeshBuildData { blocks, version: 0 },
-                                        )),
+                                        mesh_build_data: Arc::new(ChunkMeshBuildData {
+                                            blocks: RwLock::new(blocks),
+                                            version: AtomicU64::new(0),
+                                        }),
                                         buffer: None,
                                         position,
                                         components,
+                                        modified: false,
+                                        scheduled: false,
                                     },
                                 );
                                 self.game.mark_modified(position);
@@ -651,8 +625,8 @@ impl ApplicationHandler for App {
                                     let chunk = self.game.chunks.get(&chunk).unwrap();
                                     chunk
                                         .mesh_build_data
-                                        .write()
                                         .blocks
+                                        .write()
                                         .set(offset.index(), &block);
                                 }
                                 self.game.mark_modified(chunk);
@@ -792,16 +766,20 @@ impl ApplicationHandler for App {
                                     entity.hand_item = item;
                                 }
                             }
+                            NetworkMessageS2C::Knockback { velocity } => {
+                                self.camera.velocity += velocity;
+                            }
+                            NetworkMessageS2C::UpdateResearch { research } => {
+                                self.game.researched = research;
+                            }
                         }
                     }
-                } else if self.network_client.is_disconnected() {
+                } else if self.connection.state() == ClientConnectionState::Disconnected {
                     println!("disconnected");
                     event_loop.exit();
                     return;
                 }
-                self.network_transport
-                    .send_packets(&mut self.network_client)
-                    .unwrap();
+
                 self.game.buttons.frame_clear(dt);
                 self.game.keys.frame_clear(dt);
             }
@@ -1281,10 +1259,9 @@ impl ClientPlayer {
 }
 pub struct ClientGame {
     pub player_position: Pos,
-    pub chunks: HashMap<ChunkPos, ClientChunk>,
-    pub modified_chunks: HashSet<ChunkPos>,
-    pub scheduled_chunks: HashSet<ChunkPos>,
-    pub entities: HashMap<Uuid, ClientEntity>,
+    pub chunks: AHashMap<ChunkPos, ClientChunk>,
+    pub modified_chunks: Vec<ChunkPos>,
+    pub entities: AHashMap<Uuid, ClientEntity>,
     pub player_entity: Option<Uuid>,
     pub screen: Option<ScreenData>,
     pub hud: ScreenData,
@@ -1301,12 +1278,13 @@ pub struct ClientGame {
         std::sync::mpsc::Sender<(ChunkPos, Option<(Buffer, u32)>, u64)>,
         std::sync::mpsc::Receiver<(ChunkPos, Option<(Buffer, u32)>, u64)>,
     ),
+    pub researched: HashSet<ResearchKey>,
 }
 impl Default for ClientGame {
     fn default() -> Self {
         Self {
             player_position: Pos::ZERO,
-            chunks: Default::default(),
+            chunks: AHashMap::with_capacity(1000), //capacity
             modified_chunks: Default::default(),
             entities: Default::default(),
             player_entity: None,
@@ -1323,18 +1301,24 @@ impl Default for ClientGame {
             selected_slot: None,
             hotbar_slot: 0,
             item_variation: HashMap::new(),
-            scheduled_chunks: HashSet::new(),
             chunk_mesh_channels: std::sync::mpsc::channel(),
             viewmodel_player: AnimationPlayer::new(viewmodel_graph()),
             swap_hand_item: None,
+            researched: HashSet::new(),
         }
     }
 }
 impl ClientGame {
     pub fn mark_modified(&mut self, chunk_position: ChunkPos) {
-        if let Some(chunk) = self.chunks.get(&chunk_position) {
-            chunk.mesh_build_data.write().version += 1;
-            self.modified_chunks.insert(chunk_position);
+        if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
+            chunk
+                .mesh_build_data
+                .version
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if !chunk.modified {
+                chunk.modified = true;
+                self.modified_chunks.push(chunk_position);
+            }
         }
     }
     pub fn held_item(&self) -> &Option<ClientItem> {
@@ -1353,8 +1337,8 @@ impl ClientGame {
                 .chunks
                 .get(&chunk)?
                 .mesh_build_data
-                .read()
                 .blocks
+                .read()
                 .get(offset.index())
                 .unwrap(),
         )
@@ -1434,17 +1418,28 @@ impl ClientGame {
             },
         );
         while let Ok((position, buffer, version)) = self.chunk_mesh_channels.1.try_recv() {
-            self.scheduled_chunks.remove(&position);
             if let Some(chunk) = self.chunks.get_mut(&position) {
+                chunk.scheduled = false;
                 chunk.buffer = buffer;
-                if version < chunk.mesh_build_data.read().version {
-                    self.modified_chunks.insert(position);
+                if version
+                    < chunk
+                        .mesh_build_data
+                        .version
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    if !chunk.modified {
+                        chunk.modified = true;
+
+                        self.modified_chunks.push(position);
+                    }
                 }
             }
         }
-        for modified_chunk in self.modified_chunks.drain() {
-            if let Some(chunk) = self.chunks.get(&modified_chunk) {
-                if self.scheduled_chunks.insert(modified_chunk) {
+        for modified_chunk in self.modified_chunks.drain(..) {
+            if let Some(chunk) = self.chunks.get_mut(&modified_chunk) {
+                chunk.modified = false;
+                if !chunk.scheduled {
+                    chunk.scheduled = true;
                     let tx = self.chunk_mesh_channels.0.clone();
                     let build_data = chunk.mesh_build_data.clone();
                     let neighbor_chunks = FaceMap::init(|face| {
@@ -1540,8 +1535,8 @@ impl ClientGame {
                     {
                         continue;
                     }
-                    let blocks = chunk.mesh_build_data.read();
-                    let block = blocks.blocks.get(offset.index()).unwrap();
+                    let blocks = chunk.mesh_build_data.blocks.read();
+                    let block = blocks.get(offset.index()).unwrap();
                     let block_data = block.block.data();
                     let progress = (damage.damage
                         / block_data
@@ -1717,8 +1712,8 @@ impl ClientGame {
                         if let Some(chunk) = self.chunks.get(&chunk) {
                             let block = chunk
                                 .mesh_build_data
-                                .read()
                                 .blocks
+                                .read()
                                 .get(offset.index())
                                 .unwrap()
                                 .block;
@@ -1784,12 +1779,11 @@ impl ClientGame {
                 .damage
                 .components
                 .retain_mut(|(offset, health)| {
-                    let blocks = chunk.mesh_build_data.read();
-                    let data = blocks.blocks.get(offset.index()).unwrap().block.data();
+                    let blocks = chunk.mesh_build_data.blocks.read();
+                    let data = blocks.get(offset.index()).unwrap().block.data();
                     if let Some(health_data) = &data.health {
                         health.damage -= dt
                             * blocks
-                                .blocks
                                 .get(offset.index())
                                 .unwrap()
                                 .block
@@ -1819,14 +1813,16 @@ pub struct ClientEntity {
     hand_item: Option<ClientItem>,
 }
 struct ChunkMeshBuildData {
-    pub blocks: BlockPalette,
-    pub version: u64,
+    pub blocks: RwLock<BlockPalette>,
+    pub version: AtomicU64,
 }
 pub struct ClientChunk {
     pub position: ChunkPos,
-    pub mesh_build_data: Arc<RwLock<ChunkMeshBuildData>>,
+    pub mesh_build_data: Arc<ChunkMeshBuildData>,
     pub components: ClientChunkBlockComponents,
     pub buffer: Option<(Buffer, u32)>,
+    pub modified: bool,
+    pub scheduled: bool,
 }
 pub struct Mesh<T> {
     pub vertices: Vec<T>,
@@ -1856,8 +1852,41 @@ impl BaseMesh {
 }
 
 impl GUIMesh {
-    pub fn add_quad(&mut self, position: Pos, size: Pos, texture: TexCoords, color: Color) {
+    pub fn add_quad_clip(&mut self, quad: UIRect, texture: TexCoords, color: Color, clip: UIRect) {
+        if quad.pos.x + quad.size.x < clip.pos.x
+            || quad.pos.x > clip.pos.x + clip.size.x
+            || quad.pos.y + quad.size.y < clip.pos.y
+            || quad.pos.y > clip.pos.y + clip.size.y
+        {
+            return;
+        }
+        let pos1 = UIPos {
+            x: quad.pos.x.max(clip.pos.x),
+            y: quad.pos.y.max(clip.pos.y),
+        };
+        let pos2 = UIPos {
+            x: (quad.pos.x + quad.size.x).min(clip.pos.x + clip.size.x),
+            y: (quad.pos.y + quad.size.y).min(clip.pos.y + clip.size.y),
+        };
+        let clipped_quad = UIRect {
+            pos: pos1,
+            size: UIPos {
+                x: pos2.x - pos1.x,
+                y: pos2.y - pos1.y,
+            },
+        };
+        let clipped_texture = TexCoords {
+            u1: texture.u1 + (pos1.x - quad.pos.x) / quad.size.x * (texture.u2 - texture.u1),
+            v1: texture.v1 + (pos1.y - quad.pos.y) / quad.size.y * (texture.v2 - texture.v1),
+            u2: texture.u1 + (pos2.x - quad.pos.x) / quad.size.x * (texture.u2 - texture.u1),
+            v2: texture.v1 + (pos2.y - quad.pos.y) / quad.size.y * (texture.v2 - texture.v1),
+        };
+        self.add_quad(clipped_quad, clipped_texture, color);
+    }
+    pub fn add_quad(&mut self, quad: UIRect, texture: TexCoords, color: Color) {
         let color: [u8; 4] = color.into();
+        let position = quad.pos;
+        let size = quad.size;
         let a = GUIVertex {
             position: [position.x, position.y],
             tex_coords: [texture.u1, texture.v2],
@@ -1889,28 +1918,29 @@ impl GUIMesh {
 impl ClientChunk {
     pub fn build_chunk_mesh(
         position: ChunkPos,
-        chunk_data: Arc<RwLock<ChunkMeshBuildData>>,
-        neighbor_chunks: FaceMap<Option<Arc<RwLock<ChunkMeshBuildData>>>>,
+        chunk_data: Arc<ChunkMeshBuildData>,
+        neighbor_chunks: FaceMap<Option<Arc<ChunkMeshBuildData>>>,
     ) -> (BaseMesh, u64) {
         let mut mesh: BaseMesh = Mesh {
             vertices: Vec::new(),
         };
-        let chunk_data = chunk_data.read();
-        let neighbor_chunks = neighbor_chunks.map(|chunk| chunk.as_ref().map(|chunk| chunk.read()));
+        let chunk_blocks = chunk_data.blocks.read();
+        let neighbor_chunks =
+            neighbor_chunks.map(|chunk| chunk.as_ref().map(|chunk| chunk.blocks.read()));
 
-        if chunk_data.blocks.unique_values() == 1
-            && chunk_data.blocks.get(0).unwrap().block == air_block()
-        {
-            return (mesh, chunk_data.version);
+        if chunk_blocks.unique_values() == 1 && chunk_blocks.get(0).unwrap().block == air_block() {
+            return (
+                mesh,
+                chunk_data
+                    .version
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
         }
 
         for x in 0..CHUNK_SIZE as u8 {
             for y in 0..CHUNK_SIZE as u8 {
                 for z in 0..CHUNK_SIZE as u8 {
-                    let block = *chunk_data
-                        .blocks
-                        .get(ChunkOffset::new(x, y, z).index())
-                        .unwrap();
+                    let block = *chunk_blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = block.block.data();
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
@@ -1942,11 +1972,10 @@ impl ClientChunk {
                                     .find(|f| f.get_chunk_offset() == neighbor_chunk)
                                 {
                                     Some(face) => neighbor_chunks.by_face(*face).as_ref(),
-                                    None => Some(&chunk_data),
+                                    None => Some(&chunk_blocks),
                                 };
                                 if let Some(neighbor_chunk) = neighbor_chunk {
                                     let neighbor_block_data = neighbor_chunk
-                                        .blocks
                                         .get(neighbor_offset.index())
                                         .unwrap()
                                         .block
@@ -2010,7 +2039,12 @@ impl ClientChunk {
             }
         }
 
-        (mesh, chunk_data.version)
+        (
+            mesh,
+            chunk_data
+                .version
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 }
 
@@ -2328,4 +2362,91 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
             animations,
         }
     })
+}
+pub struct ClientConnection {
+    rx: std::sync::mpsc::Receiver<NetworkMessageS2C>,
+    tx: std::sync::mpsc::Sender<NetworkMessageC2S>,
+    state: Arc<Mutex<ClientConnectionState>>,
+}
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum ClientConnectionState {
+    Connecting,
+    Connected,
+    Disconnect,
+    Disconnected,
+}
+impl ClientConnection {
+    pub fn connect(addr: SocketAddr) -> ClientConnection {
+        let (s2c_tx, s2c_rx) = std::sync::mpsc::channel();
+        let (c2s_tx, c2s_rx) = std::sync::mpsc::channel();
+        let state = Arc::new(Mutex::new(ClientConnectionState::Connecting));
+        {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let mut client = RenetClient::new(make_connection_config());
+                let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+                let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+                let current_time = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap();
+                let authentication = ClientAuthentication::Unsecure {
+                    server_addr,
+                    client_id: current_time.as_millis() as u64,
+                    user_data: None,
+                    protocol_id: 0,
+                };
+
+                let mut transport =
+                    NetcodeClientTransport::new(current_time, authentication, socket).unwrap();
+                loop {
+                    let delta_time_duration = Duration::from_secs_f32(1. / 60.);
+                    match { *state.lock() } {
+                        ClientConnectionState::Connecting => {
+                            if client.is_connected() {
+                                *state.lock() = ClientConnectionState::Connected;
+                            }
+                        }
+                        ClientConnectionState::Connected => {
+                            while let Ok(message) = c2s_rx.try_recv() {
+                                client.send_message(
+                                    DefaultChannel::ReliableOrdered,
+                                    serde_cbor::to_vec(&message).unwrap(),
+                                );
+                            }
+                            client.update(delta_time_duration);
+                            while let Some(mut message) =
+                                client.receive_message(DefaultChannel::ReliableOrdered)
+                            {
+                                let mut message = &message[..];
+                                let mut rdr = lz4_flex::frame::FrameDecoder::new(&mut message);
+                                let message: NetworkMessageS2C =
+                                    serde_cbor::from_reader(&mut rdr).unwrap();
+                                s2c_tx.send(message);
+                            }
+                        }
+                        ClientConnectionState::Disconnect => break,
+                        ClientConnectionState::Disconnected => unreachable!(),
+                    }
+                    if !client.is_disconnected() {
+                        transport.update(delta_time_duration, &mut client).unwrap();
+                        transport.send_packets(&mut client).unwrap();
+                    } else {
+                        *state.lock() = ClientConnectionState::Disconnected;
+                        return;
+                    }
+                    std::thread::sleep(delta_time_duration);
+                }
+                transport.disconnect();
+                client.disconnect();
+            });
+        }
+        ClientConnection {
+            rx: s2c_rx,
+            tx: c2s_tx,
+            state,
+        }
+    }
+    pub fn state(&self) -> ClientConnectionState {
+        *self.state.lock()
+    }
 }

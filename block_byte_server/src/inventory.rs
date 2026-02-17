@@ -368,6 +368,21 @@ impl Inventory {
         let stack_size = item.item.data().stack_size;
         for slot_index in &view.slots {
             let mut slot = &mut self.items[*slot_index];
+            if let Some(slot) = slot {
+                if let Some((stack, rest)) = item.merge(&slot) {
+                    *slot = stack;
+                    self.slot_changed(*slot_index);
+                    match rest {
+                        Some(rest) => {
+                            item = rest;
+                        }
+                        None => return None,
+                    }
+                }
+            }
+        }
+        for slot_index in &view.slots {
+            let mut slot = &mut self.items[*slot_index];
             if slot.is_none() {
                 if item.count > stack_size {
                     let (first, second) = item.split(stack_size);
@@ -378,18 +393,6 @@ impl Inventory {
                     *slot = Some(item);
                     self.slot_changed(*slot_index);
                     return None;
-                }
-            } else {
-                let mut slot = slot.as_mut().unwrap();
-                if let Some((stack, rest)) = item.merge(&slot) {
-                    *slot = stack;
-                    self.slot_changed(*slot_index);
-                    match rest {
-                        Some(rest) => {
-                            item = rest;
-                        }
-                        None => return None,
-                    }
                 }
             }
         }

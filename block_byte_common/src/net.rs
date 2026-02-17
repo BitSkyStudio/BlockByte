@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use palettevec::PaletteVec;
 use renet::{ChannelConfig, ConnectionConfig, SendType};
@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::{
     ClientItem, ItemMoveMode, LookDirection, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
-    registry::{BlockEntry, BlockKey, BlockPalette, EntityKey, ToolData},
+    registry::{BlockEntry, BlockKey, BlockPalette, EntityKey, RecipeKey, ResearchKey, ToolData},
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
@@ -48,6 +48,13 @@ pub enum NetworkMessageC2S {
         from: usize,
         to: usize,
         mode: ItemMoveMode,
+    },
+    Research {
+        research: ResearchKey,
+    },
+    Craft {
+        recipe: RecipeKey,
+        count: u32,
     },
 }
 #[derive(Serialize, Deserialize)]
@@ -115,6 +122,12 @@ pub enum NetworkMessageS2C {
     HUDSlot {
         slot: usize,
         item: Option<ClientItem>,
+    },
+    Knockback {
+        velocity: Pos,
+    },
+    UpdateResearch {
+        research: HashSet<ResearchKey>,
     },
 }
 

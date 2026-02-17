@@ -12,7 +12,8 @@ use block_byte_common::{
     net::NetworkMessageS2C,
     registry::{
         BiomeKey, BlockData, BlockEntry, BlockInteractAction, BlockKey, BlockMachineAction,
-        BlockPalette, BlockRotation, EntityInteractAction, EntityKey, PlantKey, air_block,
+        BlockPalette, BlockRotation, EntityInteractAction, EntityKey, PlantKey, ResearchKey,
+        air_block,
     },
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
@@ -521,6 +522,7 @@ pub struct Entity {
     pub direction: LookDirection,
     pub inventory: RwLock<Inventory>,
     pub events: Mutex<SmallVec<[EntityEvent; 4]>>,
+    pub controller: Option<UserIndex>,
     pub state: Mutex<InternalEntityState>,
 }
 #[derive(Serialize, Deserialize)]
@@ -532,6 +534,7 @@ pub struct InternalEntityState {
     #[serde(skip_serializing, skip_deserializing)]
     pub last_hand_item: Option<ItemStack>,
     pub health: f32,
+    pub research: HashSet<ResearchKey>,
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
@@ -543,6 +546,7 @@ impl Entity {
             direction: LookDirection { pitch: 0., yaw: 0. },
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
             events: Mutex::new(SmallVec::new()),
+            controller: None,
             state: Mutex::new(InternalEntityState {
                 velocity: Pos::ZERO,
                 removed: false,
@@ -550,6 +554,7 @@ impl Entity {
                 hand_slot: 0,
                 last_hand_item: None,
                 health: entity_data.health,
+                research: HashSet::new(),
             }),
         }
     }
@@ -612,7 +617,7 @@ impl Entity {
                 }
             }
         }
-        {
+        if self.controller.is_none() {
             let hitbox = self.key.data().hitbox();
             let mut movement = state.velocity;
             movement.y -= 10. * server.delta_time();
@@ -700,6 +705,16 @@ impl Entity {
             }
 
             state.velocity = movement;
+        } else {
+            if state.velocity.length_squared() > 0. {
+                server.send_message(
+                    self.controller.unwrap(),
+                    NetworkMessageS2C::Knockback {
+                        velocity: state.velocity,
+                    },
+                );
+                state.velocity = Pos::ZERO;
+            }
         }
         {
             let new_hand_item = self

@@ -8,7 +8,9 @@ use taffy::{
     JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Size,
 };
 
-use crate::registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, TextureKey};
+use crate::registry::{
+    Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchData, TextureKey,
+};
 
 pub struct UIScreen {
     pub root: UIElement,
@@ -29,7 +31,7 @@ pub enum UIElementType {
     Image(TextureKey, f32, f32),
     ItemSlot { slot: usize },
     CraftArea { recipes: KeyGroup<RecipeData> },
-    ResearchTree,
+    ResearchTree { research: KeyGroup<ResearchData> },
 }
 impl UIElementType {
     pub fn parse(node: &Node) -> anyhow::Result<Self> {
@@ -60,7 +62,9 @@ impl UIElementType {
             "craft" => UIElementType::CraftArea {
                 recipes: KeyGroup::parse(node.attribute("recipes").unwrap()).unwrap(),
             },
-            "research" => UIElementType::ResearchTree,
+            "research" => UIElementType::ResearchTree {
+                research: KeyGroup::parse(node.attribute("research").unwrap()).unwrap(),
+            },
             other => unimplemented!("{}", other),
         })
     }
