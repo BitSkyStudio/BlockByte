@@ -41,7 +41,7 @@ use crate::{
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
         BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex,
-        WorldGenerator,
+        UserIndexSave, WorldGenerator,
     },
 };
 
@@ -162,7 +162,7 @@ fn main() {
                 .inventory
                 .get_mut()
                 .add_item(&full_view, ItemStack::new(ItemKey::id("wood").unwrap(), 20));
-            entity.controller = Some(user);
+            entity.controller = Some(UserIndexSave(user));
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
@@ -537,11 +537,10 @@ fn main() {
                         if let Some(entity) = user.entity {
                             let entity = server.entities.get_mut(entity).unwrap();
                             entity.state.get_mut().research.insert(research);
+                            let research = entity.state.get_mut().research.clone();
                             server.send_message(
                                 user_id,
-                                NetworkMessageS2C::UpdateResearch {
-                                    research: entity.state.get_mut().research.clone(),
-                                },
+                                NetworkMessageS2C::UpdateResearch { research },
                             );
                         }
                     }
@@ -549,24 +548,30 @@ fn main() {
                         let recipe = recipe.data();
                         if let Some(screen) = user.screen.lock().as_ref() {
                             let mut failed = false;
-                            for (input, input_count) in recipe.inputs.iter().cloned() {
-                                if screen.inventories.iter().map(|(inventory, view)| {
-                                    inventory
-                                        .get_inventory(&mut server.entities, &mut server.chunks)
-                                        .unwrap()
-                                        .count_item(view, input)
-                                }) < input_count
+                            for (input, input_count) in recipe.inputs.iter() {
+                                if screen
+                                    .inventories
+                                    .iter()
+                                    .map(|(inventory, view)| {
+                                        inventory
+                                            .get_inventory(&mut server.entities, &mut server.chunks)
+                                            .unwrap()
+                                            .count_item(view, *input)
+                                    })
+                                    .sum::<u16>()
+                                    < *input_count
                                 {
                                     failed = true;
                                     break;
                                 }
                             }
-                            for (input, mut input_count) in recipe.inputs.iter().cloned() {
+                            for (input, input_count) in recipe.inputs.iter() {
+                                let mut input_count = *input_count;
                                 for (inventory, view) in screen.inventories.iter() {
                                     let inventory = inventory
                                         .get_inventory(&mut server.entities, &mut server.chunks)
                                         .unwrap();
-                                    input_count = inventory.remove_item(view, input, input_count);
+                                    input_count = inventory.remove_item(view, *input, input_count);
                                     if input_count == 0 {
                                         break;
                                     }

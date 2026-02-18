@@ -445,7 +445,7 @@ impl Chunk {
     }
 }
 
-pub struct UserIndexSave(UserIndex);
+pub struct UserIndexSave(pub UserIndex);
 impl Serialize for UserIndexSave {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -522,7 +522,7 @@ pub struct Entity {
     pub direction: LookDirection,
     pub inventory: RwLock<Inventory>,
     pub events: Mutex<SmallVec<[EntityEvent; 4]>>,
-    pub controller: Option<UserIndex>,
+    pub controller: Option<UserIndexSave>, //breaks on load
     pub state: Mutex<InternalEntityState>,
 }
 #[derive(Serialize, Deserialize)]
@@ -708,7 +708,7 @@ impl Entity {
         } else {
             if state.velocity.length_squared() > 0. {
                 server.send_message(
-                    self.controller.unwrap(),
+                    self.controller.as_ref().unwrap().0,
                     NetworkMessageS2C::Knockback {
                         velocity: state.velocity,
                     },
