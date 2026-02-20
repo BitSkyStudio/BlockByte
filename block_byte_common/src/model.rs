@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::{
     TexCoords,
     coord::{Face, FaceMap, Pos},
+    registry::TextureKey,
 };
 
 #[derive(Deserialize, Debug)]
@@ -23,6 +24,7 @@ struct BBModel {
 struct BBTexture {
     uv_width: f32,
     uv_height: f32,
+    name: String,
     source: String,
 }
 fn default_true() -> bool {
@@ -352,7 +354,12 @@ struct ResolvedAnimation {
 pub struct Model {
     root_bone: Bone,
     animations: HashMap<String, usize>,
-    pub textures: Vec<String>,
+    pub textures: Vec<(ModelTexture, f32, f32)>,
+}
+pub enum ModelTexture {
+    Embed(String, usize),
+    Variable(usize),
+    Texture(TextureKey),
 }
 impl Model {
     pub fn draw(
@@ -408,6 +415,7 @@ impl Model {
 
         let mut root_bone =
             Self::build_bone(&bbmodel.outliner, None, &element_map, &group_map, &bbmodel);
+        let mut embed_texture_id = 0;
         Model {
             root_bone,
             animations: bbmodel
@@ -420,7 +428,21 @@ impl Model {
             textures: bbmodel
                 .textures
                 .into_iter()
-                .map(|texture| texture.source)
+                .map(|texture| {
+                    let model_texture = if texture.name.starts_with("$") {
+                        ModelTexture::Variable(texture.name[1..].parse().unwrap())
+                    } else if texture.name.starts_with("@") {
+                        ModelTexture::Texture(TextureKey::id(&texture.name[1..]).unwrap())
+                    } else {
+                        embed_texture_id += 1;
+                        ModelTexture::Embed(texture.source, embed_texture_id - 1)
+                    };
+                    (
+                        model_texture,
+                        texture.uv_width as f32,
+                        texture.uv_height as f32,
+                    )
+                })
                 .collect(),
         }
     }

@@ -22,12 +22,12 @@ use block_byte_common::{
         AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos, Ray,
         Vec3,
     },
-    model::DrawAnimation,
+    model::{DrawAnimation, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation,
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, KeyGroup, ModelData,
-        ModelKey, Registry, ResearchKey, TextureData, TextureKey, ToolData,
+        ModelInstance, ModelKey, Registry, ResearchKey, TextureData, TextureKey, ToolData,
         TranslationLanguageData, air_block, load_registries,
     },
     ui::PropertyMap,
@@ -170,12 +170,8 @@ impl ApplicationHandler for App {
                             if key_code == *key {
                                 if self.game.keys.is_down(KeyCode::KeyG) {
                                     if let Some(held_item) = self.game.held_item() {
-                                        let variation_count = match &held_item.item.data().action {
-                                            ItemAction::Ignore => 1,
-                                            ItemAction::Place(item_block_placements) => {
-                                                item_block_placements.len()
-                                            }
-                                        };
+                                        let variation_count =
+                                            held_item.item.data().action.variation_count();
                                         if slot < variation_count {
                                             let variation = self
                                                 .game
@@ -264,15 +260,31 @@ impl ApplicationHandler for App {
             } => match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, scroll) => {
                     if self.game.screen.is_none() {
-                        self.game.viewmodel_player.trigger("equip");
-                        self.game.swap_hand_item = self.game.held_item().clone();
-                        let mut new_slot = self.game.hotbar_slot as isize;
-                        new_slot += -scroll as isize;
-                        new_slot = ((new_slot % 10) + 10) % 10;
-                        self.game.hotbar_slot = new_slot as usize;
-                        self.send_message(NetworkMessageC2S::HotbarSelect {
-                            slot: new_slot as usize,
-                        });
+                        if self.game.keys.is_down(KeyCode::KeyG) {
+                            if let Some(held_item) = self.game.held_item() {
+                                let variation_count =
+                                    held_item.item.data().action.variation_count() as isize;
+                                let mut new_variant =
+                                    *self.game.item_variation.get(&held_item.item).unwrap_or(&0)
+                                        as isize;
+                                new_variant -= scroll as isize;
+                                new_variant = ((new_variant % variation_count) + variation_count)
+                                    % variation_count;
+                                self.game
+                                    .item_variation
+                                    .insert(held_item.item, new_variant as usize);
+                            }
+                        } else {
+                            self.game.viewmodel_player.trigger("equip");
+                            self.game.swap_hand_item = self.game.held_item().clone();
+                            let mut new_slot = self.game.hotbar_slot as isize;
+                            new_slot += -scroll as isize;
+                            new_slot = ((new_slot % 10) + 10) % 10;
+                            self.game.hotbar_slot = new_slot as usize;
+                            self.send_message(NetworkMessageC2S::HotbarSelect {
+                                slot: new_slot as usize,
+                            });
+                        }
                     }
                 }
                 winit::event::MouseScrollDelta::PixelDelta(physical_position) => {}
@@ -456,17 +468,7 @@ impl ApplicationHandler for App {
                         self.game.selected_slot = None;
                     }
                 }
-                if let Some(held_item) = self.game.held_item() {
-                    if self.game.keys.is_just_down(KeyCode::KeyG) {
-                        let variation_count = match &held_item.item.data().action {
-                            ItemAction::Ignore => 1,
-                            ItemAction::Place(item_block_placements) => item_block_placements.len(),
-                        };
-                        let variation = self.game.item_variation.entry(held_item.item).or_insert(0);
-                        *variation += 1;
-                        *variation %= variation_count;
-                    }
-                }
+
                 let render_state = self.render_state.as_mut().unwrap();
 
                 if self.game.screen.is_none() {
@@ -837,7 +839,7 @@ impl<T: Hash + Eq + Copy> InputContainer<T> {
 
 pub struct TextureAtlas {
     textures: Vec<TexCoords>,
-    models: Vec<Vec<(TexCoords, f32, f32)>>,
+    models: Vec<Vec<TexCoords>>,
 }
 
 impl TextureAtlas {
@@ -868,19 +870,24 @@ impl TextureAtlas {
         }
         for (i, model) in ModelKey::entries().enumerate() {
             let model = model.data();
-            for (j, texture) in model.model.textures.iter().enumerate() {
-                let image = image::load_from_memory_with_format(
-                    BASE64_STANDARD
-                        .decode(&texture["data:image/png;base64,".len()..])
-                        .unwrap()
-                        .as_slice(),
-                    image::ImageFormat::Png,
-                )
-                .unwrap();
+            for (j, (texture, _, _)) in model.model.textures.iter().enumerate() {
+                match texture {
+                    ModelTexture::Embed(texture, _) => {
+                        let image = image::load_from_memory_with_format(
+                            BASE64_STANDARD
+                                .decode(&texture["data:image/png;base64,".len()..])
+                                .unwrap()
+                                .as_slice(),
+                            image::ImageFormat::Png,
+                        )
+                        .unwrap();
 
-                packer
-                    .pack_own(TextureAtlasEntry::Model(i, j), image)
-                    .unwrap();
+                        packer
+                            .pack_own(TextureAtlasEntry::Model(i, j), image)
+                            .unwrap();
+                    }
+                    _ => {}
+                }
             }
         }
         let font = rusttype::Font::try_from_vec(std::fs::read("assets/font.ttf").unwrap()).unwrap();
@@ -938,21 +945,16 @@ impl TextureAtlas {
                             .textures
                             .iter()
                             .enumerate()
-                            .map(|(j, _)| {
-                                let frame =
-                                    packer.get_frame(&TextureAtlasEntry::Model(i, j)).unwrap();
-                                (
-                                    TexCoords {
-                                        u1: frame.frame.x as f32 / packer.width() as f32,
-                                        v1: frame.frame.y as f32 / packer.height() as f32,
-                                        u2: (frame.frame.x + frame.frame.w) as f32
-                                            / packer.width() as f32,
-                                        v2: (frame.frame.y + frame.frame.h) as f32
-                                            / packer.height() as f32,
-                                    },
-                                    frame.frame.w as f32,
-                                    frame.frame.h as f32,
-                                )
+                            .filter_map(|(j, _)| {
+                                let frame = packer.get_frame(&TextureAtlasEntry::Model(i, j))?;
+                                Some(TexCoords {
+                                    u1: frame.frame.x as f32 / packer.width() as f32,
+                                    v1: frame.frame.y as f32 / packer.height() as f32,
+                                    u2: (frame.frame.x + frame.frame.w) as f32
+                                        / packer.width() as f32,
+                                    v2: (frame.frame.y + frame.frame.h) as f32
+                                        / packer.height() as f32,
+                                })
                             })
                             .collect()
                     })
@@ -1408,7 +1410,10 @@ impl ClientGame {
             self.swap_hand_item = self.held_item().clone();
         }
         render::draw_model(
-            ModelKey::id("viewmodel").unwrap(),
+            &ModelInstance {
+                model: ModelKey::id("viewmodel").unwrap(),
+                textures: vec![],
+            },
             Matrix4::identity(),
             &mut viewmodel_mesh.vertex_consumer(),
             &animation,
@@ -1487,7 +1492,7 @@ impl ClientGame {
                 lerp_time,
             );
             render::draw_model(
-                entity.key.data().model,
+                &entity.key.data().model,
                 Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
                     * Matrix4::from_angle_y(Rad(rotation)),
                 &mut entity_mesh.vertex_consumer(),
@@ -1579,15 +1584,13 @@ impl ClientGame {
                                 );
                             }
                         }
-                        BlockRenderData::Model(model_key) => {
+                        BlockRenderData::Model(model) => {
                             let orientation: Orientation = block.rotation.into();
                             let right = orientation.right.get_offset();
                             let up = orientation.up.get_offset();
                             let front = orientation.forward.get_offset();
-                            let model = &model_key.data().model;
-                            let textures =
-                                &TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()];
-                            model.draw(
+                            let model_data = &model.model.data();
+                            model_data.model.draw(
                                 Matrix4::from_translation(Vector3::new(
                                     base_position.x + 0.5,
                                     base_position.y + 0.5,
@@ -1600,7 +1603,7 @@ impl ClientGame {
                                 ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
                                 &[],
                                 |position, normal, uv, texture| {
-                                    let (_, width, height) = textures[texture];
+                                    let (_, width, height) = model_data.model.textures[texture];
                                     damage_mesh.vertices.push(DamageVertex {
                                         position: [position.x, position.y, position.z],
                                         tex_coords: [uv.0 * width, uv.1 * height],
@@ -2013,7 +2016,7 @@ impl ClientChunk {
                             let up = orientation.up.get_offset();
                             let front = orientation.forward.get_offset();
                             render::draw_model(
-                                *model,
+                                model,
                                 Matrix4::from_translation(Vector3::new(
                                     position.x, position.y, position.z,
                                 )) * Matrix4::from_cols(

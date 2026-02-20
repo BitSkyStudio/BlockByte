@@ -1,8 +1,8 @@
 use block_byte_common::coord::{AABB, CHUNK_SIZE, Face, Pos, Vec3};
-use block_byte_common::model::DrawAnimation;
+use block_byte_common::model::{DrawAnimation, ModelTexture};
 use block_byte_common::registry::{
-    BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key, ModelData, ModelKey,
-    TextureData, TextureKey,
+    BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key, ModelData, ModelInstance,
+    ModelKey, TextureData, TextureKey,
 };
 use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
@@ -274,7 +274,7 @@ impl RenderState {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -1162,26 +1162,30 @@ pub fn draw_block_model(
                 });
             }
         }
-        BlockRenderData::Model(key) => {
-            draw_model(*key, matrix, vertex_consumer, &[], |_| None);
+        BlockRenderData::Model(model) => {
+            draw_model(model, matrix, vertex_consumer, &[], |_| None);
         }
     }
 }
 pub fn draw_model(
-    model_key: ModelKey,
+    model: &ModelInstance,
     matrix: Matrix4<f32>,
     vertex_consumer: &mut impl FnMut([f32; 3], [f32; 2], [f32; 3]),
     animations: &[DrawAnimation],
     item_query: impl Fn(&str) -> Option<ClientItem>,
 ) {
-    let model = &model_key.data().model;
-    let textures = &TEXTURE_ATLAS.get().unwrap().models[model_key.numeric_id()];
+    let model_data = &model.model.data().model;
+    let embed_textures = &TEXTURE_ATLAS.get().unwrap().models[model.model.numeric_id()];
     let mut item_models = Vec::new();
-    model.draw(
+    model_data.draw(
         matrix,
         animations,
         |position, normal, uv, texture| {
-            let (texture, _, _) = textures[texture];
+            let texture = match &model_data.textures[texture].0 {
+                ModelTexture::Embed(_, index) => embed_textures[*index],
+                ModelTexture::Variable(variable) => model.textures[*variable].tex_coords(),
+                ModelTexture::Texture(key) => key.tex_coords(),
+            };
             let uv = texture.map((uv.0, uv.1));
             vertex_consumer(
                 [position.x, position.y, position.z],
@@ -1201,6 +1205,7 @@ pub fn draw_model(
                 BlockRenderData::Air => Matrix4::identity(),
                 BlockRenderData::Full { faces } => Matrix4::identity(),
                 BlockRenderData::Model(key) => key
+                    .model
                     .data()
                     .model
                     .anchor(binding.as_str(), Matrix4::from_scale(0.35), &[])
@@ -1208,6 +1213,7 @@ pub fn draw_model(
                     .unwrap_or(Matrix4::identity()),
             },
             ItemModel::Model(key) => key
+                .model
                 .data()
                 .model
                 .anchor(binding.as_str(), Matrix4::identity(), &[])
@@ -1226,8 +1232,8 @@ pub fn draw_item_model(
         ItemModel::Block(key) => {
             draw_block_model(*key, matrix * Matrix4::from_scale(0.35), vertex_consumer);
         }
-        ItemModel::Model(key) => {
-            draw_model(*key, matrix, vertex_consumer, &[], |_| None);
+        ItemModel::Model(model) => {
+            draw_model(model, matrix, vertex_consumer, &[], |_| None);
         }
     }
 }

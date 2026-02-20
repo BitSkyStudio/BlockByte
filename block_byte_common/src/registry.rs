@@ -416,6 +416,14 @@ pub enum ItemAction {
     Ignore,
     Place(Vec<ItemBlockPlacement>),
 }
+impl ItemAction {
+    pub fn variation_count(&self) -> usize {
+        match self {
+            ItemAction::Ignore => 1,
+            ItemAction::Place(item_block_placements) => item_block_placements.len(),
+        }
+    }
+}
 #[derive(Deserialize)]
 pub struct ItemBlockPlacement {
     pub block: BlockKey,
@@ -432,7 +440,7 @@ impl Default for ItemAction {
 #[derive(Deserialize)]
 pub enum ItemModel {
     Block(BlockKey),
-    Model(ModelKey),
+    Model(ModelInstance),
 }
 #[derive(Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolData {
@@ -590,7 +598,7 @@ pub enum BlockRenderData {
     Full {
         faces: FaceMap<KeyGroup<TextureData>>,
     },
-    Model(ModelKey),
+    Model(ModelInstance),
 }
 
 pub type BlockKey = Key<BlockData>;
@@ -713,7 +721,7 @@ pub struct EntityData {
     pub hitbox_height: f32,
     #[serde(default)]
     pub eye_height: f32,
-    pub model: ModelKey,
+    pub model: ModelInstance,
     #[serde(default)]
     pub interact_action: EntityInteractAction,
     pub health: f32,
@@ -811,6 +819,38 @@ impl RegistryConfigLoadable for ModelData {
         Ok(ModelData {
             model: serde_json::from_str(&json).map_err(|err| anyhow!("error loading {:?}", err))?,
         })
+    }
+}
+pub struct ModelInstance {
+    pub model: ModelKey,
+    pub textures: Vec<TextureKey>,
+}
+impl<'de> Deserialize<'de> for ModelInstance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ModelInstanceVisitor;
+        impl<'de> Visitor<'de> for ModelInstanceVisitor {
+            type Value = ModelInstance;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("valid model")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let mut split = v.split(";");
+                let model = ModelKey::id(split.next().unwrap()).unwrap();
+                Ok(ModelInstance {
+                    model,
+                    textures: split
+                        .map(|texture| TextureKey::id(texture).unwrap())
+                        .collect(),
+                })
+            }
+        }
+        deserializer.deserialize_str(ModelInstanceVisitor)
     }
 }
 
