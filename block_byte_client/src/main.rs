@@ -838,7 +838,7 @@ impl<T: Hash + Eq + Copy> InputContainer<T> {
 }
 
 pub struct TextureAtlas {
-    textures: Vec<TexCoords>,
+    textures: Vec<Option<TexCoords>>,
     models: Vec<Vec<TexCoords>>,
 }
 
@@ -863,6 +863,9 @@ impl TextureAtlas {
                 force_max_dimensions: true,
             });
         for (i, texture) in TextureKey::entries().enumerate() {
+            if texture.text_id().ends_with("!") {
+                continue;
+            }
             let texture = texture.data();
             packer
                 .pack_ref(TextureAtlasEntry::Texture(i), &*texture.texture)
@@ -927,13 +930,13 @@ impl TextureAtlas {
                 textures: TextureKey::entries()
                     .enumerate()
                     .map(|(i, _)| {
-                        let frame = packer.get_frame(&TextureAtlasEntry::Texture(i)).unwrap();
-                        TexCoords {
+                        let frame = packer.get_frame(&TextureAtlasEntry::Texture(i))?;
+                        Some(TexCoords {
                             u1: frame.frame.x as f32 / packer.width() as f32,
                             v1: frame.frame.y as f32 / packer.height() as f32,
                             u2: (frame.frame.x + frame.frame.w) as f32 / packer.width() as f32,
                             v2: (frame.frame.y + frame.frame.h) as f32 / packer.height() as f32,
-                        }
+                        })
                     })
                     .collect(),
                 models: ModelKey::entries()
@@ -986,7 +989,9 @@ impl TextureAtlas {
 impl std::ops::Index<TextureKey> for TextureAtlas {
     type Output = TexCoords;
     fn index(&self, texture: TextureKey) -> &Self::Output {
-        &self.textures[texture.numeric_id()]
+        self.textures[texture.numeric_id()]
+            .as_ref()
+            .expect("this texture is not included in atlas")
     }
 }
 
@@ -1054,7 +1059,7 @@ impl ClientPlayer {
     pub fn raycast(&self, world: &ClientGame) -> RayCastResult {
         let ray = Ray {
             position: self.get_eye(world.get_player_data()),
-            direction: self.direction.make_front() * 10.,
+            direction: self.direction.make_front() * world.active_tool().reach,
         };
         let mut min_distance = f32::INFINITY;
         let mut raycast_result = RayCastResult::Empty;

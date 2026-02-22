@@ -510,6 +510,9 @@ pub enum EntityEvent {
     Teleport {
         position: Pos,
     },
+    Knockback {
+        knockback: Pos,
+    },
     Remove,
 }
 
@@ -614,6 +617,9 @@ impl Entity {
                 }
                 EntityEvent::Remove => {
                     state.removed = true;
+                }
+                EntityEvent::Knockback { knockback } => {
+                    state.velocity += knockback;
                 }
             }
         }

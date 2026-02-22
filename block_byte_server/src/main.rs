@@ -154,10 +154,10 @@ fn main() {
                 &full_view,
                 ItemStack::new(ItemKey::id("stone").unwrap(), 20),
             );
-            entity.inventory.get_mut().add_item(
-                &full_view,
-                ItemStack::new(ItemKey::id("cobblestone").unwrap(), 20),
-            );
+            entity
+                .inventory
+                .get_mut()
+                .add_item(&full_view, ItemStack::new(ItemKey::id("rock").unwrap(), 20));
             entity
                 .inventory
                 .get_mut()
@@ -415,6 +415,7 @@ fn main() {
                         if let Some(entity) = find_entity_next_to_player(entity) {
                             if let Some(player_entity) = user.entity {
                                 let player_entity = server.entities.get_mut(player_entity).unwrap();
+                                let knockback = player_entity.direction.make_front() * 2.;
                                 let hotbar_slot = player_entity.state.get_mut().hand_slot;
                                 let inventory = player_entity.inventory.get_mut();
                                 let tool = inventory.items[hotbar_slot]
@@ -427,6 +428,10 @@ fn main() {
                                     damage: tool.damage,
                                     damage_type: tool.damage_type,
                                 });
+                                entity
+                                    .events
+                                    .get_mut()
+                                    .push(EntityEvent::Knockback { knockback });
                             }
                         }
                     }

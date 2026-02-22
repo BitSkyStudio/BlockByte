@@ -128,6 +128,11 @@ macro_rules! create_registries{
                         Ok(entry) => {
                             if entry.file_type().is_file() {
                                 let stripped_path = entry.path().strip_prefix(&base_asset_path).unwrap();
+                                let extension = stripped_path.extension();
+                                match stripped_path.extension().and_then(|ext| ext.to_str()).unwrap_or(""){
+                                    "py" => continue,
+                                    _ => {}
+                                }
                                 let id = stripped_path
                                     .with_extension("")
                                     .as_os_str()
@@ -448,6 +453,7 @@ pub struct ToolData {
     pub swing_time: f32,
     pub hit_time: f32,
     pub damage_type: DamageType,
+    pub reach: f32,
 }
 impl ToolData {
     pub fn hand() -> ToolData {
@@ -456,6 +462,7 @@ impl ToolData {
             swing_time: 0.5,
             hit_time: 0.25,
             damage_type: DamageType::Blunt,
+            reach: 7.,
         }
     }
 }
