@@ -415,7 +415,7 @@ fn main() {
                         if let Some(entity) = find_entity_next_to_player(entity) {
                             if let Some(player_entity) = user.entity {
                                 let player_entity = server.entities.get_mut(player_entity).unwrap();
-                                let knockback = player_entity.direction.make_front() * 2.;
+                                let knockback_direction = player_entity.direction.make_front();
                                 let hotbar_slot = player_entity.state.get_mut().hand_slot;
                                 let inventory = player_entity.inventory.get_mut();
                                 let tool = inventory.items[hotbar_slot]
@@ -428,10 +428,9 @@ fn main() {
                                     damage: tool.damage,
                                     damage_type: tool.damage_type,
                                 });
-                                entity
-                                    .events
-                                    .get_mut()
-                                    .push(EntityEvent::Knockback { knockback });
+                                entity.events.get_mut().push(EntityEvent::Knockback {
+                                    knockback: knockback_direction * tool.knockback,
+                                });
                             }
                         }
                     }
@@ -539,14 +538,66 @@ fn main() {
                         }
                     }
                     NetworkMessageC2S::Research { research } => {
-                        if let Some(entity) = user.entity {
-                            let entity = server.entities.get_mut(entity).unwrap();
-                            entity.state.get_mut().research.insert(research);
-                            let research = entity.state.get_mut().research.clone();
-                            server.send_message(
-                                user_id,
-                                NetworkMessageS2C::UpdateResearch { research },
-                            );
+                        if let Some(screen) = user.screen.lock().as_ref() {
+                            if let Some(entity) = user.entity {
+                                let research_data = research.data();
+                                let mut failed = false;
+                                {
+                                    let entity = server.entities.get_mut(entity).unwrap();
+                                    for dependency in &research_data.dependencies {
+                                        if !entity.state.get_mut().research.contains(dependency) {
+                                            failed = true;
+                                            break;
+                                        }
+                                    }
+                                    if failed {
+                                        continue;
+                                    }
+                                }
+                                for (input, input_count) in research_data.requirements.iter() {
+                                    if screen
+                                        .inventories
+                                        .iter()
+                                        .map(|(inventory, view)| {
+                                            inventory
+                                                .get_inventory(
+                                                    &mut server.entities,
+                                                    &mut server.chunks,
+                                                )
+                                                .unwrap()
+                                                .count_item(view, *input)
+                                        })
+                                        .sum::<u16>()
+                                        < *input_count
+                                    {
+                                        failed = true;
+                                        break;
+                                    }
+                                }
+                                for (input, input_count) in research_data.requirements.iter() {
+                                    let mut input_count = *input_count;
+                                    for (inventory, view) in screen.inventories.iter() {
+                                        let inventory = inventory
+                                            .get_inventory(&mut server.entities, &mut server.chunks)
+                                            .unwrap();
+                                        input_count =
+                                            inventory.remove_item(view, *input, input_count);
+                                        if input_count == 0 {
+                                            break;
+                                        }
+                                    }
+                                }
+                                if failed {
+                                    continue;
+                                }
+                                let entity = server.entities.get_mut(entity).unwrap();
+                                entity.state.get_mut().research.insert(research);
+                                let research = entity.state.get_mut().research.clone();
+                                server.send_message(
+                                    user_id,
+                                    NetworkMessageS2C::UpdateResearch { research },
+                                );
+                            }
                         }
                     }
                     NetworkMessageC2S::Craft { recipe, count } => {

@@ -454,6 +454,7 @@ pub struct ToolData {
     pub hit_time: f32,
     pub damage_type: DamageType,
     pub reach: f32,
+    pub knockback: f32,
 }
 impl ToolData {
     pub fn hand() -> ToolData {
@@ -463,6 +464,7 @@ impl ToolData {
             hit_time: 0.25,
             damage_type: DamageType::Blunt,
             reach: 7.,
+            knockback: 2.,
         }
     }
 }
@@ -500,6 +502,11 @@ pub struct BlockData {
     pub machine: Option<BlockMachineData>,
     #[serde(default)]
     pub rotation: BlockRotationMode,
+    #[serde(default = "default_item_scale")]
+    pub item_scale: f32,
+}
+fn default_item_scale() -> f32 {
+    0.35
 }
 #[derive(Copy, Clone, Deserialize)]
 pub enum BlockRotationMode {
@@ -910,6 +917,8 @@ pub type StructureKey = Key<BlockStructureData>;
 #[derive(Deserialize)]
 pub struct ResearchData {
     pub icon: ItemModel,
+    #[serde(default)]
+    pub requirements: HashMap<ItemKey, u16>,
     #[serde(default)]
     pub dependencies: Vec<ResearchKey>,
 }

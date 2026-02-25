@@ -18,7 +18,7 @@ use winit::{
 
 use crate::{
     ClientGame, ClientPlayer, GUIMesh, TexCoordsExt, TexCoordsIndexExt,
-    render::{CameraUniform, GUIVertex},
+    render::{CameraUniform, GUIVertex, item_model_icon_view},
     translate,
 };
 
@@ -316,15 +316,11 @@ fn render_element(
             if let Some(item) = data.slots.get(*slot).cloned().flatten() {
                 let border = 3.;
                 let mut vertex_consumer = || {};
-                let distance = 1.;
+                let item_data = item.item.data();
                 let matrix = cgmath::perspective(cgmath::Deg(20.), 1., 0.05, 5.)
-                    * cgmath::Matrix4::look_at_rh(
-                        cgmath::point3(distance, distance + (0.5 * 0.35), distance),
-                        cgmath::point3(0., 0.5 * 0.35, 0.),
-                        ClientPlayer::UP,
-                    );
+                    * item_model_icon_view(&item_data.model);
                 crate::render::draw_item_model(
-                    &item.item.data().model,
+                    &item_data.model,
                     Matrix4::identity(),
                     &mut |pos, texture, normal| {
                         let x = (layout.content_box_x() + border + parent_offset.x)

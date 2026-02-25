@@ -1,8 +1,8 @@
 use block_byte_common::coord::{AABB, CHUNK_SIZE, Face, Pos, Vec3};
 use block_byte_common::model::{DrawAnimation, ModelTexture};
 use block_byte_common::registry::{
-    BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key, ModelData, ModelInstance,
-    ModelKey, TextureData, TextureKey,
+    BlockData, BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key, ModelData,
+    ModelInstance, ModelKey, TextureData, TextureKey,
 };
 use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
@@ -1201,15 +1201,21 @@ pub fn draw_model(
     );
     for (matrix, item, binding) in item_models {
         let anchor = match &item.item.data().model {
-            ItemModel::Block(key) => match &key.data().render_data {
+            ItemModel::Block(block) => match &block.data().render_data {
                 BlockRenderData::Air => Matrix4::identity(),
                 BlockRenderData::Full { faces } => Matrix4::identity(),
                 BlockRenderData::Model(key) => key
                     .model
                     .data()
                     .model
-                    .anchor(binding.as_str(), Matrix4::from_scale(0.35), &[])
-                    .map(|matrix| Matrix4::from_scale(0.35) * matrix.invert().unwrap())
+                    .anchor(
+                        binding.as_str(),
+                        Matrix4::from_scale(block.data().item_scale),
+                        &[],
+                    )
+                    .map(|matrix| {
+                        Matrix4::from_scale(block.data().item_scale) * matrix.invert().unwrap()
+                    })
                     .unwrap_or(Matrix4::identity()),
             },
             ItemModel::Model(key) => key
@@ -1230,10 +1236,43 @@ pub fn draw_item_model(
 ) {
     match model {
         ItemModel::Block(key) => {
-            draw_block_model(*key, matrix * Matrix4::from_scale(0.35), vertex_consumer);
+            draw_block_model(
+                *key,
+                matrix * Matrix4::from_scale(key.data().item_scale),
+                vertex_consumer,
+            );
         }
         ItemModel::Model(model) => {
             draw_model(model, matrix, vertex_consumer, &[], |_| None);
         }
+    }
+}
+pub fn item_model_icon_view(model: &ItemModel) -> Matrix4<f32> {
+    fn default_view() -> Matrix4<f32> {
+        let distance = 1.;
+        cgmath::Matrix4::look_at_rh(
+            cgmath::point3(distance, distance + (0.5 * 0.35), distance),
+            cgmath::point3(0., 0.5 * 0.35, 0.),
+            ClientPlayer::UP,
+        )
+    }
+    fn block_model_icon_view(model: &BlockData) -> Matrix4<f32> {
+        match &model.render_data {
+            BlockRenderData::Air | BlockRenderData::Full { .. } => default_view(),
+            BlockRenderData::Model(model_instance) => model_icon_view(model_instance),
+        }
+    }
+    fn model_icon_view(model: &ModelInstance) -> Matrix4<f32> {
+        model
+            .model
+            .data()
+            .model
+            .anchor("icon", Matrix4::identity(), &[])
+            .map(|m| m.invert().unwrap())
+            .unwrap_or_else(default_view)
+    }
+    match model {
+        ItemModel::Block(key) => block_model_icon_view(key.data()),
+        ItemModel::Model(model_instance) => model_icon_view(model_instance),
     }
 }
