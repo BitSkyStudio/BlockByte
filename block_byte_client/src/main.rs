@@ -55,7 +55,10 @@ use winit::{
 use crate::{
     clipping::Frustum,
     render::{CameraUniform, DamageVertex, GUIVertex, RenderState, Vertex},
-    ui::{ScreenData, TEXT_RENDERER, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
+    ui::{
+        HoveredElement, ScreenData, TEXT_RENDERER, TextRenderer, UIPos, UIRect, render_screen,
+        text_renderer,
+    },
 };
 
 static START_TIMER: OnceLock<Instant> = OnceLock::new();
@@ -420,43 +423,57 @@ impl ApplicationHandler for App {
                 );
 
                 if let Some(screen) = &self.game.screen {
-                    if let Some(target_slot) =
+                    if let Some(hovered) =
                         render_screen(screen, render_state.size(), &self.game, &mut gui_mesh, true)
                     {
-                        match self.game.selected_slot {
-                            Some((slot, button)) => match button {
-                                MouseButton::Left => {
-                                    if self.game.buttons.is_just_up(MouseButton::Left) {
-                                        self.send_message(NetworkMessageC2S::MoveItem {
-                                            from: slot,
-                                            to: target_slot,
-                                            mode: ItemMoveMode::Stack,
-                                        });
+                        match hovered {
+                            HoveredElement::Slot(target_slot) => match self.game.selected_slot {
+                                Some((slot, button)) => match button {
+                                    MouseButton::Left => {
+                                        if self.game.buttons.is_just_up(MouseButton::Left) {
+                                            self.send_message(NetworkMessageC2S::MoveItem {
+                                                from: slot,
+                                                to: target_slot,
+                                                mode: ItemMoveMode::Stack,
+                                            });
+                                        }
+                                        if self.game.buttons.is_just_down(MouseButton::Right) {
+                                            self.send_message(NetworkMessageC2S::MoveItem {
+                                                from: slot,
+                                                to: target_slot,
+                                                mode: ItemMoveMode::Single,
+                                            });
+                                        }
                                     }
-                                    if self.game.buttons.is_just_down(MouseButton::Right) {
-                                        self.send_message(NetworkMessageC2S::MoveItem {
-                                            from: slot,
-                                            to: target_slot,
-                                            mode: ItemMoveMode::Single,
-                                        });
+                                    MouseButton::Right => {
+                                        if self.game.buttons.is_just_up(MouseButton::Right) {
+                                            self.send_message(NetworkMessageC2S::MoveItem {
+                                                from: slot,
+                                                to: target_slot,
+                                                mode: ItemMoveMode::Half,
+                                            });
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                },
+                                None => {
+                                    for button in [MouseButton::Left, MouseButton::Right] {
+                                        if self.game.buttons.is_just_down(button) {
+                                            self.game.selected_slot = Some((target_slot, button));
+                                            break;
+                                        }
                                     }
                                 }
-                                MouseButton::Right => {
-                                    if self.game.buttons.is_just_up(MouseButton::Right) {
-                                        self.send_message(NetworkMessageC2S::MoveItem {
-                                            from: slot,
-                                            to: target_slot,
-                                            mode: ItemMoveMode::Half,
-                                        });
-                                    }
-                                }
-                                _ => unreachable!(),
                             },
-                            None => {
-                                for button in [MouseButton::Left, MouseButton::Right] {
+                            HoveredElement::Craft(key) => {
+                                for (button, count) in
+                                    [(MouseButton::Left, 1), (MouseButton::Right, 5)]
+                                {
                                     if self.game.buttons.is_just_down(button) {
-                                        self.game.selected_slot = Some((target_slot, button));
-                                        break;
+                                        self.send_message(NetworkMessageC2S::Craft {
+                                            recipe: key,
+                                            count,
+                                        });
                                     }
                                 }
                             }

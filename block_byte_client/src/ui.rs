@@ -3,7 +3,7 @@ use std::{cell::RefCell, sync::OnceLock};
 use block_byte_common::{
     ClientItem, Color, TexCoords,
     coord::Pos,
-    registry::{BlockRenderData, ItemModel, Key, TextureKey},
+    registry::{BlockRenderData, ItemModel, Key, RecipeKey, TextureKey},
     ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
 };
 use cgmath::{Matrix4, SquareMatrix, Transform, Vector3};
@@ -27,14 +27,17 @@ pub struct ScreenData {
     pub slots: Vec<Option<ClientItem>>,
     pub properties: PropertyMap,
 }
-
+pub enum HoveredElement {
+    Slot(usize),
+    Craft(RecipeKey),
+}
 pub fn render_screen(
     screen_data: &ScreenData,
     size: PhysicalSize<u32>,
     game: &ClientGame,
     mesh: &mut GUIMesh,
     enable_hovering: bool,
-) -> Option<usize> {
+) -> Option<HoveredElement> {
     let screen = screen_data.screen.data();
     let mut taffy: TaffyTree<&UIElement> = TaffyTree::new();
     let root = add_element_to_taffy(&screen.root, &mut taffy, &screen_data.properties);
@@ -63,60 +66,30 @@ pub fn render_screen(
             },
         )
         .unwrap();
-    render_element(root, &taffy, size, Pos::ZERO, &screen_data, game, mesh);
-    if let Some(hovering) = resolve_hovering(
+    let mut overlay_mesh = GUIMesh::default();
+    let mouse_position = UIPos {
+        x: game.cursor_position.x as f32,
+        y: game.cursor_position.y as f32,
+    };
+    let mut hovered = None;
+    render_element(
         root,
-        Pos::ZERO,
         &taffy,
-        Pos {
-            x: game.cursor_position.x as f32,
-            y: game.cursor_position.y as f32,
-            z: 0.,
-        },
-    ) && enable_hovering
-    {
-        match &hovering.element_type {
-            UIElementType::ItemSlot { slot } => {
-                if let Some(item) = screen_data.slots.get(*slot).cloned().flatten() {
-                    let aspect_ratio = size.width as f32 / size.height as f32;
-                    let mut shift = 0.;
-                    shift += text_renderer()
-                        .draw(
-                            UIPos {
-                                x: game.cursor_position.x as f32 / size.height as f32 * 2.
-                                    - aspect_ratio,
-                                y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
-                            },
-                            translate(format!("item.{}", item.item.text_id()).as_str()),
-                            40. / size.height as f32 * 2.,
-                            Color::WHITE,
-                            mesh,
-                        )
-                        .y;
-                    for line in item.description.lines() {
-                        shift += text_renderer()
-                            .draw(
-                                UIPos {
-                                    x: game.cursor_position.x as f32 / size.height as f32 * 2.
-                                        - aspect_ratio,
-                                    y: -((game.cursor_position.y) as f32 / size.height as f32 * 2.
-                                        - 1.
-                                        + shift),
-                                },
-                                line,
-                                40. / size.height as f32 * 2.,
-                                Color::WHITE,
-                                mesh,
-                            )
-                            .y;
-                    }
-                }
-                return Some(*slot);
-            }
-            _ => {}
-        }
+        size,
+        UIPos::all(0.),
+        &screen_data,
+        game,
+        mesh,
+        &mut overlay_mesh,
+        mouse_position,
+        &mut hovered,
+    );
+    if enable_hovering {
+        mesh.vertices.append(&mut overlay_mesh.vertices);
+    } else {
+        hovered = None;
     }
-    None
+    hovered
 }
 pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::Size<f32> {
     let style = get_element_style(element, properties);
@@ -137,251 +110,329 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
             width: 50.,
             height: 50.,
         },
-        UIElementType::CraftArea { .. } | UIElementType::ResearchTree { .. } => taffy::Size {
+        UIElementType::CraftArea {
+            recipes,
+            craft_width,
+        } => {
+            let craft_size = 50.;
+            let craft_width = *craft_width as f32;
+            taffy::Size {
+                width: craft_width * craft_size,
+                height: (recipes.list().len() as f32 / craft_width).ceil() * craft_size,
+            }
+        }
+        UIElementType::ResearchTree { .. } => taffy::Size {
             width: 100.,
             height: 100.,
         },
-    }
-}
-fn resolve_hovering<'a>(
-    node: NodeId,
-    parent_offset: Pos,
-    taffy: &TaffyTree<&'a UIElement>,
-    mouse: Pos,
-) -> Option<&'a UIElement> {
-    let layout = taffy.layout(node).unwrap();
-    for child in taffy.children(node).unwrap() {
-        if let Some(element) = resolve_hovering(
-            child,
-            parent_offset
-                + Pos {
-                    x: layout.location.x + layout.border.left,
-                    y: layout.location.y + layout.border.top,
-                    z: 0.,
-                },
-            taffy,
-            mouse,
-        ) {
-            return Some(element);
-        }
-    }
-    let x = layout.location.x + layout.border.left + parent_offset.x;
-    let y = layout.location.y + layout.border.top + parent_offset.y;
-    let width = layout.size.width - layout.border.left - layout.border.right;
-    let height = layout.size.height - layout.border.top - layout.border.bottom;
-    if mouse.x >= x && mouse.x <= x + width && mouse.y >= y && mouse.y <= y + height {
-        Some(taffy.get_node_context(node).unwrap())
-    } else {
-        None
     }
 }
 fn render_element(
     node: NodeId,
     taffy: &TaffyTree<&UIElement>,
     size: PhysicalSize<u32>,
-    parent_offset: Pos,
+    parent_offset: UIPos,
     data: &ScreenData,
     game: &ClientGame,
     mesh: &mut GUIMesh,
+    overlay_mesh: &mut GUIMesh,
+    mouse_position: UIPos,
+    out_hovered: &mut Option<HoveredElement>,
 ) {
     let layout = taffy.layout(node).unwrap();
     let element = *taffy.get_node_context(node).unwrap();
     let aspect_ratio = size.width as f32 / size.height as f32;
     let style = get_element_style(element, &data.properties);
+    let mut context = UIElementRenderContext {
+        aspect_ratio,
+        buffer: mesh,
+        gui_size: size.height as f32,
+        overlay_buffer: overlay_mesh,
+        content: UIRect {
+            pos: UIPos {
+                x: layout.content_box_x() + parent_offset.x,
+                y: layout.content_box_y() + parent_offset.y,
+            },
+            size: UIPos {
+                x: layout.content_box_width(),
+                y: layout.content_box_height(),
+            },
+        },
+    };
     if let Some(background) = style.background {
-        let width = layout.size.width - layout.border.left - layout.border.right;
-        let height = layout.size.height - layout.border.top - layout.border.bottom;
-
-        mesh.add_quad(
+        context.draw_quad(
             UIRect {
-                pos: UIPos {
-                    x: (layout.location.x + layout.border.left + parent_offset.x)
-                        / size.height as f32
-                        * 2.
-                        - aspect_ratio,
-                    y: -((layout.location.y + layout.border.top + parent_offset.y + height)
-                        / size.height as f32
-                        * 2.
-                        - 1.),
-                },
-                size: UIPos {
-                    x: width / size.height as f32 * 2.,
-                    y: height / size.height as f32 * 2.,
-                },
+                pos: UIPos::all(0.),
+                size: context.content.size,
             },
             background.tex_coords(),
             Color::WHITE,
+            UIRenderBuffer::Normal,
         );
     }
     match &element.element_type {
         UIElementType::Box(uielements) => {
+            let parent_offset = context.content.pos;
             for child in taffy.children(node).unwrap() {
                 render_element(
                     child,
                     taffy,
                     size,
-                    parent_offset
-                        + Pos {
-                            x: layout.location.x + layout.border.left,
-                            y: layout.location.y + layout.border.top,
-                            z: 0.,
-                        },
+                    parent_offset,
                     data,
                     game,
                     mesh,
+                    overlay_mesh,
+                    mouse_position,
+                    out_hovered,
                 );
             }
         }
         UIElementType::Label(text) => {
-            text_renderer().draw(
-                UIPos {
-                    x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
-                        - aspect_ratio,
-                    y: -((layout.content_box_y() + parent_offset.y + layout.content_box_height())
-                        / size.height as f32
-                        * 2.
-                        - 1.),
-                },
-                &text,
-                style.font_size / size.height as f32 * 2.,
-                Color::WHITE,
-                mesh,
-            );
+            context.draw_text(UIPos::all(0.), &text, Color::WHITE, UIRenderBuffer::Normal);
         }
         UIElementType::Image(key, width, height) => {
-            mesh.add_quad(
+            context.draw_quad(
                 UIRect {
-                    pos: UIPos {
-                        x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
-                            - aspect_ratio,
-                        y: -((layout.content_box_y()
-                            + parent_offset.y
-                            + layout.content_box_height())
-                            / size.height as f32
-                            * 2.
-                            - 1.),
-                    },
+                    pos: UIPos::all(0.),
                     size: UIPos {
-                        x: width / size.height as f32 * 2.,
-                        y: height / size.height as f32 * 2.,
+                        x: *width,
+                        y: *height,
                     },
                 },
                 key.tex_coords(),
                 Color::WHITE,
+                UIRenderBuffer::Normal,
             );
         }
         UIElementType::ItemSlot { slot } => {
-            mesh.add_quad(
-                UIRect {
-                    pos: UIPos {
-                        x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
-                            - aspect_ratio,
-                        y: -((layout.content_box_y()
-                            + parent_offset.y
-                            + layout.content_box_height())
-                            / size.height as f32
-                            * 2.
-                            - 1.),
-                    },
-                    size: UIPos {
-                        x: 50. / size.height as f32 * 2.,
-                        y: 50. / size.height as f32 * 2.,
-                    },
-                },
-                TextureKey::id("slot").unwrap().tex_coords(),
-                Color::WHITE,
-            );
-            if let Some(background) = style.background {
-                mesh.add_quad(
+            if context.content.contains(mouse_position) {
+                *out_hovered = Some(HoveredElement::Slot(*slot));
+            }
+            if style.background.is_none() {
+                context.draw_quad(
                     UIRect {
-                        pos: UIPos {
-                            x: (layout.content_box_x() + parent_offset.x) / size.height as f32 * 2.
-                                - aspect_ratio,
-                            y: -((layout.content_box_y()
-                                + parent_offset.y
-                                + layout.content_box_height())
-                                / size.height as f32
-                                * 2.
-                                - 1.),
-                        },
-                        size: UIPos {
-                            x: 50. / size.height as f32 * 2.,
-                            y: 50. / size.height as f32 * 2.,
-                        },
+                        pos: UIPos::all(0.),
+                        size: UIPos::all(50.),
                     },
-                    background.tex_coords(),
+                    TextureKey::id("slot").unwrap().tex_coords(),
                     Color::WHITE,
+                    UIRenderBuffer::Normal,
                 );
             }
             if let Some(item) = data.slots.get(*slot).cloned().flatten() {
+                if context.content.contains(mouse_position) {
+                    let mut shift = 0.;
+                    shift += text_renderer()
+                        .draw(
+                            UIPos {
+                                x: game.cursor_position.x as f32 / size.height as f32 * 2.
+                                    - aspect_ratio,
+                                y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
+                            },
+                            translate(format!("item.{}", item.item.text_id()).as_str()),
+                            40. / size.height as f32 * 2.,
+                            Color::WHITE,
+                            context.overlay_buffer,
+                        )
+                        .y;
+                    for line in item.description.lines() {
+                        shift += text_renderer()
+                            .draw(
+                                UIPos {
+                                    x: game.cursor_position.x as f32 / size.height as f32 * 2.
+                                        - aspect_ratio,
+                                    y: -((game.cursor_position.y) as f32 / size.height as f32 * 2.
+                                        - 1.
+                                        + shift),
+                                },
+                                line,
+                                40. / size.height as f32 * 2.,
+                                Color::WHITE,
+                                context.overlay_buffer,
+                            )
+                            .y;
+                    }
+                }
                 let border = 3.;
-                let mut vertex_consumer = || {};
                 let item_data = item.item.data();
-                let matrix = cgmath::perspective(cgmath::Deg(20.), 1., 0.05, 5.)
-                    * item_model_icon_view(&item_data.model);
-                crate::render::draw_item_model(
+                context.draw_icon(
+                    UIRect {
+                        pos: UIPos::all(border),
+                        size: UIPos::all(50. - border * 2.),
+                    },
                     &item_data.model,
-                    Matrix4::identity(),
-                    &mut |pos, texture, normal| {
-                        let x = (layout.content_box_x() + border + parent_offset.x)
-                            / size.height as f32
-                            * 2.
-                            - aspect_ratio;
-                        let y = -((layout.content_box_y() - border
-                            + parent_offset.y
-                            + layout.content_box_height())
-                            / size.height as f32
-                            * 2.
-                            - 1.);
-                        let s = (50. - border * 2.) / size.height as f32 * 2.;
-                        let pos = matrix.transform_point(cgmath::Point3 {
-                            x: pos[0],
-                            y: pos[1],
-                            z: pos[2],
-                        });
-                        let normal = Pos {
-                            x: normal[0],
-                            y: normal[1],
-                            z: normal[2],
-                        };
-                        let light = Pos {
-                            x: 1.,
-                            y: 1.,
-                            z: 1.,
-                        }
-                        .normalize();
-                        let dot = normal.dot(light);
-                        if dot > 0. {
-                            let shade_color = 1. - normal.x.abs() * 0.5 - normal.z.abs() * 0.2;
-                            mesh.vertices.push(GUIVertex {
-                                color: Color::grayscale((shade_color * 255.) as u8).into(),
-                                tex_coords: texture,
-                                position: [x + (pos.x + 1.) / 2. * s, y + (pos.y + 1.) / 2. * s],
-                            });
-                        }
-                    },
+                    UIRenderBuffer::Normal,
                 );
-                text_renderer().draw(
-                    UIPos {
-                        x: (layout.content_box_x() + border + parent_offset.x) / size.height as f32
-                            * 2.
-                            - aspect_ratio,
-                        y: -((layout.content_box_y() - border
-                            + parent_offset.y
-                            + layout.content_box_height())
-                            / size.height as f32
-                            * 2.
-                            - 1.),
-                    },
+                context.draw_text(
+                    UIPos { x: 0., y: 0. },
                     &format!("{}", item.count),
-                    20. / size.height as f32 * 2.,
                     Color::WHITE,
-                    mesh,
+                    UIRenderBuffer::Normal,
                 );
             }
         }
-        UIElementType::CraftArea { recipes } => todo!(),
+        UIElementType::CraftArea {
+            recipes,
+            craft_width,
+        } => {
+            let craft_size = 50.;
+            for (i, recipe) in recipes.list().iter().enumerate() {
+                let recipe_data = recipe.data();
+                let area = UIRect {
+                    pos: UIPos {
+                        x: (i % (*craft_width as usize)) as f32 * craft_size,
+                        y: (i / (*craft_width as usize)) as f32 * craft_size,
+                    },
+                    size: UIPos::all(craft_size),
+                };
+                context.draw_icon(
+                    area,
+                    match &recipe_data.icon_override {
+                        Some(icon) => icon,
+                        None => &recipe_data.outputs.data().entries[0].item.data().model,
+                    },
+                    UIRenderBuffer::Normal,
+                );
+                if (UIRect {
+                    pos: UIPos {
+                        x: area.pos.x + context.content.pos.x,
+                        y: area.pos.y + context.content.pos.y,
+                    },
+                    size: UIPos::all(craft_size),
+                })
+                .contains(mouse_position)
+                {
+                    text_renderer().draw(
+                        UIPos {
+                            x: game.cursor_position.x as f32 / size.height as f32 * 2.
+                                - aspect_ratio,
+                            y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
+                        },
+                        translate(format!("recipe.{}", recipe.text_id()).as_str()),
+                        40. / size.height as f32 * 2.,
+                        Color::WHITE,
+                        context.overlay_buffer,
+                    );
+                    *out_hovered = Some(HoveredElement::Craft(*recipe));
+                }
+            }
+        }
         UIElementType::ResearchTree { research } => todo!(),
+    }
+}
+struct UIElementRenderContext<'a> {
+    buffer: &'a mut GUIMesh,
+    overlay_buffer: &'a mut GUIMesh,
+    content: UIRect,
+    gui_size: f32,
+    aspect_ratio: f32,
+}
+#[derive(Clone, Copy)]
+enum UIRenderBuffer {
+    Normal,
+    Overlay,
+}
+impl UIElementRenderContext<'_> {
+    pub fn draw_quad(
+        &mut self,
+        quad: UIRect,
+        texture: TexCoords,
+        color: Color,
+        buffer: UIRenderBuffer,
+    ) {
+        match buffer {
+            UIRenderBuffer::Normal => &mut *self.buffer,
+            UIRenderBuffer::Overlay => &mut *self.overlay_buffer,
+        }
+        .add_quad_clip(
+            UIRect {
+                pos: UIPos {
+                    x: (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2.
+                        - self.aspect_ratio,
+                    y: -((self.content.pos.y + quad.pos.y + quad.size.y) / self.gui_size as f32
+                        * 2.
+                        - 1.),
+                },
+                size: UIPos {
+                    x: quad.size.x / self.gui_size as f32 * 2.,
+                    y: quad.size.y / self.gui_size as f32 * 2.,
+                },
+            },
+            texture,
+            color,
+            UIRect {
+                pos: UIPos {
+                    x: self.content.pos.x / self.gui_size as f32 * 2. - self.aspect_ratio,
+                    y: -((self.content.pos.y + self.content.size.y) / self.gui_size as f32 * 2.
+                        - 1.),
+                },
+                size: UIPos {
+                    x: self.content.size.x / self.gui_size as f32 * 2.,
+                    y: self.content.size.y / self.gui_size as f32 * 2.,
+                },
+            },
+        );
+    }
+    pub fn draw_text(&mut self, position: UIPos, text: &str, color: Color, buffer: UIRenderBuffer) {
+        //todo: clip
+        text_renderer().draw(
+            UIPos {
+                x: (self.content.pos.x + position.x) / self.gui_size as f32 * 2.
+                    - self.aspect_ratio,
+                y: -((self.content.pos.y + self.content.size.y + position.y)
+                    / self.gui_size as f32
+                    * 2.
+                    - 1.),
+            },
+            text,
+            20. / self.gui_size as f32 * 2.,
+            color,
+            match buffer {
+                UIRenderBuffer::Normal => &mut *self.buffer,
+                UIRenderBuffer::Overlay => &mut *self.overlay_buffer,
+            },
+        );
+    }
+    pub fn draw_icon(&mut self, quad: UIRect, icon: &ItemModel, buffer: UIRenderBuffer) {
+        //todo: clip
+        let matrix =
+            cgmath::perspective(cgmath::Deg(20.), 1., 0.05, 5.) * item_model_icon_view(icon);
+        let mut mesh = match buffer {
+            UIRenderBuffer::Normal => &mut *self.buffer,
+            UIRenderBuffer::Overlay => &mut *self.overlay_buffer,
+        };
+        crate::render::draw_item_model(icon, Matrix4::identity(), &mut |pos, texture, normal| {
+            let x = (self.content.pos.x) / self.gui_size as f32 * 2. - self.aspect_ratio;
+            let y = -((self.content.pos.y + self.content.size.y) / self.gui_size as f32 * 2. - 1.);
+            let w = self.content.size.x / self.gui_size as f32 * 2.;
+            let h = self.content.size.y / self.gui_size as f32 * 2.;
+            let pos = matrix.transform_point(cgmath::Point3 {
+                x: pos[0],
+                y: pos[1],
+                z: pos[2],
+            });
+            let normal = Pos {
+                x: normal[0],
+                y: normal[1],
+                z: normal[2],
+            };
+            let light = Pos {
+                x: 1.,
+                y: 1.,
+                z: 1.,
+            }
+            .normalize();
+            let dot = normal.dot(light);
+            if dot > 0. {
+                let shade_color = 1. - normal.x.abs() * 0.5 - normal.z.abs() * 0.2;
+                mesh.vertices.push(GUIVertex {
+                    color: Color::grayscale((shade_color * 255.) as u8).into(),
+                    tex_coords: texture,
+                    position: [x + (pos.x + 1.) / 2. * w, y + (pos.y + 1.) / 2. * h],
+                });
+            }
+        });
     }
 }
 fn add_element_to_taffy<'a>(
@@ -634,8 +685,21 @@ pub struct UIPos {
     pub x: f32,
     pub y: f32,
 }
+impl UIPos {
+    pub fn all(v: f32) -> UIPos {
+        UIPos { x: v, y: v }
+    }
+}
 #[derive(Copy, Clone)]
 pub struct UIRect {
     pub pos: UIPos,
     pub size: UIPos,
+}
+impl UIRect {
+    pub fn contains(self, pos: UIPos) -> bool {
+        pos.x >= self.pos.x
+            && pos.x <= self.pos.x + self.size.x
+            && pos.y >= self.pos.y
+            && pos.y <= self.pos.y + self.size.y
+    }
 }

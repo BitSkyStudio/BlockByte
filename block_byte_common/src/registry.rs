@@ -621,9 +621,21 @@ pub type BlockPalette = PaletteVec<BlockEntry, HybridPalette<16, BlockEntry>, Al
 pub struct BlockEntry {
     pub block: BlockKey,
     #[serde(default, skip_serializing_if = "skip_if_default")]
-    pub color: Color,
+    pub color: BlockColor,
     #[serde(default, skip_serializing_if = "skip_if_default")]
     pub rotation: BlockRotation,
+    #[serde(default, skip_serializing_if = "skip_if_default")]
+    pub state: u16,
+}
+impl BlockEntry {
+    pub fn simple(block: BlockKey) -> BlockEntry {
+        BlockEntry {
+            block,
+            color: Default::default(),
+            rotation: Default::default(),
+            state: Default::default(),
+        }
+    }
 }
 pub fn skip_if_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
@@ -671,6 +683,24 @@ impl From<LookDirection> for BlockRotation {
 }
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub struct BlockRotation(u8);
+
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
+pub struct BlockColor(u16);
+impl Into<Color> for BlockColor {
+    fn into(self) -> Color {
+        Color {
+            r: ((self.0 & 31) << 3) as u8,
+            g: (((self.0 >> 5) & 31) << 3) as u8,
+            b: (((self.0 >> 10) & 31) << 3) as u8,
+            a: 255,
+        }
+    }
+}
+impl Default for BlockColor {
+    fn default() -> Self {
+        Self(2 ^ 15 - 1)
+    }
+}
 
 //todo: config client
 static IMAGE_CACHE: OnceLock<Mutex<HashMap<TextureKey, Arc<DynamicImage>>>> = OnceLock::new();

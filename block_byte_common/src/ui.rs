@@ -29,9 +29,16 @@ pub enum UIElementType {
     Box(Vec<UIElement>),
     Label(String),
     Image(TextureKey, f32, f32),
-    ItemSlot { slot: usize },
-    CraftArea { recipes: KeyGroup<RecipeData> },
-    ResearchTree { research: KeyGroup<ResearchData> },
+    ItemSlot {
+        slot: usize,
+    },
+    CraftArea {
+        recipes: KeyGroup<RecipeData>,
+        craft_width: u32,
+    },
+    ResearchTree {
+        research: KeyGroup<ResearchData>,
+    },
 }
 impl UIElementType {
     pub fn parse(node: &Node) -> anyhow::Result<Self> {
@@ -61,6 +68,10 @@ impl UIElementType {
             },
             "craft" => UIElementType::CraftArea {
                 recipes: KeyGroup::parse(node.attribute("recipes").unwrap()).unwrap(),
+                craft_width: node
+                    .attribute("craft_width")
+                    .and_then(|n| n.parse().ok())
+                    .unwrap(),
             },
             "research" => UIElementType::ResearchTree {
                 research: KeyGroup::parse(node.attribute("research").unwrap()).unwrap(),

@@ -11,9 +11,9 @@ use block_byte_common::{
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Orientation, Pos},
     net::NetworkMessageS2C,
     registry::{
-        BiomeKey, BlockData, BlockEntry, BlockInteractAction, BlockKey, BlockMachineAction,
-        BlockPalette, BlockRotation, EntityInteractAction, EntityKey, PlantKey, ResearchKey,
-        air_block,
+        BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
+        BlockMachineAction, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, PlantKey,
+        ResearchKey, air_block,
     },
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
@@ -65,11 +65,7 @@ impl Chunk {
         let column_data = generator.get_column_generation(position);
 
         let mut blocks = BlockPalette::filled(
-            BlockEntry {
-                block: air_block(),
-                color: Color::WHITE,
-                rotation: BlockRotation::default(),
-            },
+            BlockEntry::simple(air_block()),
             CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
         );
         let mut components = ChunkBlockComponents::default();
@@ -103,14 +99,7 @@ impl Chunk {
                         );
                     }*/
                     if y_pos == height {
-                        blocks.set(
-                            offset.index(),
-                            &BlockEntry {
-                                block: biome.top_block,
-                                color: Color::WHITE,
-                                rotation: BlockRotation::default(),
-                            },
-                        );
+                        blocks.set(offset.index(), &BlockEntry::simple(biome.top_block));
                         let spawned_plants: Vec<_> = biome
                             .plants
                             .iter()
@@ -131,23 +120,9 @@ impl Chunk {
                             );
                         }
                     } else if y_pos < height - 3 {
-                        blocks.set(
-                            offset.index(),
-                            &BlockEntry {
-                                block: biome.bottom_block,
-                                color: Color::WHITE,
-                                rotation: BlockRotation::default(),
-                            },
-                        );
+                        blocks.set(offset.index(), &BlockEntry::simple(biome.bottom_block));
                     } else if y_pos < height {
-                        blocks.set(
-                            offset.index(),
-                            &BlockEntry {
-                                block: biome.middle_block,
-                                color: Color::WHITE,
-                                rotation: BlockRotation::default(),
-                            },
-                        );
+                        blocks.set(offset.index(), &BlockEntry::simple(biome.middle_block));
                     }
                 }
             }
@@ -194,14 +169,7 @@ impl Chunk {
                             let drops = server.destroy(block_pos);
                             if health.transform_block != air_block() {
                                 //todo: maybe apply overflow damage?
-                                server.place(
-                                    block_pos,
-                                    BlockEntry {
-                                        block: health.transform_block,
-                                        color: Color::WHITE,
-                                        rotation: BlockRotation::default(),
-                                    },
-                                );
+                                server.place(block_pos, BlockEntry::simple(health.transform_block));
                             }
                             for item in drops {
                                 server.spawn_item(
@@ -288,18 +256,17 @@ impl Chunk {
             let block = *self.blocks.read().get(offset.index()).unwrap();
             let block_data = block.block.data();
             let machine_data = block_data.machine.as_ref().unwrap();
-            let mut progress_bars = machine.progress_bars.lock();
-            progress_bars.resize(machine_data.actions.len(), 0.);
-            for (action, progress) in machine_data.actions.iter().zip(progress_bars.iter_mut()) {
-                match action {
-                    BlockMachineAction::Craft {
-                        base_speed,
-                        recipes,
-                        input_view,
-                        output_view,
-                    } => {
-                        let mut inventory = machine.inventory.write();
-                        if *progress <= 0. {
+            let mut cooldown = machine.cooldown.lock();
+            if *cooldown <= 0. {
+                for action in &machine_data.actions {
+                    match action {
+                        BlockMachineAction::Craft {
+                            base_speed,
+                            recipes,
+                            input_view,
+                            output_view,
+                        } => {
+                            let mut inventory = machine.inventory.write();
                             for recipe in recipes.list() {
                                 let recipe = recipe.data();
                                 let mut failed = false;
@@ -318,21 +285,17 @@ impl Chunk {
                                 for output in generate_loot_table(recipe.outputs.data()) {
                                     inventory.add_item(output_view, output);
                                 }
-                                *progress = recipe.craft_time * base_speed;
+                                *cooldown = recipe.craft_time * base_speed;
                                 break;
                             }
-                        } else {
-                            *progress -= server.delta_time();
                         }
-                    }
-                    BlockMachineAction::TransferItem {
-                        view,
-                        speed,
-                        face,
-                        offset: push_offset,
-                        pull,
-                    } => {
-                        if *progress <= 0. {
+                        BlockMachineAction::TransferItem {
+                            view,
+                            speed,
+                            face,
+                            offset: push_offset,
+                            pull,
+                        } => {
                             let orientation = Into::<Orientation>::into(block.rotation);
                             let other_position = orientation.rotate_block_pos(*push_offset)
                                 + offset.xyz()
@@ -372,18 +335,14 @@ impl Chunk {
                                             if item.count == 0 {
                                                 first_inventory.items[*slot] = None;
                                             }
-                                            *progress = *speed;
+                                            *cooldown = *speed;
                                             break;
                                         }
                                     }
                                 }
                             }
-                        } else {
-                            *progress -= server.delta_time();
                         }
-                    }
-                    BlockMachineAction::MoveItem { from, to, speed } => {
-                        if *progress <= 0. {
+                        BlockMachineAction::MoveItem { from, to, speed } => {
                             let mut inventory = machine.inventory.write();
                             for slot in &from.slots {
                                 if let Some(item) =
@@ -396,16 +355,16 @@ impl Chunk {
                                         if item.count == 0 {
                                             inventory.items[*slot] = None;
                                         }
-                                        *progress = *speed;
+                                        *cooldown = *speed;
                                         break;
                                     }
                                 }
                             }
-                        } else {
-                            *progress -= server.delta_time();
                         }
                     }
                 }
+            } else {
+                *cooldown -= server.delta_time();
             }
         }
         /*let chunk_id =
@@ -850,7 +809,7 @@ impl Into<ClientBlockPlants> for &BlockPlants {
 pub struct BlockMachine {
     pub inventory: RwLock<Inventory>,
     #[serde(default)]
-    pub progress_bars: Mutex<Vec<f32>>,
+    pub cooldown: Mutex<f32>,
 }
 pub struct ChunkColumnGeneration {
     pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],

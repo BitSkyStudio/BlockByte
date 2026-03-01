@@ -14,7 +14,7 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructureData,
+        self, BlockColor, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructureData,
         BlockStructurePart, EntityKey, ItemAction, ItemKey, ToolData, air_block, load_registries,
     },
     ui::{PropertyMap, UIScreenKey},
@@ -360,11 +360,16 @@ fn main() {
                                         if item.count < place.use_count {
                                             continue;
                                         }
+                                        if let Some(research) = place.research {
+                                            if !entity.state.lock().research.contains(&research) {
+                                                continue;
+                                            }
+                                        }
                                         if let Ok(_) = server.place(
                                             position + face.get_block_offset(),
                                             BlockEntry {
                                                 block: place.block,
-                                                color: Color::WHITE,
+                                                color: BlockColor::default(),
                                                 rotation: place
                                                     .block
                                                     .data()
@@ -372,6 +377,7 @@ fn main() {
                                                     .get_nearest_valid(BlockRotation::from(
                                                         entity.direction,
                                                     )),
+                                                state: 0,
                                             },
                                         ) {
                                             item.count -= place.use_count;
@@ -1001,14 +1007,7 @@ impl Server {
             if block == air_block() {
                 return vec![];
             }
-            blocks.set(
-                offset.index(),
-                &BlockEntry {
-                    block: air_block(),
-                    color: Color::WHITE,
-                    rotation: BlockRotation::default(),
-                },
-            );
+            blocks.set(offset.index(), &BlockEntry::simple(air_block()));
             block.data()
         };
         if chunk.components.damage.write().remove(offset).is_some() {
@@ -1046,11 +1045,7 @@ impl Server {
             chunk.viewers.iter(),
             NetworkMessageS2C::SetBlock {
                 position,
-                block: BlockEntry {
-                    block: air_block(),
-                    color: Color::WHITE,
-                    rotation: BlockRotation::default(),
-                },
+                block: BlockEntry::simple(air_block()),
             },
         );
         drops
@@ -1096,7 +1091,7 @@ impl Server {
                 offset,
                 BlockMachine {
                     inventory: RwLock::new(inventory),
-                    progress_bars: Mutex::new(Vec::new()),
+                    cooldown: Mutex::new(0.),
                 },
             );
         }
