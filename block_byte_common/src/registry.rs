@@ -951,5 +951,7 @@ pub struct ResearchData {
     pub requirements: HashMap<ItemKey, u16>,
     #[serde(default)]
     pub dependencies: Vec<ResearchKey>,
+    pub x: f32,
+    pub y: f32,
 }
 pub type ResearchKey = Key<ResearchData>;

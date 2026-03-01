@@ -4,7 +4,7 @@ mod ui;
 use core::f32;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{BinaryHeap, HashMap, HashSet},
     fmt::format,
     hash::Hash,
     net::{SocketAddr, UdpSocket},
@@ -38,7 +38,10 @@ use image::{DynamicImage, RgbaImage};
 use parking_lot::{Mutex, RwLock};
 use rand::{Rng, rngs::StdRng};
 use rand_seeder::Seeder;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::{
+    ThreadPoolBuilder,
+    iter::{IntoParallelIterator, ParallelIterator},
+};
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use uuid::Uuid;
@@ -475,6 +478,13 @@ impl ApplicationHandler for App {
                                             count,
                                         });
                                     }
+                                }
+                            }
+                            HoveredElement::Research(key) => {
+                                if self.game.buttons.is_just_down(MouseButton::Left) {
+                                    self.send_message(NetworkMessageC2S::Research {
+                                        research: key,
+                                    });
                                 }
                             }
                         }
@@ -1281,10 +1291,30 @@ impl ClientPlayer {
         cgmath::perspective(cgmath::Deg(fov), aspect, 0.05, 500.)
     }
 }
+#[derive(Copy, Clone, Eq, PartialEq)]
+struct ModifiedChunkEntry {
+    distance: usize,
+    chunk: ChunkPos,
+}
+impl Ord for ModifiedChunkEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.distance
+            .cmp(&other.distance)
+            .reverse()
+            .then_with(|| self.chunk.x.cmp(&other.chunk.x))
+            .then_with(|| self.chunk.y.cmp(&other.chunk.y))
+            .then_with(|| self.chunk.z.cmp(&other.chunk.z))
+    }
+}
+impl PartialOrd for ModifiedChunkEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 pub struct ClientGame {
     pub player_position: Pos,
     pub chunks: AHashMap<ChunkPos, ClientChunk>,
-    pub modified_chunks: Vec<ChunkPos>,
+    pub modified_chunks: BinaryHeap<ModifiedChunkEntry>,
     pub entities: AHashMap<Uuid, ClientEntity>,
     pub player_entity: Option<Uuid>,
     pub screen: Option<ScreenData>,
@@ -1341,7 +1371,13 @@ impl ClientGame {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if !chunk.modified {
                 chunk.modified = true;
-                self.modified_chunks.push(chunk_position);
+                self.modified_chunks.push(ModifiedChunkEntry {
+                    distance: self
+                        .player_position
+                        .to_chunk_pos()
+                        .distance_squared(chunk_position) as usize,
+                    chunk: chunk_position,
+                });
             }
         }
     }
@@ -1457,12 +1493,21 @@ impl ClientGame {
                     if !chunk.modified {
                         chunk.modified = true;
 
-                        self.modified_chunks.push(position);
+                        self.modified_chunks.push(ModifiedChunkEntry {
+                            distance: self
+                                .player_position
+                                .to_chunk_pos()
+                                .distance_squared(chunk.position)
+                                as usize,
+                            chunk: chunk.position,
+                        });
                     }
                 }
             }
         }
-        for modified_chunk in self.modified_chunks.drain(..) {
+        let mut i = 0;
+        while let Some(modified_chunk) = self.modified_chunks.pop() {
+            let modified_chunk = modified_chunk.chunk;
             if let Some(chunk) = self.chunks.get_mut(&modified_chunk) {
                 chunk.modified = false;
                 if !chunk.scheduled {
@@ -1499,6 +1544,10 @@ impl ClientGame {
                         };
                         tx.send((modified_chunk, buffer, version));
                     });
+                    i += 1;
+                    if i > 10 {
+                        break;
+                    }
                 }
             }
         }
@@ -1992,13 +2041,24 @@ impl ClientChunk {
                                 } + face.get_block_offset();
                                 let (neighbor_chunk, neighbor_offset) =
                                     neighbor_position.to_chunk_pos_offset();
-                                let neighbor_chunk = match Face::all()
+                                /*let neighbor_chunk = match Face::all()
                                     .iter()
                                     .find(|f| f.get_chunk_offset() == neighbor_chunk)
                                 {
                                     Some(face) => neighbor_chunks.by_face(*face).as_ref(),
                                     None => Some(&chunk_blocks),
-                                };
+                                };*/
+                                let neighbor_chunk =
+                                    match (neighbor_chunk.x, neighbor_chunk.y, neighbor_chunk.z) {
+                                        (0, 0, 0) => Some(&chunk_blocks),
+                                        (-1, 0, 0) => neighbor_chunks.left.as_ref(),
+                                        (1, 0, 0) => neighbor_chunks.right.as_ref(),
+                                        (0, -1, 0) => neighbor_chunks.down.as_ref(),
+                                        (0, 1, 0) => neighbor_chunks.up.as_ref(),
+                                        (0, 0, -1) => neighbor_chunks.front.as_ref(),
+                                        (0, 0, 1) => neighbor_chunks.back.as_ref(),
+                                        _ => unreachable!(),
+                                    };
                                 if let Some(neighbor_chunk) = neighbor_chunk {
                                     let neighbor_block_data = neighbor_chunk
                                         .get(neighbor_offset.index())

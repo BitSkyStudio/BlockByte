@@ -3,7 +3,7 @@ use std::{cell::RefCell, sync::OnceLock};
 use block_byte_common::{
     ClientItem, Color, TexCoords,
     coord::Pos,
-    registry::{BlockRenderData, ItemModel, Key, RecipeKey, TextureKey},
+    registry::{BlockRenderData, ItemModel, Key, RecipeKey, ResearchKey, TextureKey},
     ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
 };
 use cgmath::{Matrix4, SquareMatrix, Transform, Vector3};
@@ -30,6 +30,7 @@ pub struct ScreenData {
 pub enum HoveredElement {
     Slot(usize),
     Craft(RecipeKey),
+    Research(ResearchKey),
 }
 pub fn render_screen(
     screen_data: &ScreenData,
@@ -318,7 +319,42 @@ fn render_element(
                 }
             }
         }
-        UIElementType::ResearchTree { research } => todo!(),
+        UIElementType::ResearchTree { research } => {
+            let research_size = 50.;
+            for research in research.list() {
+                let research_data = research.data();
+                let area = UIRect {
+                    pos: UIPos {
+                        x: research_data.x * research_size + context.content.size.x / 2.,
+                        y: research_data.y * research_size + context.content.size.y / 2.,
+                    },
+                    size: UIPos::all(research_size),
+                };
+                context.draw_icon(area, &research_data.icon, UIRenderBuffer::Normal);
+                if (UIRect {
+                    pos: UIPos {
+                        x: area.pos.x + context.content.pos.x,
+                        y: area.pos.y + context.content.pos.y,
+                    },
+                    size: UIPos::all(research_size),
+                })
+                .contains(mouse_position)
+                {
+                    text_renderer().draw(
+                        UIPos {
+                            x: game.cursor_position.x as f32 / size.height as f32 * 2.
+                                - aspect_ratio,
+                            y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
+                        },
+                        translate(format!("research.{}", research.text_id()).as_str()),
+                        40. / size.height as f32 * 2.,
+                        Color::WHITE,
+                        context.overlay_buffer,
+                    );
+                    *out_hovered = Some(HoveredElement::Research(*research));
+                }
+            }
+        }
     }
 }
 struct UIElementRenderContext<'a> {

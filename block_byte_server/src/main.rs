@@ -50,7 +50,7 @@ mod world;
 
 fn main() {
     /*rayon::ThreadPoolBuilder::new()
-    .num_threads(1)
+    .num_threads(8)
     .build_global()
     .unwrap();*/
     load_registries(&Path::new("assets"));
