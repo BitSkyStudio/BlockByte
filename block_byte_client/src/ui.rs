@@ -190,7 +190,13 @@ fn render_element(
             }
         }
         UIElementType::Label(text) => {
-            context.draw_text(UIPos::all(0.), &text, Color::WHITE, UIRenderBuffer::Normal);
+            context.draw_text(
+                UIPos::all(0.),
+                &text,
+                20.,
+                Color::WHITE,
+                UIRenderBuffer::Normal,
+            );
         }
         UIElementType::Image(key, width, height) => {
             context.draw_quad(
@@ -265,9 +271,18 @@ fn render_element(
                     &item_data.model,
                     UIRenderBuffer::Normal,
                 );
+                let text = format!("{}", item.count);
+                let size = text_renderer().get_size(&text, 20. / context.gui_size as f32 * 2.);
+                let count_text_offset = 2.;
                 context.draw_text(
-                    UIPos { x: 0., y: 0. },
-                    &format!("{}", item.count),
+                    UIPos {
+                        x: context.content.size.x
+                            - size.x * context.gui_size / 2.
+                            - count_text_offset,
+                        y: -count_text_offset,
+                    },
+                    &text,
+                    20.,
                     Color::WHITE,
                     UIRenderBuffer::Normal,
                 );
@@ -410,7 +425,14 @@ impl UIElementRenderContext<'_> {
             },
         );
     }
-    pub fn draw_text(&mut self, position: UIPos, text: &str, color: Color, buffer: UIRenderBuffer) {
+    pub fn draw_text(
+        &mut self,
+        position: UIPos,
+        text: &str,
+        size: f32,
+        color: Color,
+        buffer: UIRenderBuffer,
+    ) {
         //todo: clip
         text_renderer().draw(
             UIPos {
@@ -422,7 +444,7 @@ impl UIElementRenderContext<'_> {
                     - 1.),
             },
             text,
-            20. / self.gui_size as f32 * 2.,
+            size / self.gui_size as f32 * 2.,
             color,
             match buffer {
                 UIRenderBuffer::Normal => &mut *self.buffer,

@@ -16,7 +16,7 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, BlockPos, Face, FaceMap, Orientation, Pos};
+use crate::coord::{AABB, BlockPos, Face, FaceMap, Orientation, Pos, Vec3};
 use crate::model::Model;
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
@@ -470,7 +470,6 @@ impl ToolData {
 }
 pub type ItemKey = Key<ItemData>;
 
-#[cfg(feature = "client")]
 fn full_aabb() -> Vec<crate::coord::AABB<f32>> {
     vec![crate::coord::AABB {
         min: Pos {
@@ -493,6 +492,8 @@ pub struct BlockData {
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
     pub selection: Vec<AABB<f32>>,
+    #[serde(default = "full_aabb")]
+    pub collision: Vec<AABB<f32>>,
     #[serde(default)]
     pub plantable: bool,
     pub loot_table: OwnOrKey<LootTableData>,
@@ -516,6 +517,45 @@ pub enum BlockRotationMode {
     FullOriented,
 }
 impl BlockRotationMode {
+    pub fn from_look_direction(self, direction: LookDirection) -> BlockRotation {
+        fn closest_face_to_offset(offset: Pos, enable_vertical: bool) -> Face {
+            let face_fitness = |face: Face| -> f32 {
+                let face_offset = face.get_offset();
+                (offset.x * face_offset.x) + (offset.y * face_offset.y) + (offset.z * face_offset.z)
+            };
+            *Face::all()
+                .iter()
+                .filter(|face| enable_vertical || face.get_block_offset().y == 0)
+                .max_by(|face1, face2| face_fitness(**face1).total_cmp(&face_fitness(**face2)))
+                .unwrap()
+        }
+        let orientation = match self {
+            BlockRotationMode::None => Orientation::IDENTITY,
+            BlockRotationMode::Horizontal => {
+                let face = closest_face_to_offset(direction.make_front(), false);
+                Orientation::from_front_right(face, face.cross(Face::Up))
+                    .unwrap_or(Orientation::IDENTITY)
+            }
+            BlockRotationMode::Full => {
+                let face = closest_face_to_offset(direction.make_front(), true);
+                Orientation::from_front_right(
+                    face,
+                    face.cross(if face.get_block_offset().y != 0 {
+                        Face::Up
+                    } else {
+                        Face::Front
+                    }),
+                )
+                .unwrap_or(Orientation::IDENTITY)
+            }
+            BlockRotationMode::FullOriented => Orientation::from_front_right(
+                closest_face_to_offset(direction.make_front(), true),
+                closest_face_to_offset(direction.make_right(), true),
+            )
+            .unwrap_or(Orientation::IDENTITY),
+        };
+        orientation.into()
+    }
     pub fn get_nearest_valid(self, value: BlockRotation) -> BlockRotation {
         match self {
             BlockRotationMode::None => BlockRotation::default(),
@@ -661,28 +701,37 @@ impl From<Orientation> for BlockRotation {
         )
     }
 }
-impl From<LookDirection> for BlockRotation {
-    fn from(value: LookDirection) -> Self {
-        fn closest_face_to_offset(offset: Pos) -> Face {
-            let face_fitness = |face: Face| -> f32 {
-                let face_offset = face.get_offset();
-                (offset.x * face_offset.x) + (offset.y * face_offset.y) + (offset.z * face_offset.z)
-            };
-            *Face::all()
-                .iter()
-                .max_by(|face1, face2| face_fitness(**face1).total_cmp(&face_fitness(**face2)))
-                .unwrap()
-        }
-        let orientation = Orientation::from_front_right(
-            closest_face_to_offset(value.make_front()),
-            closest_face_to_offset(value.make_right()),
-        )
-        .unwrap_or(Orientation::IDENTITY);
-        orientation.into()
-    }
-}
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub struct BlockRotation(u8);
+impl BlockRotation {
+    pub fn rotate_aabb(self, aabb: AABB<f32>) -> AABB<f32> {
+        let aabb = aabb.offset(Vec3::all(-0.5));
+        let orientation: Orientation = self.into();
+        AABB::bound(
+            [
+                orientation.rotate_pos(aabb.min),
+                orientation.rotate_pos(Vec3 {
+                    x: aabb.max.x,
+                    y: aabb.min.y,
+                    z: aabb.min.z,
+                }),
+                orientation.rotate_pos(Vec3 {
+                    x: aabb.min.x,
+                    y: aabb.max.y,
+                    z: aabb.min.z,
+                }),
+                orientation.rotate_pos(Vec3 {
+                    x: aabb.min.x,
+                    y: aabb.min.y,
+                    z: aabb.max.z,
+                }),
+            ]
+            .into_iter(),
+        )
+        .unwrap()
+        .offset(Vec3::all(0.5))
+    }
+}
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub struct BlockColor(u16);
@@ -852,6 +901,17 @@ pub type LootTableKey = Key<LootTableData>;
 pub struct LootTableEntry {
     pub item: ItemKey,
     pub chance: f32,
+    #[serde(default)]
+    pub modifiers: Vec<LootItemModifier>,
+}
+#[derive(Deserialize)]
+pub enum LootItemModifier {
+    SetCount(LootModifierInteger),
+}
+#[derive(Deserialize)]
+pub enum LootModifierInteger {
+    Constant(u32),
+    Random(u32, u32),
 }
 pub struct ModelData {
     pub model: Model,

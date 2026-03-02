@@ -1092,11 +1092,19 @@ impl ClientPlayer {
         let mut raycast_result = RayCastResult::Empty;
 
         if let Some((block, position, face)) = ray.block_raycast(|block, position, face| {
-            if world.get_block(block)?.block.data().selection.len() > 0 {
-                Some((block, position, face))
-            } else {
-                None
+            let block_entry = world.get_block(block)?;
+            let selection = &block_entry.block.data().selection;
+            for selection in selection {
+                if let Some(result) = ray.aabb_raycast(
+                    block_entry
+                        .rotation
+                        .rotate_aabb(*selection)
+                        .offset(block.to_pos()),
+                ) {
+                    return Some((block, result.position, result.face));
+                }
             }
+            None
         }) {
             min_distance = ray.position.distance(position);
             raycast_result = RayCastResult::Block(block, face);
@@ -1240,12 +1248,21 @@ impl ClientPlayer {
     ) -> bool {
         match player_entity_data {
             Some(player_entity_data) => {
-                let collider = player_entity_data.hitbox().offset(position).to_block();
-                for block in collider {
+                let player_collider = player_entity_data.hitbox().offset(position);
+                let player_block_collider = player_collider.to_block();
+                for block in player_block_collider {
                     match world.get_block(block) {
-                        Some(block) => {
-                            if !block.block.data().selection.is_empty() {
-                                return true;
+                        Some(block_entry) => {
+                            let block_collider = &block_entry.block.data().collision;
+                            for block_collider in block_collider {
+                                if player_collider.intersects(
+                                    block_entry
+                                        .rotation
+                                        .rotate_aabb(*block_collider)
+                                        .offset(block.to_pos()),
+                                ) {
+                                    return true;
+                                }
                             }
                         }
                         None => return false,
@@ -1796,7 +1813,7 @@ impl ClientGame {
                                     .block
                                     .data()
                                     .rotation
-                                    .get_nearest_valid(BlockRotation::from(camera.direction));
+                                    .from_look_direction(camera.direction);
                                 let orientation: Orientation = rotation.into();
                                 let right = orientation.right.get_offset();
                                 let up = orientation.up.get_offset();

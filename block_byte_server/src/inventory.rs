@@ -2,7 +2,7 @@ use std::path::Path;
 
 use block_byte_common::{
     ClientItem, InventoryView,
-    registry::{ItemKey, LootTableData, LootTableKey},
+    registry::{ItemKey, LootItemModifier, LootModifierInteger, LootTableData, LootTableKey},
 };
 use parking_lot::{RwLock, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
@@ -440,16 +440,33 @@ impl Inventory {
         count
     }
 }
-
+pub struct LootGenerationContext {}
+impl LootGenerationContext {
+    pub fn generate_integer(&self, integer: &LootModifierInteger) -> u32 {
+        match integer {
+            LootModifierInteger::Constant(value) => *value,
+            LootModifierInteger::Random(min, max) => rand::random_range(*min..*max),
+        }
+    }
+}
 pub fn generate_loot_table(loot_table: &LootTableData) -> Vec<ItemStack> {
     let mut items = Vec::new();
     for entry in &loot_table.entries {
         if rand::random_bool(entry.chance as f64) {
-            items.push(ItemStack {
+            let mut item = ItemStack {
                 item: entry.item,
                 count: 1,
                 components: ItemComponentStorage::new(),
-            });
+            };
+            let context = LootGenerationContext {};
+            for modifier in &entry.modifiers {
+                match modifier {
+                    LootItemModifier::SetCount(value) => {
+                        item.count = context.generate_integer(value) as u16;
+                    }
+                }
+            }
+            items.push(item);
         }
     }
     items

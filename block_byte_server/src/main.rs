@@ -289,9 +289,9 @@ fn main() {
                             let mut blocked = false;
                             let entity = server.entities.get(entity).unwrap();
 
-                            if server.hitbox_block_collides(
-                                entity.key.data().hitbox().offset(position).to_block(),
-                            ) {
+                            if server
+                                .hitbox_block_collides(entity.key.data().hitbox().offset(position))
+                            {
                                 let teleport_id = user
                                     .teleport_id
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -374,9 +374,7 @@ fn main() {
                                                     .block
                                                     .data()
                                                     .rotation
-                                                    .get_nearest_valid(BlockRotation::from(
-                                                        entity.direction,
-                                                    )),
+                                                    .from_look_direction(entity.direction),
                                                 state: 0,
                                             },
                                         ) {
@@ -965,13 +963,23 @@ impl Server {
     pub fn delta_time(&self) -> f32 {
         1. / self.tps as f32
     }
-    pub fn hitbox_block_collides(&self, hitbox: AABB<i32>) -> bool {
-        for block in hitbox {
-            if match self.get_block(block) {
-                Some(block) => !block.block.data().selection.is_empty(), //todo: proper collisions
-                None => true,
-            } {
-                return true;
+    pub fn hitbox_block_collides(&self, hitbox: AABB<f32>) -> bool {
+        for block in hitbox.to_block() {
+            match self.get_block(block) {
+                Some(block_entry) => {
+                    let block_collider = &block_entry.block.data().collision;
+                    for block_collider in block_collider {
+                        if hitbox.intersects(
+                            block_entry
+                                .rotation
+                                .rotate_aabb(*block_collider)
+                                .offset(block.to_pos()),
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+                None => return true,
             }
         }
         false

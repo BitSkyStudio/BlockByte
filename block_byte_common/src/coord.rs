@@ -309,25 +309,47 @@ impl ChunkOffset {
         self.0 as usize
     }
 }
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy)]
 pub struct AABB<T: Copy> {
     pub min: Vec3<T>,
     pub max: Vec3<T>,
 }
-impl<T: Copy + Ord> AABB<T> {
+impl<T: Copy + PartialOrd> AABB<T> {
+    fn val_min(a: T, b: T) -> T {
+        if a > b { b } else { a }
+    }
+    fn val_max(a: T, b: T) -> T {
+        if a < b { b } else { a }
+    }
     pub fn new(a: Vec3<T>, b: Vec3<T>) -> AABB<T> {
         AABB {
             min: Vec3 {
-                x: Ord::min(a.x, b.x),
-                y: Ord::min(a.y, b.y),
-                z: Ord::min(a.z, b.z),
+                x: Self::val_min(a.x, b.x),
+                y: Self::val_min(a.y, b.y),
+                z: Self::val_min(a.z, b.z),
             },
             max: Vec3 {
-                x: Ord::max(a.x, b.x),
-                y: Ord::max(a.y, b.y),
-                z: Ord::max(a.z, b.z),
+                x: Self::val_max(a.x, b.x),
+                y: Self::val_max(a.y, b.y),
+                z: Self::val_max(a.z, b.z),
             },
         }
+    }
+    pub fn bound(mut points: impl Iterator<Item = Vec3<T>>) -> Option<AABB<T>> {
+        let first_point = points.next()?;
+        let mut aabb = AABB {
+            min: first_point,
+            max: first_point,
+        };
+        for point in points {
+            aabb.min.x = Self::val_min(aabb.min.x, point.x);
+            aabb.min.y = Self::val_min(aabb.min.y, point.y);
+            aabb.min.z = Self::val_min(aabb.min.z, point.z);
+            aabb.max.x = Self::val_max(aabb.max.x, point.x);
+            aabb.max.y = Self::val_max(aabb.max.y, point.y);
+            aabb.max.z = Self::val_max(aabb.max.z, point.z);
+        }
+        Some(aabb)
     }
     pub fn contains(self, point: Vec3<T>) -> bool {
         point.x >= self.min.x
@@ -352,6 +374,65 @@ impl<T: Copy + Add<T, Output = T>> AABB<T> {
             min: self.min + offset,
             max: self.max + offset,
         }
+    }
+}
+impl<T: Copy + Sub<T, Output = T> + Mul<T, Output = T>> AABB<T> {
+    pub fn area(self) -> T {
+        (self.max.x - self.min.x) * (self.max.y - self.min.y) * (self.max.z - self.min.z)
+    }
+}
+impl<'de, T: Copy + Deserialize<'de>> Deserialize<'de> for AABB<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{self, SeqAccess, Visitor};
+        use std::fmt;
+        struct AABBVisitor<T>(PhantomData<T>);
+
+        impl<'de, T: Copy + Deserialize<'de>> Visitor<'de> for AABBVisitor<T> {
+            type Value = AABB<T>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a tuple of six floats (x1, y1, z1, x2, y2, z2)")
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<AABB<T>, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let x1: T = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let y1: T = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let z1: T = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let x2: T = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+                let y2: T = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(4, &self))?;
+                let z2: T = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(5, &self))?;
+
+                Ok(AABB {
+                    min: Vec3 {
+                        x: x1,
+                        y: y1,
+                        z: z1,
+                    },
+                    max: Vec3 {
+                        x: x2,
+                        y: y2,
+                        z: z2,
+                    },
+                })
+            }
+        }
+        deserializer.deserialize_tuple(6, AABBVisitor::<T>(PhantomData))
     }
 }
 impl<T: Copy + Ord + AABBWalkable> IntoIterator for AABB<T> {

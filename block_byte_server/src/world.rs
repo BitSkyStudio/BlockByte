@@ -590,52 +590,40 @@ impl Entity {
             let mut friction = 0.;
 
             if movement.x != 0.
-                && server.hitbox_block_collides(
-                    hitbox
-                        .offset(
-                            self.position
-                                + Pos {
-                                    x: movement.x,
-                                    y: 0.,
-                                    z: 0.,
-                                } * server.delta_time(),
-                        )
-                        .to_block(),
-                )
+                && server.hitbox_block_collides(hitbox.offset(
+                    self.position
+                        + Pos {
+                            x: movement.x,
+                            y: 0.,
+                            z: 0.,
+                        } * server.delta_time(),
+                ))
             {
                 movement.x = 0.;
                 friction += 1.;
             }
             if movement.y != 0.
-                && server.hitbox_block_collides(
-                    hitbox
-                        .offset(
-                            self.position
-                                + Pos {
-                                    x: movement.x,
-                                    y: movement.y,
-                                    z: 0.,
-                                } * server.delta_time(),
-                        )
-                        .to_block(),
-                )
+                && server.hitbox_block_collides(hitbox.offset(
+                    self.position
+                        + Pos {
+                            x: movement.x,
+                            y: movement.y,
+                            z: 0.,
+                        } * server.delta_time(),
+                ))
             {
                 movement.y = 0.;
                 friction += 1.;
             }
             if movement.z != 0.
-                && server.hitbox_block_collides(
-                    hitbox
-                        .offset(
-                            self.position
-                                + Pos {
-                                    x: movement.x,
-                                    y: movement.y,
-                                    z: movement.z,
-                                } * server.delta_time(),
-                        )
-                        .to_block(),
-                )
+                && server.hitbox_block_collides(hitbox.offset(
+                    self.position
+                        + Pos {
+                            x: movement.x,
+                            y: movement.y,
+                            z: movement.z,
+                        } * server.delta_time(),
+                ))
             {
                 movement.z = 0.;
                 friction += 1.;
