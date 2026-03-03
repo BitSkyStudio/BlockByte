@@ -1,0 +1,15 @@
+(
+    render_data: Model("branch;oak_log"),
+    health: Some((health: 5., health_regen: 0.05, table: ())),
+    loot_table: Own((
+        entries: [
+            (
+                item: "stick",
+                chance: 1.,
+            )
+        ]
+    )),
+    rotation: Full,
+    collision: [(0.25, 0.25, 0.25, 0.75, 0.75, 0.75)],
+    selection: [(0.25, 0.25, 0.25, 0.75, 0.75, 0.75)],
+)

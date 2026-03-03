@@ -1,0 +1,14 @@
+(
+    inputs: {
+        "rock": 1,
+        "stick": 1,
+    },
+    outputs: Own((
+        entries: [
+            (
+                item: "pickaxe",
+                chance: 1.,
+            )
+        ]
+    )),
+)

@@ -3,7 +3,29 @@
     middle_block: "nature.dirt",
     bottom_block: "nature.dirt",
     plants: [(
-        chance: 0.2,
+        chance: 0.08,
         plant: "grass",
     )],
+    decorators: [
+        (
+            count: 15,
+            chance: 0.8,
+            structure: "tree"
+        ),
+        (
+            count: 1,
+            chance: 0.2,
+            structure: "rock"
+        ),
+        (
+            count: 15,
+            chance: 0.8,
+            structure: "small_rock"
+        ),
+        (
+            count: 15,
+            chance: 0.8,
+            structure: "small_stick"
+        )
+    ]
 )

@@ -320,6 +320,11 @@ impl Chunk {
                                 if face_data.input.size() == 0 {
                                     continue;
                                 }
+                                let other_view = if *pull {
+                                    &face_data.output
+                                } else {
+                                    &face_data.input
+                                };
                                 let (mut first_inventory, mut second_inventory) =
                                     lock_inventories(&machine.inventory, &other_machine.inventory);
                                 if *pull {
@@ -328,7 +333,7 @@ impl Chunk {
                                 for slot in &view.slots {
                                     if let Some(item) = first_inventory.get_slot_mut_raw(*slot) {
                                         if second_inventory
-                                            .add_item(&face_data.input, item.copy(1))
+                                            .add_item(other_view, item.copy(1))
                                             .is_none()
                                         {
                                             item.count -= 1;

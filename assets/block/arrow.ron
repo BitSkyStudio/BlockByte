@@ -9,5 +9,6 @@
             )
         ]
     )),
-    rotation: Full,
+    rotation: FullOriented,
+    item_scale: 0.6,
 )

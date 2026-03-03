@@ -6,5 +6,7 @@
         swing_time: 1.,
         hit_time: 0.5,
         damage_type: Pierce,
+        reach: 7.,
+        knockback: 2.,
     )),
 )

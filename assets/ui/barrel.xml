@@ -1,26 +1,27 @@
 <box style="height: 100%;width:100%;justify-content: center;align-items: center;gap-row: 30;flex-direction:column;">
     <box style="gap-column: 10;">
-        <slot id="10"/>
-        <slot id="11"/>
-        <slot id="12"/>
-        <slot id="13"/>
-        <slot id="14"/>
-        <slot id="15"/>
-        <slot id="16"/>
-        <slot id="17"/>
-        <slot id="18"/>
-        <slot id="19"/>
+        <slot id="10" class="slot"/>
+        <slot id="11" class="slot"/>
+        <slot id="12" class="slot"/>
+        <slot id="13" class="slot"/>
+        <slot id="14" class="slot"/>
+        <slot id="15" class="slot"/>
+        <slot id="16" class="slot"/>
+        <slot id="17" class="slot"/>
+        <slot id="18" class="slot"/>
+        <slot id="19" class="slot"/>
     </box>
     <box style="gap-column: 10;">
-        <slot id="0"/>
-        <slot id="1"/>
-        <slot id="2"/>
-        <slot id="3"/>
-        <slot id="4"/>
-        <slot id="5"/>
-        <slot id="6"/>
-        <slot id="7"/>
-        <slot id="8"/>
-        <slot id="9"/>
+        <slot id="0" class="slot"/>
+        <slot id="1" class="slot"/>
+        <slot id="2" class="slot"/>
+        <slot id="3" class="slot"/>
+        <slot id="4" class="slot"/>
+        <slot id="5" class="slot"/>
+        <slot id="6" class="slot"/>
+        <slot id="7" class="slot"/>
+        <slot id="8" class="slot"/>
+        <slot id="9" class="slot"/>
     </box>
+    <craft class="slot" recipes="#player_crafting" craft_width="5"/>
 </box>

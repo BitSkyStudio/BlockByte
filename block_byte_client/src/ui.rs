@@ -216,17 +216,6 @@ fn render_element(
             if context.content.contains(mouse_position) {
                 *out_hovered = Some(HoveredElement::Slot(*slot));
             }
-            if style.background.is_none() {
-                context.draw_quad(
-                    UIRect {
-                        pos: UIPos::all(0.),
-                        size: UIPos::all(50.),
-                    },
-                    TextureKey::id("slot").unwrap().tex_coords(),
-                    Color::WHITE,
-                    UIRenderBuffer::Normal,
-                );
-            }
             if let Some(item) = data.slots.get(*slot).cloned().flatten() {
                 if context.content.contains(mouse_position) {
                     let mut shift = 0.;
@@ -336,6 +325,7 @@ fn render_element(
         }
         UIElementType::ResearchTree { research } => {
             let research_size = 50.;
+            let mouse_inside = context.content.contains(mouse_position);
             for research in research.list() {
                 let research_data = research.data();
                 let area = UIRect {
@@ -354,6 +344,7 @@ fn render_element(
                     size: UIPos::all(research_size),
                 })
                 .contains(mouse_position)
+                    && mouse_inside
                 {
                     text_renderer().draw(
                         UIPos {
@@ -461,10 +452,12 @@ impl UIElementRenderContext<'_> {
             UIRenderBuffer::Overlay => &mut *self.overlay_buffer,
         };
         crate::render::draw_item_model(icon, Matrix4::identity(), &mut |pos, texture, normal| {
-            let x = (self.content.pos.x) / self.gui_size as f32 * 2. - self.aspect_ratio;
-            let y = -((self.content.pos.y + self.content.size.y) / self.gui_size as f32 * 2. - 1.);
-            let w = self.content.size.x / self.gui_size as f32 * 2.;
-            let h = self.content.size.y / self.gui_size as f32 * 2.;
+            let x =
+                (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2. - self.aspect_ratio;
+            let y =
+                -((self.content.pos.y + quad.pos.y + quad.size.y) / self.gui_size as f32 * 2. - 1.);
+            let w = quad.size.x / self.gui_size as f32 * 2.;
+            let h = quad.size.y / self.gui_size as f32 * 2.;
             let pos = matrix.transform_point(cgmath::Point3 {
                 x: pos[0],
                 y: pos[1],
@@ -525,7 +518,7 @@ fn get_element_style(element: &UIElement, properties: &PropertyMap) -> BBStyle {
                     continue;
                 }
             }
-            style.patch(rule);
+            style.patch(rule, properties);
         }
     }
     for (rule, condition) in &element.style.0 {
@@ -534,7 +527,7 @@ fn get_element_style(element: &UIElement, properties: &PropertyMap) -> BBStyle {
                 continue;
             }
         }
-        style.patch(rule);
+        style.patch(rule, properties);
     }
     style
 }
@@ -553,43 +546,43 @@ impl Default for BBStyle {
     }
 }
 impl BBStyle {
-    pub fn patch(&mut self, rule: &UIStyleRule) {
+    pub fn patch(&mut self, rule: &UIStyleRule, properties: &PropertyMap) {
         match rule {
             UIStyleRule::FlexDirection(flex_direction) => {
                 self.taffy.flex_direction = *flex_direction;
             }
             UIStyleRule::Width(width) => {
-                self.taffy.size.width = (*width).into();
+                self.taffy.size.width = width.as_dimension(properties);
             }
             UIStyleRule::Height(height) => {
-                self.taffy.size.height = (*height).into();
+                self.taffy.size.height = height.as_dimension(properties);
             }
             UIStyleRule::PaddingLeft(style_length) => {
-                self.taffy.padding.left = (*style_length).into();
+                self.taffy.padding.left = style_length.as_length_percentage(properties);
             }
             UIStyleRule::PaddingRight(style_length) => {
-                self.taffy.padding.right = (*style_length).into();
+                self.taffy.padding.right = style_length.as_length_percentage(properties);
             }
             UIStyleRule::PaddingTop(style_length) => {
-                self.taffy.padding.top = (*style_length).into();
+                self.taffy.padding.top = style_length.as_length_percentage(properties);
             }
             UIStyleRule::PaddingBottom(style_length) => {
-                self.taffy.padding.bottom = (*style_length).into();
+                self.taffy.padding.bottom = style_length.as_length_percentage(properties);
             }
             UIStyleRule::MarginLeft(style_length) => {
-                self.taffy.margin.left = (*style_length).into();
+                self.taffy.margin.left = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::MarginRight(style_length) => {
-                self.taffy.margin.right = (*style_length).into();
+                self.taffy.margin.right = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::MarginTop(style_length) => {
-                self.taffy.margin.top = (*style_length).into();
+                self.taffy.margin.top = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::MarginBottom(style_length) => {
-                self.taffy.margin.bottom = (*style_length).into();
+                self.taffy.margin.bottom = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::FontSize(font_size) => {
-                self.font_size = *font_size;
+                self.font_size = font_size.calc(properties);
             }
             UIStyleRule::Background(key) => {
                 self.background = Some(*key);
@@ -616,25 +609,25 @@ impl BBStyle {
                 self.taffy.position = *position;
             }
             UIStyleRule::InsetLeft(style_length) => {
-                self.taffy.inset.left = (*style_length).into();
+                self.taffy.inset.left = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::InsetRight(style_length) => {
-                self.taffy.inset.right = (*style_length).into();
+                self.taffy.inset.right = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::InsetTop(style_length) => {
-                self.taffy.inset.top = (*style_length).into();
+                self.taffy.inset.top = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::InsetBottom(style_length) => {
-                self.taffy.inset.bottom = (*style_length).into();
+                self.taffy.inset.bottom = style_length.as_length_percentage_auto(properties);
             }
             UIStyleRule::FlexWrap(flex_wrap) => {
                 self.taffy.flex_wrap = *flex_wrap;
             }
             UIStyleRule::GapColumn(style_length) => {
-                self.taffy.gap.width = (*style_length).into();
+                self.taffy.gap.width = style_length.as_length_percentage(properties);
             }
             UIStyleRule::GapRow(style_length) => {
-                self.taffy.gap.height = (*style_length).into();
+                self.taffy.gap.height = style_length.as_length_percentage(properties);
             }
             UIStyleRule::Display(display) => {
                 self.taffy.display = *display;

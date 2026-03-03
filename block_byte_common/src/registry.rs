@@ -77,7 +77,7 @@ impl<T> LoadRegistry<T> {
     }
     fn register_group(&mut self, id: String, group: HashSet<Key<T>>) -> KeyGroup<T> {
         self.groups.push((group.iter().cloned().collect(), group));
-        let key_group = KeyGroup::Group(self.id_list.len());
+        let key_group = KeyGroup::Group(self.groups.len() - 1);
         self.group_id_map.insert(id, key_group);
         key_group
     }
@@ -540,7 +540,7 @@ impl BlockRotationMode {
                 let face = closest_face_to_offset(direction.make_front(), true);
                 Orientation::from_front_right(
                     face,
-                    face.cross(if face.get_block_offset().y != 0 {
+                    face.cross(if face.get_block_offset().y == 0 {
                         Face::Up
                     } else {
                         Face::Front
@@ -623,6 +623,8 @@ pub struct BlockMachineData {
 pub struct BlockMachineFace {
     #[serde(default)]
     pub input: InventoryView,
+    #[serde(default)]
+    pub output: InventoryView,
 }
 #[derive(Deserialize)]
 pub enum BlockMachineAction {
@@ -987,6 +989,7 @@ impl RegistryConfigLoadable for TranslationLanguageData {
 pub struct RecipeData {
     pub inputs: HashMap<ItemKey, u16>,
     pub outputs: OwnOrKey<LootTableData>,
+    #[serde(default)]
     pub craft_time: f32,
     #[serde(default)]
     pub research: Option<ResearchKey>,

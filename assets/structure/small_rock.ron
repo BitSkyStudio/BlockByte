@@ -1,0 +1,9 @@
+(
+    parts: [(
+        chance: 1.,
+        blocks: {
+        (0, 0, 0): (
+            block: "nature.rock",
+        )
+    })]
+)

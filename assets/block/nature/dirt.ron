@@ -1,16 +1,15 @@
 (
     render_data: Full(
         faces: (
-            front: "dirt",
-            back: "dirt",
-            left: "dirt",
-            right: "dirt",
-            down: "dirt",
-            up: "dirt",
+            front: "dirt_0",
+            back: "dirt_0",
+            left: "dirt_0",
+            right: "dirt_0",
+            down: "dirt_0",
+            up: "dirt_0",
         ),
     ),
     health: Some((health: 5., health_regen: 0.05, table: ())),
-    interact_action: Pickup,
     loot_table: Own((
         entries: [
             (

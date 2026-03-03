@@ -1,5 +1,5 @@
 (
-    texture: "grass_plant",
+    stages: ["short_grass_0","short_grass_1","short_grass_2","short_grass_3"],
     size: 1.4,
     height: 1.,
     blades: 3,

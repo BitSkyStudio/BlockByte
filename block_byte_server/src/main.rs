@@ -625,6 +625,9 @@ fn main() {
                                     break;
                                 }
                             }
+                            if failed {
+                                continue;
+                            }
                             for (input, input_count) in recipe.inputs.iter() {
                                 let mut input_count = *input_count;
                                 for (inventory, view) in screen.inventories.iter() {
@@ -722,24 +725,29 @@ fn main() {
 
         for (user_index, user) in &server.users {
             {
-                let inventory = match user
+                if let Some(entity) = user
                     .entity
                     .as_ref()
                     .and_then(|entity| server.entities.get_mut(*entity))
                 {
-                    Some(entity) => entity
+                    let inventory: Vec<_> = entity
                         .inventory
                         .get_mut()
                         .items
                         .iter()
                         .map(|item| item.as_ref().map(|item| item.client()))
-                        .collect(),
-                    None => vec![],
-                };
-                for (i, item) in inventory.into_iter().enumerate() {
+                        .collect();
+                    for (i, item) in inventory.into_iter().enumerate() {
+                        server.message_queue.send_message(
+                            std::iter::once(user_index),
+                            NetworkMessageS2C::HUDSlot { slot: i, item },
+                        );
+                    }
                     server.message_queue.send_message(
                         std::iter::once(user_index),
-                        NetworkMessageS2C::HUDSlot { slot: i, item },
+                        NetworkMessageS2C::HudBarUpdate {
+                            health: entity.state.get_mut().health,
+                        },
                     );
                 }
             }

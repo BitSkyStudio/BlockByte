@@ -1,0 +1,17 @@
+(
+    render_data: Model("stick"),
+    health: Some((health: 5., health_regen: 0.05, table: ())),
+    loot_table: Own((
+        entries: [
+            (
+                item: "stick",
+                chance: 1.,
+            )
+        ]
+    )),
+    rotation: Horizontal,
+    item_scale: 0.6,
+    interact_action: Pickup,
+    collision: [],
+    selection: [(0.2, 0, 0.2, 0.8, 0.2, 0.8)],
+)

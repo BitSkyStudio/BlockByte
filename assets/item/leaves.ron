@@ -1,0 +1,5 @@
+(
+    action: Place([(block:"nature.leaves")]),
+    model: Block("nature.leaves"),
+    stack_size: 20,
+)

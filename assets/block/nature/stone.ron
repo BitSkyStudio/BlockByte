@@ -1,0 +1,14 @@
+(
+    render_data: Full(
+        faces: (
+            front: "stone",
+            back: "stone",
+            left: "stone",
+            right: "stone",
+            down: "stone",
+            up: "stone",
+        ),
+    ),
+    health: Some((health: 5., health_regen: 0.05, table: (), transform_block: "nature.cobblestone")),
+    loot_table: Key("empty"),
+)

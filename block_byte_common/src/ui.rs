@@ -142,15 +142,21 @@ impl UIStyleList {
                 });
             }
             let value = value.trim();
+            fn parse_style_value(input: &str) -> anyhow::Result<StyleValue> {
+                Ok(match input.parse::<f32>() {
+                    Ok(value) => StyleValue::Constant(value),
+                    Err(_) => StyleValue::Property(input.to_string()),
+                })
+            }
             fn parse_style_length(input: &str) -> anyhow::Result<StyleLength> {
                 if input == "auto" {
                     Ok(StyleLength::Auto)
                 } else if input.ends_with("%") {
-                    Ok(StyleLength::Percent(
-                        input[0..input.len() - 1].parse::<f32>().unwrap() / 100.,
-                    ))
+                    Ok(StyleLength::Percent(parse_style_value(
+                        &input[0..input.len() - 1],
+                    )?))
                 } else {
-                    Ok(StyleLength::Length(input.parse::<f32>().unwrap()))
+                    Ok(StyleLength::Length(parse_style_value(input)?))
                 }
             }
             fn parse_align_content(input: &str) -> anyhow::Result<AlignContent> {
@@ -229,9 +235,12 @@ impl UIStyleList {
                 }
                 "padding" => {
                     let length = parse_style_length(value)?;
-                    rules.push((UIStyleRule::PaddingTop(length), condition.clone()));
-                    rules.push((UIStyleRule::PaddingBottom(length), condition.clone()));
-                    rules.push((UIStyleRule::PaddingLeft(length), condition.clone()));
+                    rules.push((UIStyleRule::PaddingTop(length.clone()), condition.clone()));
+                    rules.push((
+                        UIStyleRule::PaddingBottom(length.clone()),
+                        condition.clone(),
+                    ));
+                    rules.push((UIStyleRule::PaddingLeft(length.clone()), condition.clone()));
                     rules.push((UIStyleRule::PaddingRight(length), condition));
                 }
                 "padding-left" => rules.push((
@@ -253,9 +262,9 @@ impl UIStyleList {
 
                 "margin" => {
                     let length = parse_style_length(value)?;
-                    rules.push((UIStyleRule::MarginTop(length), condition.clone()));
-                    rules.push((UIStyleRule::MarginBottom(length), condition.clone()));
-                    rules.push((UIStyleRule::MarginLeft(length), condition.clone()));
+                    rules.push((UIStyleRule::MarginTop(length.clone()), condition.clone()));
+                    rules.push((UIStyleRule::MarginBottom(length.clone()), condition.clone()));
+                    rules.push((UIStyleRule::MarginLeft(length.clone()), condition.clone()));
                     rules.push((UIStyleRule::MarginRight(length), condition));
                 }
                 "margin-left" => rules.push((
@@ -284,9 +293,9 @@ impl UIStyleList {
                 )),
                 "inset" => {
                     let length = parse_style_length(value)?;
-                    rules.push((UIStyleRule::InsetTop(length), condition.clone()));
-                    rules.push((UIStyleRule::InsetBottom(length), condition.clone()));
-                    rules.push((UIStyleRule::InsetLeft(length), condition.clone()));
+                    rules.push((UIStyleRule::InsetTop(length.clone()), condition.clone()));
+                    rules.push((UIStyleRule::InsetBottom(length.clone()), condition.clone()));
+                    rules.push((UIStyleRule::InsetLeft(length.clone()), condition.clone()));
                     rules.push((UIStyleRule::InsetRight(length), condition));
                 }
                 "inset-left" => rules.push((
@@ -305,10 +314,7 @@ impl UIStyleList {
                     condition,
                 )),
                 "font-size" => {
-                    rules.push((
-                        UIStyleRule::FontSize(value.parse::<f32>().unwrap()),
-                        condition,
-                    ));
+                    rules.push((UIStyleRule::FontSize(parse_style_value(value)?), condition));
                 }
                 "background" => {
                     rules.push((
@@ -383,42 +389,53 @@ pub enum UIStyleRule {
     MarginRight(StyleLength),
     MarginTop(StyleLength),
     MarginBottom(StyleLength),
-    FontSize(f32),
+    FontSize(StyleValue),
     Background(TextureKey),
     FlexWrap(FlexWrap),
     GapColumn(StyleLength),
     GapRow(StyleLength),
     Display(Display),
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+pub enum StyleValue {
+    Constant(f32),
+    Property(String),
+}
+impl StyleValue {
+    pub fn calc(&self, properties: &PropertyMap) -> f32 {
+        match self {
+            StyleValue::Constant(value) => *value,
+            StyleValue::Property(property) => *properties.0.get(property).unwrap_or(&0.),
+        }
+    }
+}
+#[derive(Clone)]
 pub enum StyleLength {
-    Length(f32),
-    Percent(f32),
+    Length(StyleValue),
+    Percent(StyleValue),
     Auto,
 }
-impl Into<LengthPercentage> for StyleLength {
-    fn into(self) -> LengthPercentage {
+impl StyleLength {
+    pub fn as_length_percentage(&self, properties: &PropertyMap) -> LengthPercentage {
         match self {
-            StyleLength::Length(value) => LengthPercentage::length(value),
-            StyleLength::Percent(value) => LengthPercentage::percent(value),
+            StyleLength::Length(value) => LengthPercentage::length(value.calc(properties)),
+            StyleLength::Percent(value) => LengthPercentage::percent(value.calc(properties) / 100.),
             StyleLength::Auto => LengthPercentage::length(0.),
         }
     }
-}
-impl Into<LengthPercentageAuto> for StyleLength {
-    fn into(self) -> LengthPercentageAuto {
+    pub fn as_length_percentage_auto(&self, properties: &PropertyMap) -> LengthPercentageAuto {
         match self {
-            StyleLength::Length(value) => LengthPercentageAuto::length(value),
-            StyleLength::Percent(value) => LengthPercentageAuto::percent(value),
+            StyleLength::Length(value) => LengthPercentageAuto::length(value.calc(properties)),
+            StyleLength::Percent(value) => {
+                LengthPercentageAuto::percent(value.calc(properties) / 100.)
+            }
             StyleLength::Auto => LengthPercentageAuto::auto(),
         }
     }
-}
-impl Into<Dimension> for StyleLength {
-    fn into(self) -> Dimension {
+    pub fn as_dimension(&self, properties: &PropertyMap) -> Dimension {
         match self {
-            StyleLength::Length(value) => Dimension::length(value),
-            StyleLength::Percent(value) => Dimension::percent(value),
+            StyleLength::Length(value) => Dimension::length(value.calc(properties)),
+            StyleLength::Percent(value) => Dimension::percent(value.calc(properties) / 100.),
             StyleLength::Auto => Dimension::auto(),
         }
     }

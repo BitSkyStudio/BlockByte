@@ -1,0 +1,13 @@
+(
+    render_data: Model("rotate_half;oak_log"),
+    health: Some((health: 5., health_regen: 0.05, table: ())),
+    loot_table: Own((
+        entries: [
+            (
+                item: "wood",
+                chance: 1.,
+            )
+        ]
+    )),
+    rotation: Full,
+)

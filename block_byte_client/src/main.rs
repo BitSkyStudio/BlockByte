@@ -801,6 +801,13 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::UpdateResearch { research } => {
                                 self.game.researched = research;
                             }
+                            NetworkMessageS2C::HudBarUpdate { health } => {
+                                self.game
+                                    .hud
+                                    .properties
+                                    .0
+                                    .insert("health".to_string(), health);
+                            }
                         }
                     }
                 } else if self.connection.state() == ClientConnectionState::Disconnected {

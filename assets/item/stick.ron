@@ -1,0 +1,5 @@
+(
+    action: Place([(block:"nature.stick")]),
+    model: Block("nature.stick"),
+    stack_size: 20,
+)

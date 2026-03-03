@@ -123,6 +123,9 @@ pub enum NetworkMessageS2C {
         slot: usize,
         item: Option<ClientItem>,
     },
+    HudBarUpdate {
+        health: f32,
+    },
     Knockback {
         velocity: Pos,
     },

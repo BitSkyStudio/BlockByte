@@ -1,12 +1,12 @@
 (
     render_data: Full(
         faces: (
-            front: "dirt",
-            back: "dirt",
-            left: "dirt",
-            right: "dirt",
-            down: "dirt",
-            up: "grass_block",
+            front: "grass_block_side",
+            back: "grass_block_side",
+            left: "grass_block_side",
+            right: "grass_block_side",
+            down: "dirt_0",
+            up: "grass_top_0",
         ),
     ),
     health: Some((health: 5., health_regen: 0.05, table: ())),
