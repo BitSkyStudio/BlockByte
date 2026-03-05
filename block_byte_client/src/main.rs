@@ -189,10 +189,12 @@ impl ApplicationHandler for App {
                                     }
                                 } else {
                                     if self.game.hotbar_slot != slot {
-                                        self.game.viewmodel_player.trigger("equip");
                                         self.game.swap_hand_item = self.game.held_item().clone();
                                         self.game.hotbar_slot = slot;
                                         self.send_message(NetworkMessageC2S::HotbarSelect { slot });
+                                        if self.game.held_item().is_some() {
+                                            self.game.viewmodel_player.trigger("equip");
+                                        }
                                     }
                                 }
                             }
@@ -229,6 +231,13 @@ impl ApplicationHandler for App {
                         }
                         if key_code == KeyCode::Escape {
                             self.send_message(NetworkMessageC2S::CloseUI);
+                        }
+                        if key_code == KeyCode::Tab {
+                            self.send_message(if self.game.screen.is_some() {
+                                NetworkMessageC2S::CloseUI
+                            } else {
+                                NetworkMessageC2S::OpenPlayerInventory
+                            });
                         }
                         if key_code == KeyCode::KeyQ && self.game.screen.is_none() {
                             self.send_message(NetworkMessageC2S::DropItem {
@@ -281,7 +290,6 @@ impl ApplicationHandler for App {
                                     .insert(held_item.item, new_variant as usize);
                             }
                         } else {
-                            self.game.viewmodel_player.trigger("equip");
                             self.game.swap_hand_item = self.game.held_item().clone();
                             let mut new_slot = self.game.hotbar_slot as isize;
                             new_slot += -scroll as isize;
@@ -290,6 +298,9 @@ impl ApplicationHandler for App {
                             self.send_message(NetworkMessageC2S::HotbarSelect {
                                 slot: new_slot as usize,
                             });
+                            if self.game.held_item().is_some() {
+                                self.game.viewmodel_player.trigger("equip");
+                            }
                         }
                     }
                 }
@@ -489,6 +500,9 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                }
+                if let Some(screen) = &mut self.game.screen {
+                    screen.selected_slot = self.game.selected_slot.map(|(id, _)| id);
                 }
                 if let Some((_, button)) = self.game.selected_slot.as_ref() {
                     if !self.game.buttons.is_down(*button) {
@@ -750,6 +764,7 @@ impl ApplicationHandler for App {
                                     screen,
                                     slots,
                                     properties: PropertyMap(HashMap::new()),
+                                    selected_slot: None,
                                 });
                                 let render_state = self.render_state.as_ref().unwrap();
                                 render_state.window().set_cursor_visible(true);
@@ -1056,6 +1071,7 @@ pub struct ClientPlayer {
     pub velocity: Pos,
     pub direction: LookDirection,
     pub on_ground: bool,
+    pub running: bool,
 }
 impl Default for ClientPlayer {
     fn default() -> Self {
@@ -1064,6 +1080,7 @@ impl Default for ClientPlayer {
             velocity: Pos::ZERO,
             direction: LookDirection { pitch: 0., yaw: 0. },
             on_ground: false,
+            running: false,
         }
     }
 }
@@ -1171,6 +1188,7 @@ impl ClientPlayer {
         move_vector *= abilities.speed;
         move_vector *= 4.5 * 1.2;
         let running = game.keys.is_down(KeyCode::ControlLeft);
+        self.running = running && move_vector.length_squared() > 0.;
         move_vector *= if running { 1.5 } else { 1. };
         match abilities.move_mode {
             MoveMode::Normal => {
@@ -1371,6 +1389,7 @@ impl Default for ClientGame {
                 screen: Key::id("hud").unwrap(),
                 slots: vec![None; 10],
                 properties: PropertyMap(HashMap::new()),
+                selected_slot: None,
             },
             hit_timer: None,
             keys: InputContainer::default(),
@@ -1468,7 +1487,10 @@ impl ClientGame {
                 weight: 1.,
             })*/
         };*/
-        if self.keys.is_down(KeyCode::ControlLeft) {
+        if self.held_item().is_none() {
+            self.viewmodel_player.trigger("empty_hand");
+        }
+        if camera.running {
             self.viewmodel_player.trigger("run");
         }
         let (mut animation, observers) = self.viewmodel_player.evaluate(viewmodel_graph(), dt);
@@ -1488,6 +1510,7 @@ impl ClientGame {
         if (self.viewmodel_player.current_animation == "idle"
             || self.viewmodel_player.current_animation == "running")
             && self.viewmodel_player.transition.is_none()
+            || self.viewmodel_player.current_animation == "down"
         {
             self.swap_hand_item = self.held_item().clone();
         }
@@ -2401,6 +2424,13 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         to: "running".to_string(),
                         time: 0.1,
                     },
+                    AnimationTransition {
+                        condition: "empty_hand".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "down".to_string(),
+                        time: 0.25,
+                    },
                 ],
                 observers: vec![],
             },
@@ -2410,10 +2440,10 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
             AnimationNode {
                 next: "idle".to_string(),
                 model_animation: "place".to_string(),
-                length: 0.5,
+                length: 0.38,
                 speed: 1.,
                 transitions: vec![],
-                observers: vec![(0.25, "swap_hand_item".to_string())],
+                observers: vec![(0.13, "swap_hand_item".to_string())],
             },
         );
         animations.insert(
@@ -2462,6 +2492,39 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         to: "equip".to_string(),
                         time: 0.1,
                     },
+                ],
+                observers: vec![],
+            },
+        );
+        animations.insert(
+            "down".to_string(),
+            AnimationNode {
+                next: "down".to_string(),
+                model_animation: "down".to_string(),
+                length: 1.,
+                speed: 1.,
+                transitions: vec![
+                    AnimationTransition {
+                        condition: "empty_hand".to_string(),
+                        reset: true,
+                        inverted: true,
+                        to: "idle".to_string(),
+                        time: 0.25,
+                    },
+                    AnimationTransition {
+                        condition: "build".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "place".to_string(),
+                        time: 0.1,
+                    },
+                    /*AnimationTransition {
+                        condition: "equip".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "equip".to_string(),
+                        time: 0.1,
+                    },*/
                 ],
                 observers: vec![],
             },

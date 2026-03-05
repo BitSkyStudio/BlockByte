@@ -4,7 +4,10 @@ use block_byte_common::{
     ClientItem, Color, TexCoords,
     coord::Pos,
     registry::{BlockRenderData, ItemModel, Key, RecipeKey, ResearchKey, TextureKey},
-    ui::{PropertyMap, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey, UIStyleRule},
+    ui::{
+        PropertyMap, StretchTexture, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey,
+        UIStyleRule,
+    },
 };
 use cgmath::{Matrix4, SquareMatrix, Transform, Vector3};
 use taffy::{
@@ -26,6 +29,7 @@ pub struct ScreenData {
     pub screen: UIScreenKey,
     pub slots: Vec<Option<ClientItem>>,
     pub properties: PropertyMap,
+    pub selected_slot: Option<usize>,
 }
 pub enum HoveredElement {
     Slot(usize),
@@ -148,7 +152,6 @@ fn render_element(
         aspect_ratio,
         buffer: mesh,
         gui_size: size.height as f32,
-        overlay_buffer: overlay_mesh,
         content: UIRect {
             pos: UIPos {
                 x: layout.content_box_x() + parent_offset.x,
@@ -160,20 +163,46 @@ fn render_element(
             },
         },
     };
+    let mut overlay_context = UIElementRenderContext {
+        aspect_ratio,
+        buffer: overlay_mesh,
+        gui_size: size.height as f32,
+        content: UIRect {
+            pos: UIPos { x: 0., y: 0. },
+            size: UIPos {
+                x: size.width as f32,
+                y: size.height as f32,
+            },
+        },
+    };
     if let Some(background) = style.background {
+        let texture = background.texture.tex_coords();
+        let bg_texture_data = &background.texture.data().texture;
+        let (border_u, border_v) = (
+            background.border as f32 / bg_texture_data.width() as f32,
+            background.border as f32 / bg_texture_data.height() as f32,
+        );
+        //todo: draw borders
         context.draw_quad(
             UIRect {
                 pos: UIPos::all(0.),
                 size: context.content.size,
             },
-            background.tex_coords(),
+            texture.map_sub(TexCoords {
+                u1: border_u,
+                v1: border_v,
+                u2: 1. - border_u,
+                v2: 1. - border_v,
+            }),
             Color::WHITE,
-            UIRenderBuffer::Normal,
         );
     }
     match &element.element_type {
         UIElementType::Box(uielements) => {
-            let parent_offset = context.content.pos;
+            let parent_offset = UIPos {
+                x: context.content.pos.x - layout.border.left,
+                y: context.content.pos.y - layout.border.top,
+            };
             for child in taffy.children(node).unwrap() {
                 render_element(
                     child,
@@ -190,13 +219,7 @@ fn render_element(
             }
         }
         UIElementType::Label(text) => {
-            context.draw_text(
-                UIPos::all(0.),
-                &text,
-                20.,
-                Color::WHITE,
-                UIRenderBuffer::Normal,
-            );
+            context.draw_text(UIPos::all(0.), &text, 20., Color::WHITE);
         }
         UIElementType::Image(key, width, height) => {
             context.draw_quad(
@@ -209,7 +232,6 @@ fn render_element(
                 },
                 key.tex_coords(),
                 Color::WHITE,
-                UIRenderBuffer::Normal,
             );
         }
         UIElementType::ItemSlot { slot } => {
@@ -217,64 +239,66 @@ fn render_element(
                 *out_hovered = Some(HoveredElement::Slot(*slot));
             }
             if let Some(item) = data.slots.get(*slot).cloned().flatten() {
-                if context.content.contains(mouse_position) {
-                    let mut shift = 0.;
-                    shift += text_renderer()
-                        .draw(
-                            UIPos {
-                                x: game.cursor_position.x as f32 / size.height as f32 * 2.
-                                    - aspect_ratio,
-                                y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
-                            },
+                if context.content.contains(mouse_position) && data.selected_slot.is_none() {
+                    let mut shift = overlay_context
+                        .draw_text(
+                            mouse_position,
                             translate(format!("item.{}", item.item.text_id()).as_str()),
-                            40. / size.height as f32 * 2.,
+                            40.,
                             Color::WHITE,
-                            context.overlay_buffer,
                         )
                         .y;
                     for line in item.description.lines() {
-                        shift += text_renderer()
-                            .draw(
+                        shift += overlay_context
+                            .draw_text(
                                 UIPos {
-                                    x: game.cursor_position.x as f32 / size.height as f32 * 2.
-                                        - aspect_ratio,
-                                    y: -((game.cursor_position.y) as f32 / size.height as f32 * 2.
-                                        - 1.
-                                        + shift),
+                                    x: mouse_position.x,
+                                    y: mouse_position.y + shift,
                                 },
                                 line,
-                                40. / size.height as f32 * 2.,
+                                40.,
                                 Color::WHITE,
-                                context.overlay_buffer,
                             )
                             .y;
                     }
                 }
                 let border = 3.;
                 let item_data = item.item.data();
-                context.draw_icon(
-                    UIRect {
-                        pos: UIPos::all(border),
-                        size: UIPos::all(50. - border * 2.),
-                    },
-                    &item_data.model,
-                    UIRenderBuffer::Normal,
-                );
-                let text = format!("{}", item.count);
-                let size = text_renderer().get_size(&text, 20. / context.gui_size as f32 * 2.);
-                let count_text_offset = 2.;
-                context.draw_text(
-                    UIPos {
-                        x: context.content.size.x
-                            - size.x * context.gui_size / 2.
-                            - count_text_offset,
-                        y: -count_text_offset,
-                    },
-                    &text,
-                    20.,
-                    Color::WHITE,
-                    UIRenderBuffer::Normal,
-                );
+                //todo: draw half the stack on right click
+                {
+                    let (mut context, position) = if data.selected_slot == Some(*slot) {
+                        (
+                            overlay_context,
+                            UIPos {
+                                x: mouse_position.x + border - 25.,
+                                y: mouse_position.y + border - 25.,
+                            },
+                        )
+                    } else {
+                        (context, UIPos::all(border))
+                    };
+                    context.draw_icon(
+                        UIRect {
+                            pos: position,
+                            size: UIPos::all(50. - border * 2.),
+                        },
+                        &item_data.model,
+                    );
+                    let text = format!("{}", item.count);
+                    let size = text_renderer().get_size(&text, 20. / context.gui_size as f32 * 2.);
+                    let count_text_offset = 2.;
+                    context.draw_text(
+                        UIPos {
+                            x: position.x + 50.
+                                - size.x * context.gui_size / 2.
+                                - count_text_offset,
+                            y: position.y + 50. - count_text_offset,
+                        },
+                        &text,
+                        20.,
+                        Color::WHITE,
+                    );
+                }
             }
         }
         UIElementType::CraftArea {
@@ -297,7 +321,6 @@ fn render_element(
                         Some(icon) => icon,
                         None => &recipe_data.outputs.data().entries[0].item.data().model,
                     },
-                    UIRenderBuffer::Normal,
                 );
                 if (UIRect {
                     pos: UIPos {
@@ -307,17 +330,13 @@ fn render_element(
                     size: UIPos::all(craft_size),
                 })
                 .contains(mouse_position)
+                    && data.selected_slot.is_none()
                 {
-                    text_renderer().draw(
-                        UIPos {
-                            x: game.cursor_position.x as f32 / size.height as f32 * 2.
-                                - aspect_ratio,
-                            y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
-                        },
+                    overlay_context.draw_text(
+                        mouse_position,
                         translate(format!("recipe.{}", recipe.text_id()).as_str()),
-                        40. / size.height as f32 * 2.,
+                        40.,
                         Color::WHITE,
-                        context.overlay_buffer,
                     );
                     *out_hovered = Some(HoveredElement::Craft(*recipe));
                 }
@@ -325,7 +344,8 @@ fn render_element(
         }
         UIElementType::ResearchTree { research } => {
             let research_size = 50.;
-            let mouse_inside = context.content.contains(mouse_position);
+            let mouse_inside =
+                context.content.contains(mouse_position) && data.selected_slot.is_none();
             for research in research.list() {
                 let research_data = research.data();
                 let area = UIRect {
@@ -335,7 +355,7 @@ fn render_element(
                     },
                     size: UIPos::all(research_size),
                 };
-                context.draw_icon(area, &research_data.icon, UIRenderBuffer::Normal);
+                context.draw_icon(area, &research_data.icon);
                 if (UIRect {
                     pos: UIPos {
                         x: area.pos.x + context.content.pos.x,
@@ -346,16 +366,11 @@ fn render_element(
                 .contains(mouse_position)
                     && mouse_inside
                 {
-                    text_renderer().draw(
-                        UIPos {
-                            x: game.cursor_position.x as f32 / size.height as f32 * 2.
-                                - aspect_ratio,
-                            y: -(game.cursor_position.y as f32 / size.height as f32 * 2. - 1.),
-                        },
+                    overlay_context.draw_text(
+                        mouse_position,
                         translate(format!("research.{}", research.text_id()).as_str()),
-                        40. / size.height as f32 * 2.,
+                        40.,
                         Color::WHITE,
-                        context.overlay_buffer,
                     );
                     *out_hovered = Some(HoveredElement::Research(*research));
                 }
@@ -365,29 +380,13 @@ fn render_element(
 }
 struct UIElementRenderContext<'a> {
     buffer: &'a mut GUIMesh,
-    overlay_buffer: &'a mut GUIMesh,
     content: UIRect,
     gui_size: f32,
     aspect_ratio: f32,
 }
-#[derive(Clone, Copy)]
-enum UIRenderBuffer {
-    Normal,
-    Overlay,
-}
 impl UIElementRenderContext<'_> {
-    pub fn draw_quad(
-        &mut self,
-        quad: UIRect,
-        texture: TexCoords,
-        color: Color,
-        buffer: UIRenderBuffer,
-    ) {
-        match buffer {
-            UIRenderBuffer::Normal => &mut *self.buffer,
-            UIRenderBuffer::Overlay => &mut *self.overlay_buffer,
-        }
-        .add_quad_clip(
+    pub fn draw_quad(&mut self, quad: UIRect, texture: TexCoords, color: Color) {
+        self.buffer.add_quad_clip(
             UIRect {
                 pos: UIPos {
                     x: (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2.
@@ -416,41 +415,24 @@ impl UIElementRenderContext<'_> {
             },
         );
     }
-    pub fn draw_text(
-        &mut self,
-        position: UIPos,
-        text: &str,
-        size: f32,
-        color: Color,
-        buffer: UIRenderBuffer,
-    ) {
+    pub fn draw_text(&mut self, position: UIPos, text: &str, size: f32, color: Color) -> UIPos {
         //todo: clip
         text_renderer().draw(
             UIPos {
                 x: (self.content.pos.x + position.x) / self.gui_size as f32 * 2.
                     - self.aspect_ratio,
-                y: -((self.content.pos.y + self.content.size.y + position.y)
-                    / self.gui_size as f32
-                    * 2.
-                    - 1.),
+                y: -((self.content.pos.y + position.y) / self.gui_size as f32 * 2. - 1.),
             },
             text,
             size / self.gui_size as f32 * 2.,
             color,
-            match buffer {
-                UIRenderBuffer::Normal => &mut *self.buffer,
-                UIRenderBuffer::Overlay => &mut *self.overlay_buffer,
-            },
-        );
+            self.buffer,
+        )
     }
-    pub fn draw_icon(&mut self, quad: UIRect, icon: &ItemModel, buffer: UIRenderBuffer) {
+    pub fn draw_icon(&mut self, quad: UIRect, icon: &ItemModel) {
         //todo: clip
         let matrix =
             cgmath::perspective(cgmath::Deg(20.), 1., 0.05, 5.) * item_model_icon_view(icon);
-        let mut mesh = match buffer {
-            UIRenderBuffer::Normal => &mut *self.buffer,
-            UIRenderBuffer::Overlay => &mut *self.overlay_buffer,
-        };
         crate::render::draw_item_model(icon, Matrix4::identity(), &mut |pos, texture, normal| {
             let x =
                 (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2. - self.aspect_ratio;
@@ -477,7 +459,7 @@ impl UIElementRenderContext<'_> {
             let dot = normal.dot(light);
             if dot > 0. {
                 let shade_color = 1. - normal.x.abs() * 0.5 - normal.z.abs() * 0.2;
-                mesh.vertices.push(GUIVertex {
+                self.buffer.vertices.push(GUIVertex {
                     color: Color::grayscale((shade_color * 255.) as u8).into(),
                     tex_coords: texture,
                     position: [x + (pos.x + 1.) / 2. * w, y + (pos.y + 1.) / 2. * h],
@@ -533,7 +515,7 @@ fn get_element_style(element: &UIElement, properties: &PropertyMap) -> BBStyle {
 }
 struct BBStyle {
     taffy: taffy::Style,
-    background: Option<TextureKey>,
+    background: Option<StretchTexture>,
     font_size: f32,
 }
 impl Default for BBStyle {

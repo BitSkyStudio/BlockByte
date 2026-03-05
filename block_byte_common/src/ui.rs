@@ -318,7 +318,7 @@ impl UIStyleList {
                 }
                 "background" => {
                     rules.push((
-                        UIStyleRule::Background(TextureKey::id(value).unwrap()),
+                        UIStyleRule::Background(StretchTexture::parse(value)?),
                         condition,
                     ));
                 }
@@ -390,7 +390,7 @@ pub enum UIStyleRule {
     MarginTop(StyleLength),
     MarginBottom(StyleLength),
     FontSize(StyleValue),
-    Background(TextureKey),
+    Background(StretchTexture),
     FlexWrap(FlexWrap),
     GapColumn(StyleLength),
     GapRow(StyleLength),
@@ -457,5 +457,27 @@ impl PropertyCondition {
             std::cmp::Ordering::Equal => property_value == self.value,
             std::cmp::Ordering::Greater => property_value > self.value,
         }
+    }
+}
+#[derive(Copy, Clone)]
+pub struct StretchTexture {
+    pub texture: TextureKey,
+    pub border: u32,
+}
+impl StretchTexture {
+    pub fn parse(text: &str) -> anyhow::Result<Self> {
+        let (texture, border) = match text.split_once(";") {
+            Some((texture, border)) => (
+                texture,
+                border
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("expected number for border"))?,
+            ),
+            None => (text, 0),
+        };
+        Ok(StretchTexture {
+            texture: TextureKey::id(texture).ok_or_else(|| anyhow!("not found"))?,
+            border,
+        })
     }
 }

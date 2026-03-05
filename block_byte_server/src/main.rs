@@ -655,6 +655,21 @@ fn main() {
                             }
                         }
                     }
+                    NetworkMessageC2S::OpenPlayerInventory => {
+                        if let Some(entity) = user.entity {
+                            let view = server
+                                .entities
+                                .get_mut(entity)
+                                .unwrap()
+                                .inventory
+                                .get_mut()
+                                .full_view();
+                            user.set_screen(
+                                Key::id("player").unwrap(),
+                                vec![(InventoryProvider::Entity(entity), view)],
+                            );
+                        }
+                    }
                 }
             }
         }

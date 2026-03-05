@@ -56,6 +56,7 @@ pub enum NetworkMessageC2S {
         recipe: RecipeKey,
         count: u32,
     },
+    OpenPlayerInventory,
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {
