@@ -230,7 +230,13 @@ impl ApplicationHandler for App {
                             }
                         }
                         if key_code == KeyCode::Escape {
-                            self.send_message(NetworkMessageC2S::CloseUI);
+                            if let Some(screen) = &mut self.game.screen
+                                && screen.selected_slot.is_some()
+                            {
+                                screen.selected_slot = None;
+                            } else {
+                                self.send_message(NetworkMessageC2S::CloseUI);
+                            }
                         }
                         if key_code == KeyCode::Tab {
                             self.send_message(if self.game.screen.is_some() {
@@ -431,28 +437,32 @@ impl ApplicationHandler for App {
                 render_screen(
                     &self.game.hud,
                     render_state.size(),
-                    &self.game,
+                    self.game.cursor_position,
                     &mut gui_mesh,
                     false,
                 );
 
-                if let Some(screen) = &self.game.screen {
-                    if let Some(hovered) =
-                        render_screen(screen, render_state.size(), &self.game, &mut gui_mesh, true)
-                    {
+                if let Some(screen) = &mut self.game.screen {
+                    if let Some(hovered) = render_screen(
+                        screen,
+                        render_state.size(),
+                        self.game.cursor_position,
+                        &mut gui_mesh,
+                        true,
+                    ) {
                         match hovered {
-                            HoveredElement::Slot(target_slot) => match self.game.selected_slot {
+                            HoveredElement::Slot(target_slot) => match screen.selected_slot {
                                 Some((slot, button)) => match button {
                                     MouseButton::Left => {
                                         if self.game.buttons.is_just_up(MouseButton::Left) {
-                                            self.send_message(NetworkMessageC2S::MoveItem {
+                                            self.connection.tx.send(NetworkMessageC2S::MoveItem {
                                                 from: slot,
                                                 to: target_slot,
                                                 mode: ItemMoveMode::Stack,
                                             });
                                         }
                                         if self.game.buttons.is_just_down(MouseButton::Right) {
-                                            self.send_message(NetworkMessageC2S::MoveItem {
+                                            self.connection.tx.send(NetworkMessageC2S::MoveItem {
                                                 from: slot,
                                                 to: target_slot,
                                                 mode: ItemMoveMode::Single,
@@ -461,7 +471,7 @@ impl ApplicationHandler for App {
                                     }
                                     MouseButton::Right => {
                                         if self.game.buttons.is_just_up(MouseButton::Right) {
-                                            self.send_message(NetworkMessageC2S::MoveItem {
+                                            self.connection.tx.send(NetworkMessageC2S::MoveItem {
                                                 from: slot,
                                                 to: target_slot,
                                                 mode: ItemMoveMode::Half,
@@ -473,7 +483,7 @@ impl ApplicationHandler for App {
                                 None => {
                                     for button in [MouseButton::Left, MouseButton::Right] {
                                         if self.game.buttons.is_just_down(button) {
-                                            self.game.selected_slot = Some((target_slot, button));
+                                            screen.selected_slot = Some((target_slot, button));
                                             break;
                                         }
                                     }
@@ -484,29 +494,25 @@ impl ApplicationHandler for App {
                                     [(MouseButton::Left, 1), (MouseButton::Right, 5)]
                                 {
                                     if self.game.buttons.is_just_down(button) {
-                                        self.send_message(NetworkMessageC2S::Craft {
-                                            recipe: key,
-                                            count,
-                                        });
+                                        self.connection
+                                            .tx
+                                            .send(NetworkMessageC2S::Craft { recipe: key, count });
                                     }
                                 }
                             }
                             HoveredElement::Research(key) => {
                                 if self.game.buttons.is_just_down(MouseButton::Left) {
-                                    self.send_message(NetworkMessageC2S::Research {
-                                        research: key,
-                                    });
+                                    self.connection
+                                        .tx
+                                        .send(NetworkMessageC2S::Research { research: key });
                                 }
                             }
                         }
                     }
-                }
-                if let Some(screen) = &mut self.game.screen {
-                    screen.selected_slot = self.game.selected_slot.map(|(id, _)| id);
-                }
-                if let Some((_, button)) = self.game.selected_slot.as_ref() {
-                    if !self.game.buttons.is_down(*button) {
-                        self.game.selected_slot = None;
+                    if let Some((_, button)) = screen.selected_slot.as_ref() {
+                        if !self.game.buttons.is_down(*button) {
+                            screen.selected_slot = None;
+                        }
                     }
                 }
 
@@ -1365,7 +1371,6 @@ pub struct ClientGame {
     pub keys: InputContainer<KeyCode>,
     pub buttons: InputContainer<MouseButton>,
     pub cursor_position: PhysicalPosition<f64>,
-    pub selected_slot: Option<(usize, MouseButton)>,
     pub hotbar_slot: usize,
     pub item_variation: HashMap<ItemKey, usize>,
     pub viewmodel_player: AnimationPlayer,
@@ -1395,7 +1400,6 @@ impl Default for ClientGame {
             keys: InputContainer::default(),
             buttons: InputContainer::default(),
             cursor_position: PhysicalPosition::new(0., 0.),
-            selected_slot: None,
             hotbar_slot: 0,
             item_variation: HashMap::new(),
             chunk_mesh_channels: std::sync::mpsc::channel(),

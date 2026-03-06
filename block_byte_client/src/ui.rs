@@ -29,7 +29,7 @@ pub struct ScreenData {
     pub screen: UIScreenKey,
     pub slots: Vec<Option<ClientItem>>,
     pub properties: PropertyMap,
-    pub selected_slot: Option<usize>,
+    pub selected_slot: Option<(usize, MouseButton)>,
 }
 pub enum HoveredElement {
     Slot(usize),
@@ -39,7 +39,7 @@ pub enum HoveredElement {
 pub fn render_screen(
     screen_data: &ScreenData,
     size: PhysicalSize<u32>,
-    game: &ClientGame,
+    cursor_position: PhysicalPosition<f64>,
     mesh: &mut GUIMesh,
     enable_hovering: bool,
 ) -> Option<HoveredElement> {
@@ -73,8 +73,8 @@ pub fn render_screen(
         .unwrap();
     let mut overlay_mesh = GUIMesh::default();
     let mouse_position = UIPos {
-        x: game.cursor_position.x as f32,
-        y: game.cursor_position.y as f32,
+        x: cursor_position.x as f32,
+        y: cursor_position.y as f32,
     };
     let mut hovered = None;
     render_element(
@@ -83,7 +83,6 @@ pub fn render_screen(
         size,
         UIPos::all(0.),
         &screen_data,
-        game,
         mesh,
         &mut overlay_mesh,
         mouse_position,
@@ -138,7 +137,6 @@ fn render_element(
     size: PhysicalSize<u32>,
     parent_offset: UIPos,
     data: &ScreenData,
-    game: &ClientGame,
     mesh: &mut GUIMesh,
     overlay_mesh: &mut GUIMesh,
     mouse_position: UIPos,
@@ -210,7 +208,6 @@ fn render_element(
                     size,
                     parent_offset,
                     data,
-                    game,
                     mesh,
                     overlay_mesh,
                     mouse_position,
@@ -264,19 +261,10 @@ fn render_element(
                 }
                 let border = 3.;
                 let item_data = item.item.data();
-                //todo: draw half the stack on right click
-                {
-                    let (mut context, position) = if data.selected_slot == Some(*slot) {
-                        (
-                            overlay_context,
-                            UIPos {
-                                x: mouse_position.x + border - 25.,
-                                y: mouse_position.y + border - 25.,
-                            },
-                        )
-                    } else {
-                        (context, UIPos::all(border))
-                    };
+
+                let mut draw_slot = |context: &mut UIElementRenderContext,
+                                     position: UIPos,
+                                     count: u16| {
                     context.draw_icon(
                         UIRect {
                             pos: position,
@@ -284,7 +272,7 @@ fn render_element(
                         },
                         &item_data.model,
                     );
-                    let text = format!("{}", item.count);
+                    let text = format!("{}", count);
                     let size = text_renderer().get_size(&text, 20. / context.gui_size as f32 * 2.);
                     let count_text_offset = 2.;
                     context.draw_text(
@@ -298,6 +286,38 @@ fn render_element(
                         20.,
                         Color::WHITE,
                     );
+                };
+
+                if let Some((selected_slot, selected_button)) = data.selected_slot
+                    && selected_slot == *slot
+                {
+                    match selected_button {
+                        MouseButton::Left => {
+                            draw_slot(
+                                &mut overlay_context,
+                                UIPos {
+                                    x: mouse_position.x + border - 25.,
+                                    y: mouse_position.y + border - 25.,
+                                },
+                                item.count,
+                            );
+                        }
+                        MouseButton::Right => {
+                            let move_count = item.count.div_ceil(2);
+                            draw_slot(&mut context, UIPos::all(border), item.count - move_count);
+                            draw_slot(
+                                &mut overlay_context,
+                                UIPos {
+                                    x: mouse_position.x + border - 25.,
+                                    y: mouse_position.y + border - 25.,
+                                },
+                                move_count,
+                            );
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    draw_slot(&mut context, UIPos::all(border), item.count);
                 }
             }
         }
