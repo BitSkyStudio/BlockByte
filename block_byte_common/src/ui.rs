@@ -283,6 +283,13 @@ impl UIStyleList {
                     UIStyleRule::MarginBottom(parse_style_length(value)?),
                     condition,
                 )),
+                "border" => {
+                    let length = parse_style_length(value)?;
+                    rules.push((UIStyleRule::BorderTop(length.clone()), condition.clone()));
+                    rules.push((UIStyleRule::BorderBottom(length.clone()), condition.clone()));
+                    rules.push((UIStyleRule::BorderLeft(length.clone()), condition.clone()));
+                    rules.push((UIStyleRule::BorderRight(length), condition));
+                }
                 "position" => rules.push((
                     UIStyleRule::Position(match value {
                         "relative" => Position::Relative,
@@ -389,6 +396,10 @@ pub enum UIStyleRule {
     MarginRight(StyleLength),
     MarginTop(StyleLength),
     MarginBottom(StyleLength),
+    BorderLeft(StyleLength),
+    BorderRight(StyleLength),
+    BorderTop(StyleLength),
+    BorderBottom(StyleLength),
     FontSize(StyleValue),
     Background(StretchTexture),
     FlexWrap(FlexWrap),
@@ -466,7 +477,7 @@ pub struct StretchTexture {
 }
 impl StretchTexture {
     pub fn parse(text: &str) -> anyhow::Result<Self> {
-        let (texture, border) = match text.split_once(";") {
+        let (texture, border) = match text.split_once(",") {
             Some((texture, border)) => (
                 texture,
                 border

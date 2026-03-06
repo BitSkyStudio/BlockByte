@@ -146,6 +146,201 @@ fn render_element(
     let element = *taffy.get_node_context(node).unwrap();
     let aspect_ratio = size.width as f32 / size.height as f32;
     let style = get_element_style(element, &data.properties);
+    if let Some(background) = style.background {
+        let mut bg_context = UIElementRenderContext {
+            aspect_ratio,
+            buffer: mesh,
+            gui_size: size.height as f32,
+            content: UIRect {
+                pos: UIPos {
+                    x: layout.location.x + parent_offset.x,
+                    y: layout.location.y + parent_offset.y,
+                },
+                size: UIPos {
+                    x: layout.size.width,
+                    y: layout.size.height,
+                },
+            },
+        };
+        let texture = background.texture.tex_coords();
+        let bg_texture_data = &background.texture.data().texture;
+        let (border_u, border_v) = (
+            background.border as f32 / bg_texture_data.width() as f32,
+            background.border as f32 / bg_texture_data.height() as f32,
+        );
+        //println!("{}", bg_context.content.size.x);
+        //todo: draw borders
+        let inside_width = layout.size.width - layout.border.right - layout.border.left;
+        let inside_height = layout.size.height - layout.border.top - layout.border.bottom;
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos::all(0.),
+                size: UIPos {
+                    x: layout.border.left,
+                    y: layout.border.top,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: 0.,
+                v1: 0.,
+                u2: border_u,
+                v2: border_v,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: layout.border.left,
+                    y: 0.,
+                },
+                size: UIPos {
+                    x: inside_width,
+                    y: layout.border.top,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: border_u,
+                v1: 0.,
+                u2: 1. - border_u,
+                v2: border_v,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: layout.size.width - layout.border.right,
+                    y: 0.,
+                },
+                size: UIPos {
+                    x: layout.border.right,
+                    y: layout.border.top,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: 1. - border_u,
+                v1: 0.,
+                u2: 1.,
+                v2: border_v,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: 0.,
+                    y: layout.border.top,
+                },
+                size: UIPos {
+                    x: layout.border.left,
+                    y: inside_height,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: 0.,
+                v1: border_v,
+                u2: border_u,
+                v2: 1. - border_v,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: 0.,
+                    y: layout.border.top + inside_height,
+                },
+                size: UIPos {
+                    x: layout.border.left,
+                    y: layout.border.bottom,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: 0.,
+                v1: 1. - border_v,
+                u2: border_u,
+                v2: 1.,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: layout.border.left + inside_width,
+                    y: layout.border.top,
+                },
+                size: UIPos {
+                    x: layout.border.left,
+                    y: inside_height,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: 1. - border_u,
+                v1: border_v,
+                u2: 1.,
+                v2: 1. - border_v,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: layout.border.left + inside_width,
+                    y: layout.border.top + inside_height,
+                },
+                size: UIPos {
+                    x: layout.border.left,
+                    y: layout.border.bottom,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: 1. - border_u,
+                v1: 1. - border_v,
+                u2: 1.,
+                v2: 1.,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: layout.border.left,
+                    y: layout.border.top + inside_height,
+                },
+                size: UIPos {
+                    x: inside_width,
+                    y: layout.border.bottom,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: border_u,
+                v1: 1. - border_v,
+                u2: 1. - border_u,
+                v2: 1.,
+            }),
+            Color::WHITE,
+        );
+        bg_context.draw_quad(
+            UIRect {
+                pos: UIPos {
+                    x: layout.border.left,
+                    y: layout.border.top,
+                },
+                size: UIPos {
+                    x: inside_width,
+                    y: inside_height,
+                },
+            },
+            texture.map_sub(TexCoords {
+                u1: border_u,
+                v1: border_v,
+                u2: 1. - border_u,
+                v2: 1. - border_v,
+            }),
+            Color::WHITE,
+        );
+    }
     let mut context = UIElementRenderContext {
         aspect_ratio,
         buffer: mesh,
@@ -173,33 +368,11 @@ fn render_element(
             },
         },
     };
-    if let Some(background) = style.background {
-        let texture = background.texture.tex_coords();
-        let bg_texture_data = &background.texture.data().texture;
-        let (border_u, border_v) = (
-            background.border as f32 / bg_texture_data.width() as f32,
-            background.border as f32 / bg_texture_data.height() as f32,
-        );
-        //todo: draw borders
-        context.draw_quad(
-            UIRect {
-                pos: UIPos::all(0.),
-                size: context.content.size,
-            },
-            texture.map_sub(TexCoords {
-                u1: border_u,
-                v1: border_v,
-                u2: 1. - border_u,
-                v2: 1. - border_v,
-            }),
-            Color::WHITE,
-        );
-    }
     match &element.element_type {
         UIElementType::Box(uielements) => {
             let parent_offset = UIPos {
-                x: context.content.pos.x - layout.border.left,
-                y: context.content.pos.y - layout.border.top,
+                x: context.content.pos.x - layout.border.left - layout.padding.left,
+                y: context.content.pos.y - layout.border.top - layout.padding.top,
             };
             for child in taffy.children(node).unwrap() {
                 render_element(
@@ -582,6 +755,18 @@ impl BBStyle {
             }
             UIStyleRule::MarginBottom(style_length) => {
                 self.taffy.margin.bottom = style_length.as_length_percentage_auto(properties);
+            }
+            UIStyleRule::BorderLeft(style_length) => {
+                self.taffy.border.left = style_length.as_length_percentage(properties);
+            }
+            UIStyleRule::BorderRight(style_length) => {
+                self.taffy.border.right = style_length.as_length_percentage(properties);
+            }
+            UIStyleRule::BorderTop(style_length) => {
+                self.taffy.border.top = style_length.as_length_percentage(properties);
+            }
+            UIStyleRule::BorderBottom(style_length) => {
+                self.taffy.border.bottom = style_length.as_length_percentage(properties);
             }
             UIStyleRule::FontSize(font_size) => {
                 self.font_size = font_size.calc(properties);

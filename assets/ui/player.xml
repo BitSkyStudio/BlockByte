@@ -11,5 +11,5 @@
         <slot id="8" class="slot"/>
         <slot id="9" class="slot"/>
     </box>
-    <craft class="slot" recipes="#player_crafting" craft_width="5"/>
+    <craft style="background: slot,3;border: 20;" recipes="#player_crafting" craft_width="5"/>
 </box>
