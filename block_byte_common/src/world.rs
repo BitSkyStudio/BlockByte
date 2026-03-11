@@ -51,6 +51,16 @@ impl<T> BlockComponentStorage<T> {
             self.components.push((block, data));
         }
     }
+    pub fn get_or_init(&mut self, block: ChunkOffset, init: impl FnOnce() -> T) -> &mut T {
+        let index = self.tree.get(block);
+        match index {
+            Some(index) => &mut self.components.get_mut(index as usize).unwrap().1,
+            None => {
+                self.set(block, init());
+                self.get_mut(block).unwrap()
+            }
+        }
+    }
     pub fn remove(&mut self, block: ChunkOffset) -> Option<T> {
         if let Some(index) = self.tree.remove(block) {
             let (_, removed) = self.components.swap_remove(index as usize);

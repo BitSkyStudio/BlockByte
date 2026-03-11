@@ -420,11 +420,13 @@ pub struct ItemData {
 pub enum ItemAction {
     Ignore,
     Place(Vec<ItemBlockPlacement>),
+    SpawnEntity(EntityKey),
+    Plant(PlantKey),
 }
 impl ItemAction {
     pub fn variation_count(&self) -> usize {
         match self {
-            ItemAction::Ignore => 1,
+            ItemAction::Ignore | ItemAction::SpawnEntity(_) | ItemAction::Plant(_) => 1,
             ItemAction::Place(item_block_placements) => item_block_placements.len(),
         }
     }
@@ -640,6 +642,9 @@ pub enum BlockMachineAction {
         face: Face,
         offset: BlockPos,
         pull: bool,
+        break_on_full_inventory: bool,
+        #[serde(default)]
+        filter_slots: Option<InventoryView>,
     },
     MoveItem {
         from: InventoryView,
@@ -820,7 +825,19 @@ pub struct EntityData {
     #[serde(default)]
     pub interact_action: EntityInteractAction,
     pub health: f32,
+    #[serde(default)]
     pub damage_table: DamageTable,
+    #[serde(default)]
+    pub ai_tasks: Vec<MobAiTask>,
+}
+#[derive(Deserialize)]
+pub enum MobAiTask {
+    Attack {
+        targets: KeyGroup<EntityData>,
+        damage: f32,
+        damage_type: DamageType,
+    },
+    Wander,
 }
 #[derive(Deserialize)]
 pub enum EntityInteractAction {
@@ -870,6 +887,9 @@ pub struct PlantData {
     pub blades: u32,
     #[cfg(feature = "client")]
     pub translation: f32,
+    pub growth_length: f32,
+    pub harvest_loot: OwnOrKey<LootTableData>,
+    pub break_loot: OwnOrKey<LootTableData>,
 }
 pub type PlantKey = Key<PlantData>;
 

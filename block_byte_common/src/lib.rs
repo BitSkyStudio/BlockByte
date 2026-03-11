@@ -172,6 +172,15 @@ macro_rules! create_damage_types {
                 $id: f32,
             )*
         }
+        impl Default for DamageTable{
+            fn default() -> DamageTable{
+                DamageTable{
+                    $(
+                        $id: 1.,
+                    )*
+                }
+            }
+        }
         impl std::ops::Index<DamageType> for DamageTable {
             type Output = f32;
 

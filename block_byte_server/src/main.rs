@@ -15,10 +15,11 @@ use block_byte_common::{
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructureData,
-        BlockStructurePart, EntityKey, ItemAction, ItemKey, ToolData, air_block, load_registries,
+        BlockStructurePart, EntityKey, ItemAction, ItemKey, KeyGroup, ToolData, air_block,
+        load_registries,
     },
     ui::{PropertyMap, UIScreenKey},
-    world::{ClientBlockDamage, ClientBlockPlants},
+    world::{ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants},
 };
 use palettevec::PaletteVec;
 use parking_lot::{Mutex, RwLock};
@@ -40,8 +41,8 @@ use crate::{
     inventory::{Inventory, ItemDurability, ItemStack, generate_loot_table},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
-        BlockEvent, BlockMachine, Chunk, ChunkSaveData, Entity, EntityEvent, EntityIndex,
-        UserIndexSave, WorldGenerator,
+        BlockEvent, BlockMachine, BlockPlants, Chunk, ChunkSaveData, Entity, EntityEvent,
+        EntityIndex, UserIndexSave, WorldGenerator,
     },
 };
 
@@ -130,10 +131,10 @@ fn main() {
         for (user, spawn_position) in player_spawns.drain(..) {
             let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
             let full_view = entity.inventory.get_mut().full_view();
-            entity.inventory.get_mut().add_item(
-                &full_view,
-                ItemStack::new(ItemKey::id("grass_item").unwrap(), 20),
-            );
+            entity
+                .inventory
+                .get_mut()
+                .add_item(&full_view, ItemStack::new(ItemKey::id("dirt").unwrap(), 20));
             entity.inventory.get_mut().add_item(
                 &full_view,
                 ItemStack::new(ItemKey::id("barrel").unwrap(), 20),
@@ -320,11 +321,14 @@ fn main() {
                         if let Some(entity) = user.entity {
                             let entity = server.entities.get_mut(entity).unwrap();
                             entity.state.get_mut().teleport = Some(position);
-                            entity.direction = direction;
+                            entity.state.get_mut().direction = direction;
                         }
                     }
-                    NetworkMessageC2S::AttackBlock { position } => {
+                    NetworkMessageC2S::AttackBlock { position, face } => {
                         if let Some(entity) = user.entity {
+                            if face == Face::Up {
+                                let (chunk, offset) = position.to_chunk_pos_offset();
+                            }
                             let entity = server.entities.get_mut(entity).unwrap();
                             let hotbar_slot = entity.state.get_mut().hand_slot;
                             let inventory = entity.inventory.get_mut();
@@ -374,13 +378,47 @@ fn main() {
                                                     .block
                                                     .data()
                                                     .rotation
-                                                    .from_look_direction(entity.direction),
+                                                    .from_look_direction(
+                                                        entity.state.lock().direction,
+                                                    ),
                                                 state: 0,
                                             },
                                         ) {
                                             item.count -= place.use_count;
                                             if item.count == 0 {
                                                 inventory.items[hotbar_slot] = None;
+                                            }
+                                        }
+                                    }
+                                    ItemAction::SpawnEntity(key) => {
+                                        let entity_data = key.data();
+                                        let place_position = position.to_pos() + face.get_offset();
+                                        //todo: placement checks
+                                        server.spawn_entity(Entity::new(*key, place_position));
+                                    }
+                                    ItemAction::Plant(key) => {
+                                        let plant_position = position + face.get_block_offset();
+                                        if let Some(block) = server.get_block(plant_position) {
+                                            if block.block.data().plantable {
+                                                let (plant_chunk_position, plant_offset) =
+                                                    plant_position.to_chunk_pos_offset();
+                                                let mut plant_chunk =
+                                                    server.get_chunk(plant_chunk_position).unwrap();
+                                                let mut chunk_plants =
+                                                    plant_chunk.components.plant.write();
+                                                let plants = chunk_plants
+                                                    .get_or_init(plant_offset, || BlockPlants {
+                                                        plants: Vec::new(),
+                                                    });
+                                                plants.plants.push((*key, 0.));
+                                                server.send_message_multiple(
+                                                    plant_chunk.viewers.iter(),
+                                                    NetworkMessageS2C::UpdateBlockComponents {
+                                                        chunk: plant_chunk_position,
+                                                        offset: plant_offset,
+                                                        data: ClientBlockComponentUpdate::ClientBlockPlants(Some((&*plants).into())),
+                                                    },
+                                                );
                                             }
                                         }
                                     }
@@ -419,7 +457,8 @@ fn main() {
                         if let Some(entity) = find_entity_next_to_player(entity) {
                             if let Some(player_entity) = user.entity {
                                 let player_entity = server.entities.get_mut(player_entity).unwrap();
-                                let knockback_direction = player_entity.direction.make_front();
+                                let knockback_direction =
+                                    player_entity.state.get_mut().direction.make_front();
                                 let hotbar_slot = player_entity.state.get_mut().hand_slot;
                                 let inventory = player_entity.inventory.get_mut();
                                 let tool = inventory.items[hotbar_slot]
@@ -459,12 +498,13 @@ fn main() {
                                 EntityKey::id("item").unwrap(),
                                 entity.position + Pos::Y * entity.key.data().eye_height,
                             );
-                            item_entity.direction = LookDirection {
+                            item_entity.state.get_mut().direction = LookDirection {
                                 pitch: 0.,
-                                yaw: entity.direction.yaw,
+                                yaw: entity.state.get_mut().direction.yaw,
                             };
                             let throw_force = 3.;
-                            let mut throw_velocity = entity.direction.make_front() * throw_force;
+                            let mut throw_velocity =
+                                entity.state.get_mut().direction.make_front() * throw_force;
                             throw_velocity.y = 0.1;
                             item_entity.state.get_mut().velocity = throw_velocity;
                             item_entity.inventory.get_mut().items[0] = Some(drop_item);
@@ -1053,7 +1093,12 @@ impl Server {
         }
         let mut drops = generate_loot_table(block_data.loot_table.data());
         if block_data.plantable {
-            if chunk.components.plant.write().remove(offset).is_some() {
+            if let Some(plants) = chunk.components.plant.write().remove(offset) {
+                for (plant, growth) in plants.plants {
+                    let plant = plant.data();
+                    drops.append(&mut generate_loot_table(plant.harvest_loot.data()));
+                    //todo: harvest
+                }
                 self.send_message_multiple(
                     chunk.viewers.iter(),
                     NetworkMessageS2C::UpdateBlockComponents {
@@ -1382,6 +1427,7 @@ impl ChunkViewingManager {
             .collect::<Vec<_>>();
             let block_offset_position = position.to_block_pos();
             let viewers = &server.get_chunk(*position).unwrap().viewers;
+            let replacable_tag = KeyGroup::parse("#structure_replacable").unwrap();
             for biome in &column_data.unique_biomes {
                 for decorator in &biome.data().decorators {
                     for i in 0..decorator.count {
@@ -1426,13 +1472,12 @@ impl ChunkViewingManager {
                                     let place_chunk_index = (place_chunk.x + 1)
                                         + (place_chunk.y + 1) * 3
                                         + (place_chunk.z + 1) * 9;
-                                    //todo: check tag
-                                    if chunks_blocks[place_chunk_index as usize]
-                                        .get(place_chunk_offset.index())
-                                        .unwrap()
-                                        .block
-                                        == air_block()
-                                    {
+                                    if replacable_tag.contains(
+                                        chunks_blocks[place_chunk_index as usize]
+                                            .get(place_chunk_offset.index())
+                                            .unwrap()
+                                            .block,
+                                    ) {
                                         chunks_blocks[place_chunk_index as usize]
                                             .set(place_chunk_offset.index(), &block);
                                         server.send_message_multiple(

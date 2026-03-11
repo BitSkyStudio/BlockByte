@@ -13,7 +13,7 @@
     loot_table: Own((
         entries: [
             (
-                item: "grass_item",
+                item: "dirt",
                 chance: 1.,
             )
         ]

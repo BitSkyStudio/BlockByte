@@ -22,6 +22,7 @@ pub enum NetworkMessageC2S {
     },
     AttackBlock {
         position: BlockPos,
+        face: Face,
     },
     PlaceBlock {
         position: BlockPos,

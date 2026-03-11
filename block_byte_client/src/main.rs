@@ -625,8 +625,11 @@ impl ApplicationHandler for App {
                         if hit_timer < active_tool.hit_time && new_hit_timer >= active_tool.hit_time
                         {
                             match self.camera.raycast(&self.game) {
-                                RayCastResult::Block(position, _) => {
-                                    self.send_message(NetworkMessageC2S::AttackBlock { position });
+                                RayCastResult::Block(position, face) => {
+                                    self.send_message(NetworkMessageC2S::AttackBlock {
+                                        position,
+                                        face,
+                                    });
                                 }
                                 RayCastResult::Entity(entity) => {
                                     self.send_message(NetworkMessageC2S::AttackEntity { entity });
@@ -1499,11 +1502,15 @@ impl ClientGame {
         }
         let (mut animation, observers) = self.viewmodel_player.evaluate(viewmodel_graph(), dt);
         if let Some(hit_timer) = self.hit_timer {
-            animation.clear();
+            let time = hit_timer / self.active_tool().swing_time;
+            let weight = (((time - 0.5) * 2.).abs() - 0.6).max(0.) * 1.5;
+            animation.iter_mut().for_each(|a| {
+                a.weight *= weight;
+            });
             animation.push(DrawAnimation {
                 animation: "hit",
-                time: hit_timer / self.active_tool().swing_time,
-                weight: 1.,
+                time,
+                weight: 1. - weight,
             });
         }
         for observer in observers {
@@ -1893,7 +1900,7 @@ impl ClientGame {
                     }
                     RayCastResult::Empty | RayCastResult::Entity(_) => {}
                 },
-                ItemAction::Ignore => {}
+                _ => {}
             }
         }
     }
@@ -2426,7 +2433,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         inverted: false,
                         reset: true,
                         to: "running".to_string(),
-                        time: 0.1,
+                        time: 0.25,
                     },
                     AnimationTransition {
                         condition: "empty_hand".to_string(),
@@ -2513,6 +2520,13 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         reset: true,
                         inverted: true,
                         to: "idle".to_string(),
+                        time: 0.25,
+                    },
+                    AnimationTransition {
+                        condition: "run".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "running".to_string(),
                         time: 0.25,
                     },
                     AnimationTransition {

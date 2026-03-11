@@ -1,0 +1,18 @@
+(
+    render_data: Model("rotate_half;cobblestone"),
+    health: Some((health: 5., health_regen: 0.05, table: ())),
+    loot_table: Own((
+        entries: [
+            (
+                item: "rock",
+                chance: 1.,
+                modifiers: [
+                    SetCount(Constant(2))
+                ]
+            )
+        ]
+    )),
+    rotation: Full,
+    collision: [(0., 0., 0., 1., 1., 0.5)],
+    selection: [(0., 0., 0., 1., 1., 0.5)],
+)

@@ -1,0 +1,10 @@
+(
+    inventory_size: 0,
+    hitbox_size: 0.3,
+    hitbox_height: 1.9,
+    eye_height: 1.7,
+    model: "pocong",
+    health: 100.,
+    damage_table: (),
+    ai_tasks: [Wander],
+)

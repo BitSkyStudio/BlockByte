@@ -1,5 +1,5 @@
 (
-    action: Place([(block:"nature.rock"),(block:"nature.cobblestone", use_count: 4)]),
+    action: Place([(block:"nature.rock"),(block:"nature.cobblestone", use_count: 4),(block:"nature.cobblestone_half", use_count: 2),(block:"nature.cobblestone_stair", use_count: 3)]),
     model: Block("nature.rock"),
     stack_size: 80,
 )

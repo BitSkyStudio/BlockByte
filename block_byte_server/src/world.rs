@@ -295,6 +295,8 @@ impl Chunk {
                             face,
                             offset: push_offset,
                             pull,
+                            break_on_full_inventory,
+                            filter_slots,
                         } => {
                             let orientation = Into::<Orientation>::into(block.rotation);
                             let other_position = orientation.rotate_block_pos(*push_offset)
@@ -325,13 +327,34 @@ impl Chunk {
                                 } else {
                                     &face_data.input
                                 };
+                                let item_filter: Option<HashSet<_>> = match filter_slots {
+                                    Some(filter) => Some(
+                                        filter
+                                            .slots
+                                            .iter()
+                                            .filter_map(|i| {
+                                                machine.inventory.read().items[*i]
+                                                    .as_ref()
+                                                    .map(|item| item.item)
+                                            })
+                                            .collect(),
+                                    ),
+                                    None => None,
+                                };
                                 let (mut first_inventory, mut second_inventory) =
                                     lock_inventories(&machine.inventory, &other_machine.inventory);
                                 if *pull {
                                     std::mem::swap(&mut first_inventory, &mut second_inventory);
                                 }
+                                let mut exit = false;
                                 for slot in &view.slots {
                                     if let Some(item) = first_inventory.get_slot_mut_raw(*slot) {
+                                        if let Some(item_filter) = &item_filter {
+                                            if !item_filter.contains(&item.item) {
+                                                exit = true;
+                                                break;
+                                            }
+                                        }
                                         if second_inventory
                                             .add_item(other_view, item.copy(1))
                                             .is_none()
@@ -341,9 +364,18 @@ impl Chunk {
                                                 first_inventory.items[*slot] = None;
                                             }
                                             *cooldown = *speed;
+                                            exit = true;
                                             break;
+                                        } else {
+                                            if *break_on_full_inventory {
+                                                exit = true;
+                                                break;
+                                            }
                                         }
                                     }
+                                }
+                                if exit {
+                                    break;
                                 }
                             }
                         }
@@ -486,7 +518,6 @@ pub struct Entity {
     pub key: EntityKey,
     pub uuid: Uuid,
     pub position: Pos,
-    pub direction: LookDirection,
     pub inventory: RwLock<Inventory>,
     pub events: Mutex<SmallVec<[EntityEvent; 4]>>,
     pub controller: Option<UserIndexSave>, //breaks on load
@@ -502,6 +533,15 @@ pub struct InternalEntityState {
     pub last_hand_item: Option<ItemStack>,
     pub health: f32,
     pub research: HashSet<ResearchKey>,
+    pub ai: Option<MobAI>,
+    pub direction: LookDirection,
+}
+#[derive(Serialize, Deserialize)]
+pub struct MobAI {}
+impl MobAI {
+    pub fn new() -> Self {
+        Self {}
+    }
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
@@ -510,7 +550,6 @@ impl Entity {
             key,
             uuid: Uuid::new_v4(),
             position,
-            direction: LookDirection { pitch: 0., yaw: 0. },
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
             events: Mutex::new(SmallVec::new()),
             controller: None,
@@ -522,6 +561,11 @@ impl Entity {
                 last_hand_item: None,
                 health: entity_data.health,
                 research: HashSet::new(),
+                ai: match entity_data.ai_tasks.is_empty() {
+                    true => None,
+                    false => Some(MobAI::new()),
+                },
+                direction: LookDirection { pitch: 0., yaw: 0. },
             }),
         }
     }
@@ -594,6 +638,8 @@ impl Entity {
 
             let mut friction = 0.;
 
+            let mut on_ground = false;
+
             if movement.x != 0.
                 && server.hitbox_block_collides(hitbox.offset(
                     self.position
@@ -617,6 +663,7 @@ impl Entity {
                         } * server.delta_time(),
                 ))
             {
+                on_ground = movement.y < 0.;
                 movement.y = 0.;
                 friction += 1.;
             }
@@ -660,6 +707,29 @@ impl Entity {
                 movement.x = friction_axis(movement.x);
                 movement.y = friction_axis(movement.y);
                 movement.z = friction_axis(movement.z);
+            }
+
+            match self.key.data().ai_tasks.get(0) {
+                Some(task) => match task {
+                    block_byte_common::registry::MobAiTask::Attack {
+                        targets,
+                        damage,
+                        damage_type,
+                    } => todo!(),
+                    block_byte_common::registry::MobAiTask::Wander => {
+                        if on_ground {
+                            movement.y += 10.;
+                        }
+                        let front = state.direction.make_front();
+                        movement.x = front.x * 3.;
+                        movement.z = front.z * 3.;
+                        if rand::random_bool(1. / 40. / 5.) {
+                            state.direction.yaw =
+                                rand::random_range((0.)..(std::f32::consts::PI * 2.))
+                        }
+                    }
+                },
+                None => {}
             }
 
             state.velocity = movement;
@@ -710,7 +780,7 @@ impl Entity {
             uuid: self.uuid,
             key: self.key,
             position: self.position,
-            direction: self.direction,
+            direction: self.state.lock().direction,
             hand_item: self
                 .inventory
                 .read()
@@ -725,7 +795,7 @@ impl Entity {
         NetworkMessageS2C::MoveEntity {
             uuid: self.uuid,
             position: self.position,
-            direction: self.direction,
+            direction: self.state.lock().direction,
         }
     }
     pub fn create_remove_message(&self) -> NetworkMessageS2C {

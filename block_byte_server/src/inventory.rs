@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use block_byte_common::{
-    ClientItem, InventoryView,
     registry::{ItemKey, LootItemModifier, LootModifierInteger, LootTableData, LootTableKey},
+    ClientItem, InventoryView,
 };
 use parking_lot::{RwLock, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
@@ -466,7 +466,9 @@ pub fn generate_loot_table(loot_table: &LootTableData) -> Vec<ItemStack> {
                     }
                 }
             }
-            items.push(item);
+            if item.count > 0 {
+                items.push(item);
+            }
         }
     }
     items
