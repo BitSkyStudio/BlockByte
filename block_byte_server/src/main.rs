@@ -54,7 +54,7 @@ fn main() {
     .num_threads(8)
     .build_global()
     .unwrap();*/
-    load_registries(&Path::new("assets"));
+    load_registries(&[&Path::new("assets")]);
     let mut network_server = RenetServer::new(make_connection_config());
     const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
     let network_socket: UdpSocket = UdpSocket::bind(SERVER_ADDR).unwrap();

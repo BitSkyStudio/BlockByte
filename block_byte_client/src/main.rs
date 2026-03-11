@@ -73,7 +73,7 @@ fn secs_since_start() -> f32 {
 }
 
 fn main() {
-    load_registries(&Path::new("assets"));
+    load_registries(&[&Path::new("assets")]);
     use block_byte_common::registry::RegistryProvider;
     let (atlas, text_renderer, image) = TextureAtlas::pack();
     TEXTURE_ATLAS.set(atlas);

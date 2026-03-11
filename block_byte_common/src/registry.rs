@@ -116,45 +116,49 @@ macro_rules! create_registries{
         pub trait RegistryConfigLoadable: Sized{
             fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self>;
         }
-        pub fn load_registries(asset_path: &Path) {
+        pub fn load_registries(asset_paths: &[&Path]) {
             let mut load_registry = LoadRegistryStorage {
                 $($id: LoadRegistry::default(),)*
             };
             $({
-                let base_asset_path = asset_path.join(stringify!($id));
                 let mut groups = HashMap::new();
-                for entry in WalkDir::new(&base_asset_path) {
-                    match entry {
-                        Ok(entry) => {
-                            if entry.file_type().is_file() {
-                                let stripped_path = entry.path().strip_prefix(&base_asset_path).unwrap();
-                                let extension = stripped_path.extension();
-                                match stripped_path.extension().and_then(|ext| ext.to_str()).unwrap_or(""){
-                                    "py" => continue,
-                                    _ => {}
-                                }
-                                let id = stripped_path
-                                    .with_extension("")
-                                    .as_os_str()
-                                    .to_string_lossy()
-                                    .replace("/", ".")
-                                    .replace("\\", ".");
-                                if id.starts_with("#"){
-                                    groups.insert(id[1..].to_string(), entry.into_path());
-                                } else {
-                                    load_registry.$id.register(id, entry.into_path());
+                for asset_path in asset_paths{
+                    let base_asset_path = asset_path.join(stringify!($id));
+                    for entry in WalkDir::new(&base_asset_path) {
+                        match entry {
+                            Ok(entry) => {
+                                if entry.file_type().is_file() {
+                                    let stripped_path = entry.path().strip_prefix(&base_asset_path).unwrap();
+                                    let extension = stripped_path.extension();
+                                    match stripped_path.extension().and_then(|ext| ext.to_str()).unwrap_or(""){
+                                        "py" => continue,
+                                        _ => {}
+                                    }
+                                    let id = stripped_path
+                                        .with_extension("")
+                                        .as_os_str()
+                                        .to_string_lossy()
+                                        .replace("/", ".")
+                                        .replace("\\", ".");
+                                    if id.starts_with("#"){
+                                        *groups.entry(id[1..].to_string()).or_insert_with(||String::new()) += format!("\n{}", std::fs::read_to_string(entry.into_path()).unwrap()).as_str();
+                                    } else {
+                                        load_registry.$id.register(id, entry.into_path());
+                                    }
                                 }
                             }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
                     }
                 }
-                let groups: HashMap<_, _> = groups.into_iter().map(|(id, group)|(id, std::fs::read_to_string(group).unwrap())).collect();
                 for id in groups.keys() {
                     let mut entries = HashSet::new();
                     //todo: missing error handling
                     fn recursively_load(registry: &LoadRegistry<$type>, groups: &HashMap<String, String>, entries: &mut HashSet<Key<$type>>, id: &str){
                         for line in groups.get(id).unwrap().lines(){
+                            if line.is_empty(){
+                                continue;
+                            }
                             if line.starts_with("#"){
                                 recursively_load(registry, groups, entries, &line[1..]);
                             } else {
