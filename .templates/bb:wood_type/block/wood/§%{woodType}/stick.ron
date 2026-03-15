@@ -1,10 +1,14 @@
 (
-    render_data: Model("stick"),
-    health: Some((health: 5., health_regen: 0.05, table: ())),
+    render_data: Model("stick;wood.§%{woodType}_bark"),
+    health: (
+        health: 5., 
+        health_regen: 0.05, 
+        table: ()
+    ),
     loot_table: Own((
         entries: [
             (
-                item: "stick",
+                item: "wood.§%{woodType}.stick",
                 chance: 1.,
             )
         ]

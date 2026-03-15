@@ -1,6 +1,6 @@
 (
     render_data: Model("rock"),
-    health: Some((health: 5., health_regen: 0.05, table: ())),
+    health: (health: 5., health_regen: 0.05, table: (Pierce: 2.)),
     loot_table: Own((
         entries: [
             (

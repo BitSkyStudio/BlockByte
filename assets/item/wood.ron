@@ -1,5 +1,0 @@
-(
-    action: Place([(block:"nature.wood"),(block:"nature.wood_half")]),
-    model: Block("nature.wood"),
-    stack_size: 20,
-)

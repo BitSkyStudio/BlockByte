@@ -73,7 +73,7 @@ fn secs_since_start() -> f32 {
 }
 
 fn main() {
-    load_registries(&[&Path::new("assets")]);
+    load_registries(&[&Path::new("assets"), &Path::new("assets_generated")]);
     use block_byte_common::registry::RegistryProvider;
     let (atlas, text_renderer, image) = TextureAtlas::pack();
     TEXTURE_ATLAS.set(atlas);
@@ -226,6 +226,12 @@ impl ApplicationHandler for App {
                                             });
                                         }
                                     }
+                                }
+                                RayCastResult::Plant(position, index) => {
+                                    self.send_message(NetworkMessageC2S::HarvestPlant {
+                                        position,
+                                        index,
+                                    });
                                 }
                             }
                         }
@@ -420,9 +426,9 @@ impl ApplicationHandler for App {
                         1. / dt,
                         self.mspt,
                         match self.camera.raycast(&self.game) {
-                            RayCastResult::Empty | RayCastResult::Entity(_) => String::new(),
                             RayCastResult::Block(position, face) =>
                                 format!("looking at {:?} {:?} ", position, face),
+                            _ => String::new(),
                         },
                     ),
                     0.05,
@@ -555,6 +561,7 @@ impl ApplicationHandler for App {
                             .data()
                             .interact_action
                             .tooltip(),
+                        RayCastResult::Plant(_, _) => Some("harvest"),
                     } {
                         let text = format!("[E]{}", translate(tooltip));
                         let size = 0.05;
@@ -635,6 +642,13 @@ impl ApplicationHandler for App {
                                     self.send_message(NetworkMessageC2S::AttackEntity { entity });
                                 }
                                 RayCastResult::Empty => {}
+                                RayCastResult::Plant(position, index) => {
+                                    /*self.send_message(NetworkMessageC2S::HarvestPlant {
+                                        position,
+                                        index,
+                                        cut: true,
+                                    });*/
+                                }
                             }
                         }
                         self.game.hit_timer = Some(new_hit_timer);
@@ -1074,6 +1088,7 @@ pub enum RayCastResult {
     Empty,
     Block(BlockPos, Face),
     Entity(Uuid),
+    Plant(BlockPos, usize),
 }
 pub struct ClientPlayer {
     pub position: Pos,
@@ -1152,6 +1167,49 @@ impl ClientPlayer {
                 if distance < min_distance {
                     min_distance = distance;
                     raycast_result = RayCastResult::Entity(*id);
+                }
+            }
+        }
+        //todo: this lookup should probably be smarter
+        for chunk_position in (AABB {
+            min: ChunkPos::all(-1),
+            max: ChunkPos::all(1),
+        })
+        .offset(ray.position.to_chunk_pos())
+        {
+            if let Some(chunk) = world.chunks.get(&chunk_position) {
+                for (offset, plants) in &chunk.components.plant.components {
+                    for (i, plant) in plants.plants.iter().enumerate() {
+                        let plant_data = plant.0.data();
+                        let block_position = chunk_position.to_block_pos() + offset.xyz();
+                        let aabb = AABB {
+                            min: Pos {
+                                x: -plant_data.size / 2.,
+                                y: 0.,
+                                z: -plant_data.size / 2.,
+                            },
+                            max: Pos {
+                                x: plant_data.size / 2.,
+                                y: plant_data.height,
+                                z: plant_data.size / 2.,
+                            },
+                        }
+                        .offset(
+                            block_position.to_pos()
+                                + Pos {
+                                    x: 0.5,
+                                    y: 1.,
+                                    z: 0.5,
+                                },
+                        );
+                        if let Some(result) = ray.aabb_raycast(aabb) {
+                            let distance = result.position.distance(ray.position);
+                            if distance < min_distance {
+                                min_distance = distance;
+                                raycast_result = RayCastResult::Plant(block_position, i);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1898,7 +1956,7 @@ impl ClientGame {
                             }
                         }
                     }
-                    RayCastResult::Empty | RayCastResult::Entity(_) => {}
+                    _ => {}
                 },
                 _ => {}
             }

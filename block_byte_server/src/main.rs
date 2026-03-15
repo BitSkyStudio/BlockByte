@@ -42,7 +42,7 @@ use crate::{
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
         BlockEvent, BlockMachine, BlockPlants, Chunk, ChunkSaveData, Entity, EntityEvent,
-        EntityIndex, UserIndexSave, WorldGenerator,
+        EntityIndex, WorldGenerator,
     },
 };
 
@@ -54,7 +54,7 @@ fn main() {
     .num_threads(8)
     .build_global()
     .unwrap();*/
-    load_registries(&[&Path::new("assets")]);
+    load_registries(&[&Path::new("assets"), &Path::new("assets_generated")]);
     let mut network_server = RenetServer::new(make_connection_config());
     const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
     let network_socket: UdpSocket = UdpSocket::bind(SERVER_ADDR).unwrap();
@@ -131,7 +131,7 @@ fn main() {
         for (user, spawn_position) in player_spawns.drain(..) {
             let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
             let full_view = entity.inventory.get_mut().full_view();
-            entity
+            /*entity
                 .inventory
                 .get_mut()
                 .add_item(&full_view, ItemStack::new(ItemKey::id("dirt").unwrap(), 20));
@@ -162,8 +162,8 @@ fn main() {
             entity
                 .inventory
                 .get_mut()
-                .add_item(&full_view, ItemStack::new(ItemKey::id("wood").unwrap(), 20));
-            entity.controller = Some(UserIndexSave(user));
+                .add_item(&full_view, ItemStack::new(ItemKey::id("wood").unwrap(), 20));*/
+            entity.controller = Some(user);
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
@@ -326,9 +326,6 @@ fn main() {
                     }
                     NetworkMessageC2S::AttackBlock { position, face } => {
                         if let Some(entity) = user.entity {
-                            if face == Face::Up {
-                                let (chunk, offset) = position.to_chunk_pos_offset();
-                            }
                             let entity = server.entities.get_mut(entity).unwrap();
                             let hotbar_slot = entity.state.get_mut().hand_slot;
                             let inventory = entity.inventory.get_mut();
@@ -438,19 +435,23 @@ fn main() {
                         }
                     }
                     NetworkMessageC2S::InteractBlock { position } => {
-                        server.schedule_block_event(
-                            position,
-                            BlockEvent::PlayerInteract {
-                                user: user_id.into(),
-                            },
-                        );
+                        if let Some(entity) = user.entity {
+                            server.schedule_block_event(
+                                position,
+                                BlockEvent::PlayerInteract {
+                                    player: entity.into(),
+                                },
+                            );
+                        }
                     }
                     NetworkMessageC2S::InteractEntity { entity } => {
-                        if let Some(entity) = find_entity_next_to_player(entity) {
-                            let entity = server.entities.get_mut(entity).unwrap();
-                            entity.events.get_mut().push(EntityEvent::PlayerInteract {
-                                user: user_id.into(),
-                            });
+                        if let Some(entity_index) = find_entity_next_to_player(entity) {
+                            let entity = server.entities.get_mut(entity_index).unwrap();
+                            if let Some(player_entity) = user.entity {
+                                entity.events.get_mut().push(EntityEvent::PlayerInteract {
+                                    user: player_entity.into(),
+                                });
+                            }
                         }
                     }
                     NetworkMessageC2S::AttackEntity { entity } => {
@@ -707,6 +708,16 @@ fn main() {
                             user.set_screen(
                                 Key::id("player").unwrap(),
                                 vec![(InventoryProvider::Entity(entity), view)],
+                            );
+                        }
+                    }
+                    NetworkMessageC2S::HarvestPlant { position, index } => {
+                        if let Some(entity) = user.entity {
+                            server.schedule_block_event(
+                                position,
+                                BlockEvent::PlantHarvest {
+                                    player: entity.into(),
+                                },
                             );
                         }
                     }

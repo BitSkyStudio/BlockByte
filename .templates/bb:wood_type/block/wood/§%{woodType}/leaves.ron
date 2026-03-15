@@ -1,0 +1,16 @@
+(
+    render_data: Model("leaves;wood.§%{woodType}_leaves"),
+    health: (
+        health: 5., 
+        health_regen: 0.05, 
+        table: ()
+    ),
+    loot_table: Own((
+        entries: [
+            (
+                item: "wood.§%{woodType}.stick",
+                chance: 0.5,
+            )
+        ]
+    )),
+)

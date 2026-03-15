@@ -1,0 +1,22 @@
+(
+    render_data: Model("slab;wood.§%{woodType}_plank"),
+    health: (
+        health: 5., 
+        health_regen: 0.05, 
+        table: ()
+    ),
+    rotation: Full,
+    collision: [(0., 0., 0., 1., 1., 0.5)],
+    selection: [(0., 0., 0., 1., 1., 0.5)],
+    loot_table: Own((
+        entries: [
+            (
+                item: "wood.§%{woodType}.plank",
+                chance: 1.,
+                modifiers: [
+                    SetCount(Constant(2))
+                ],
+            )
+        ]
+    )),
+)

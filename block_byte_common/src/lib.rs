@@ -165,24 +165,20 @@ macro_rules! create_damage_types {
         }
         fn default_damage_vulnerability() -> f32{1.}
         #[allow(non_snake_case)]
-        #[derive(Deserialize)]
+        #[derive(Default, Deserialize)]
         pub struct DamageTable{
             $(
-                #[serde(default = "default_damage_vulnerability")]
-                $id: f32,
+                #[serde(default)]
+                $id: Option<f32>,
             )*
         }
-        impl Default for DamageTable{
-            fn default() -> DamageTable{
-                DamageTable{
-                    $(
-                        $id: 1.,
-                    )*
-                }
+        impl DamageTable {
+            pub fn iter(&self) -> impl Iterator<Item=(DamageType, f32)>{
+                [$(DamageType::$id,)*].into_iter().filter_map(|damage_type|self[damage_type].map(|value|(damage_type, value)))
             }
         }
         impl std::ops::Index<DamageType> for DamageTable {
-            type Output = f32;
+            type Output = Option<f32>;
 
             fn index(&self, damage_type: DamageType) -> &Self::Output {
                 match damage_type {

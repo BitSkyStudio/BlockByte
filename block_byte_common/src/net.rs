@@ -58,6 +58,10 @@ pub enum NetworkMessageC2S {
         count: u32,
     },
     OpenPlayerInventory,
+    HarvestPlant {
+        position: BlockPos,
+        index: usize,
+    },
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {

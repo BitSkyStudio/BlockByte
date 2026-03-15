@@ -1,0 +1,5 @@
+(
+    action: Place([(block:"wood.§%{woodType}.stick")]),
+    model: Block("wood.§%{woodType}.stick"),
+    stack_size: 20,
+)

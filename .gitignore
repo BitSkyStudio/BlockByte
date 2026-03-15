@@ -2,3 +2,4 @@ target/
 .vscode
 perf.*
 *.db3
+assets_generated/

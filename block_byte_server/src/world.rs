@@ -105,7 +105,11 @@ impl Chunk {
                             .iter()
                             .filter_map(|spawner| {
                                 if rng.random_bool(spawner.chance as f64) {
-                                    Some((spawner.plant, rng.random::<f32>()))
+                                    let plant_data = spawner.plant.data();
+                                    Some((
+                                        spawner.plant,
+                                        rng.random::<f32>() * plant_data.growth_length,
+                                    ))
                                 } else {
                                     None
                                 }
@@ -149,7 +153,7 @@ impl Chunk {
                 } => {
                     let block_data = self.blocks.read().get(block.index()).unwrap().block.data();
                     if let Some(health) = &block_data.health {
-                        let damage = damage * health.table[damage_type];
+                        let damage = damage * health.table[damage_type].unwrap_or(1.);
                         let mut damage_component = self.components.damage.write();
                         let mut destroy = false;
 
@@ -197,59 +201,59 @@ impl Chunk {
                         }
                     }
                 }
-                BlockEvent::PlayerInteract { user } => {
+                BlockEvent::PlayerInteract { player } => {
                     let block_data = self.blocks.read().get(block.index()).unwrap().block.data();
                     let block_position = self.position.to_block_pos() + block.xyz();
                     match &block_data.interact_action {
                         BlockInteractAction::Ignore => {}
                         BlockInteractAction::OpenInventory { screen, view } => {
-                            if let Some(user) = server.get_user(user.0) {
-                                if let Some(player) = user.entity {
-                                    user.set_screen(
-                                        *screen,
-                                        vec![
-                                            (
-                                                InventoryProvider::Entity(player),
-                                                InventoryView::from_range(0..10),
-                                            ),
-                                            (
-                                                InventoryProvider::Block(block_position),
-                                                view.clone(),
-                                            ),
-                                        ],
-                                    );
+                            if let Some(player_entity) = server.get_entity(player.0) {
+                                if let Some(user) = player_entity.controller {
+                                    if let Some(user) = server.get_user(user) {
+                                        user.set_screen(
+                                            *screen,
+                                            vec![
+                                                (
+                                                    InventoryProvider::Entity(player.0),
+                                                    InventoryView::from_range(0..10),
+                                                ),
+                                                (
+                                                    InventoryProvider::Block(block_position),
+                                                    view.clone(),
+                                                ),
+                                            ],
+                                        );
+                                    }
                                 }
                             }
                         }
                         BlockInteractAction::Pickup => {
-                            if let Some(user) = server.get_user(user.0) {
-                                if let Some(entity) = user.entity {
-                                    let block_pos = self.position.to_block_pos() + block.xyz();
-                                    let mut drops = server.destroy(block_pos);
-                                    if drops.is_empty() {
-                                        continue;
-                                    }
-                                    let entity = server.get_entity(entity).unwrap();
-                                    let mut entity_inventory = entity.inventory.write();
-                                    let view = entity_inventory.full_view();
-                                    for item in drops {
-                                        if let Some(rest) = entity_inventory.add_item(&view, item) {
-                                            server.spawn_item(
-                                                rest,
-                                                block_pos.to_pos()
-                                                    + Pos {
-                                                        x: 0.5,
-                                                        y: 0.5,
-                                                        z: 0.5,
-                                                    },
-                                            );
-                                        }
+                            if let Some(entity) = server.get_entity(player.0) {
+                                let block_pos = self.position.to_block_pos() + block.xyz();
+                                let mut drops = server.destroy(block_pos);
+                                if drops.is_empty() {
+                                    continue;
+                                }
+                                let mut entity_inventory = entity.inventory.write();
+                                let view = entity_inventory.full_view();
+                                for item in drops {
+                                    if let Some(rest) = entity_inventory.add_item(&view, item) {
+                                        server.spawn_item(
+                                            rest,
+                                            block_pos.to_pos()
+                                                + Pos {
+                                                    x: 0.5,
+                                                    y: 0.5,
+                                                    z: 0.5,
+                                                },
+                                        );
                                     }
                                 }
                             }
                         }
                     }
                 }
+                BlockEvent::PlantHarvest { player } => {}
             }
         }
         for (offset, machine) in &self.components.machine.read().components {
@@ -441,8 +445,8 @@ impl Chunk {
     }
 }
 
-pub struct UserIndexSave(pub UserIndex);
-impl Serialize for UserIndexSave {
+pub struct EntityIndexSave(pub EntityIndex);
+impl Serialize for EntityIndexSave {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -450,7 +454,7 @@ impl Serialize for UserIndexSave {
         serializer.serialize_unit()
     }
 }
-impl<'de> Deserialize<'de> for UserIndexSave {
+impl<'de> Deserialize<'de> for EntityIndexSave {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -458,7 +462,7 @@ impl<'de> Deserialize<'de> for UserIndexSave {
         struct DefaultVisitor;
 
         impl<'de> serde::de::Visitor<'de> for DefaultVisitor {
-            type Value = UserIndexSave;
+            type Value = EntityIndexSave;
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str("unit")
             }
@@ -466,19 +470,19 @@ impl<'de> Deserialize<'de> for UserIndexSave {
             where
                 E: serde::de::Error,
             {
-                Ok(UserIndexSave(slotmap::Key::null()))
+                Ok(EntityIndexSave(slotmap::Key::null()))
             }
         }
         deserializer.deserialize_unit(DefaultVisitor)
     }
 }
-impl Into<UserIndex> for UserIndexSave {
-    fn into(self) -> UserIndex {
+impl Into<EntityIndex> for EntityIndexSave {
+    fn into(self) -> EntityIndex {
         self.0
     }
 }
-impl From<UserIndex> for UserIndexSave {
-    fn from(value: UserIndex) -> Self {
+impl From<EntityIndex> for EntityIndexSave {
+    fn from(value: EntityIndex) -> Self {
         Self(value)
     }
 }
@@ -490,7 +494,10 @@ pub enum BlockEvent {
         damage_type: DamageType,
     },
     PlayerInteract {
-        user: UserIndexSave,
+        player: EntityIndexSave,
+    },
+    PlantHarvest {
+        player: EntityIndexSave,
     },
 }
 
@@ -501,7 +508,7 @@ pub enum EntityEvent {
         damage_type: DamageType,
     },
     PlayerInteract {
-        user: UserIndexSave,
+        user: EntityIndexSave,
     },
     Teleport {
         position: Pos,
@@ -520,7 +527,8 @@ pub struct Entity {
     pub position: Pos,
     pub inventory: RwLock<Inventory>,
     pub events: Mutex<SmallVec<[EntityEvent; 4]>>,
-    pub controller: Option<UserIndexSave>, //breaks on load
+    #[serde(default, skip_serializing, skip_deserializing)]
+    pub controller: Option<UserIndex>,
     pub state: Mutex<InternalEntityState>,
 }
 #[derive(Serialize, Deserialize)]
@@ -583,7 +591,7 @@ impl Entity {
                     damage,
                     damage_type,
                 } => {
-                    let damage = damage * entity_data.damage_table[damage_type];
+                    let damage = damage * entity_data.damage_table[damage_type].unwrap_or(1.);
                     state.health -= damage;
                     if state.health <= 0. {
                         if self.key.text_id() != "player" {
@@ -594,28 +602,24 @@ impl Entity {
                 EntityEvent::PlayerInteract { user } => match self.key.data().interact_action {
                     EntityInteractAction::Ignore => {}
                     EntityInteractAction::Pickup => {
-                        if let Some(user) = server.get_user(user.0) {
-                            if let Some(player_entity) =
-                                user.entity.and_then(|entity| server.get_entity(entity))
-                            {
-                                let (mut inventory, mut player_inventory) =
-                                    lock_inventories(&self.inventory, &player_entity.inventory);
-                                let mut items_present = false;
-                                for slot in &mut inventory.items {
-                                    if let Some(item) = &slot {
-                                        let view = player_inventory.full_view();
-                                        *slot = player_inventory.add_item(&view, item.clone());
-                                        if slot.is_some() {
-                                            items_present = true;
-                                        }
+                        if let Some(player_entity) = server.get_entity(user.0) {
+                            let (mut inventory, mut player_inventory) =
+                                lock_inventories(&self.inventory, &player_entity.inventory);
+                            let mut items_present = false;
+                            for slot in &mut inventory.items {
+                                if let Some(item) = &slot {
+                                    let view = player_inventory.full_view();
+                                    *slot = player_inventory.add_item(&view, item.clone());
+                                    if slot.is_some() {
+                                        items_present = true;
                                     }
                                 }
-                                for i in 0..inventory.items.len() {
-                                    inventory.slot_changed(i);
-                                }
-                                if !items_present {
-                                    self.schedule_event(EntityEvent::Remove);
-                                }
+                            }
+                            for i in 0..inventory.items.len() {
+                                inventory.slot_changed(i);
+                            }
+                            if !items_present {
+                                self.schedule_event(EntityEvent::Remove);
                             }
                         }
                     }
@@ -736,7 +740,7 @@ impl Entity {
         } else {
             if state.velocity.length_squared() > 0. {
                 server.send_message(
-                    self.controller.as_ref().unwrap().0,
+                    self.controller.unwrap(),
                     NetworkMessageS2C::Knockback {
                         velocity: state.velocity,
                     },
@@ -860,7 +864,9 @@ impl Into<ClientBlockPlants> for &BlockPlants {
                 .iter()
                 .map(|(plant, growth)| {
                     let plant_data = plant.data();
-                    let stage = ((*growth * plant_data.stages.len() as f32) as usize)
+                    let stage = (((*growth / plant_data.growth_length)
+                        * plant_data.stages.len() as f32)
+                        as usize)
                         .min(plant_data.stages.len() - 1);
                     (*plant, stage as u8)
                 })

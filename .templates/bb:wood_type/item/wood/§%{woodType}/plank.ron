@@ -1,0 +1,5 @@
+(
+    action: Place([(block:"wood.§%{woodType}.plank", use_count: 4),(block:"wood.§%{woodType}.plank_slab", use_count: 2),(block:"wood.§%{woodType}.plank_stair", use_count: 3)]),
+    model: Block("wood.§%{woodType}.plank"),
+    stack_size: 20,
+)

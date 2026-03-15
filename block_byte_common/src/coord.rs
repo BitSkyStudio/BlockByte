@@ -718,7 +718,7 @@ impl Ray {
         let dir = self.direction;
 
         // Max ray length comes from direction magnitude
-        let max_dist = (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z).sqrt();
+        let max_dist = dir.length();
         if max_dist == 0.0 {
             return None;
         }
@@ -855,7 +855,7 @@ impl Ray {
         };
 
         // Clamp to ray length
-        if t_hit < 0.0 || t_hit > max_dist {
+        if t_hit < 0.0 || t_hit > 1. {
             return None;
         }
 

@@ -1,0 +1,5 @@
+(
+    action: Place([(block:"wood.§%{woodType}.log"),(block:"wood.§%{woodType}.slab")]),
+    model: Block("wood.§%{woodType}.log"),
+    stack_size: 20,
+)

@@ -55,7 +55,11 @@ impl UIElementType {
             ),
             "label" => UIElementType::Label(node.text().unwrap().to_string()),
             "image" => UIElementType::Image(
-                TextureKey::id(node.attribute("texture").unwrap()).unwrap(),
+                {
+                    let texture = node.attribute("texture").unwrap();
+                    TextureKey::id(texture)
+                        .ok_or_else(|| anyhow!("texture {} not found", texture))?
+                },
                 node.attribute("width")
                     .and_then(|n| n.parse().ok())
                     .unwrap(),
@@ -487,7 +491,8 @@ impl StretchTexture {
             None => (text, 0),
         };
         Ok(StretchTexture {
-            texture: TextureKey::id(texture).ok_or_else(|| anyhow!("not found"))?,
+            texture: TextureKey::id(texture)
+                .ok_or_else(|| anyhow!("texture {} not found", texture))?,
             border,
         })
     }

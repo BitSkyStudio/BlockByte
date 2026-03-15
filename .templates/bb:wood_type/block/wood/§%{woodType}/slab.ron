@@ -1,10 +1,14 @@
 (
-    render_data: Model("rotate_half;oak_log"),
-    health: Some((health: 5., health_regen: 0.05, table: ())),
+    render_data: Model("slab;wood.§%{woodType}_bark"),
+    health: (
+        health: 5., 
+        health_regen: 0.05, 
+        table: ()
+    ),
     loot_table: Own((
         entries: [
             (
-                item: "wood",
+                item: "wood.§%{woodType}.log",
                 chance: 1.,
             )
         ]

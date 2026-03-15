@@ -1,0 +1,28 @@
+(
+    render_data: Full(
+        faces: (
+            front: "wood.§%{woodType}_plank",
+            back: "wood.§%{woodType}_plank",
+            left: "wood.§%{woodType}_plank",
+            right: "wood.§%{woodType}_plank",
+            down: "wood.§%{woodType}_plank",
+            up: "wood.§%{woodType}_plank",
+        ),
+    ),
+    health: (
+        health: 5., 
+        health_regen: 0.05, 
+        table: ()
+    ),
+    loot_table: Own((
+        entries: [
+            (
+                item: "wood.§%{woodType}.plank",
+                chance: 1.,
+                modifiers: [
+                    SetCount(Constant(4))
+                ],
+            )
+        ]
+    )),
+)

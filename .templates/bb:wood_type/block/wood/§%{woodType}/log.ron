@@ -1,0 +1,25 @@
+(
+    render_data: Full(
+        faces: (
+            front: "wood.§%{woodType}_bark",
+            back: "wood.§%{woodType}_bark",
+            left: "wood.§%{woodType}_bark",
+            right: "wood.§%{woodType}_bark",
+            down: "wood.§%{woodType}_bark",
+            up: "wood.§%{woodType}_bark",
+        ),
+    ),
+    health: (
+        health: 5., 
+        health_regen: 0.05, 
+        table: ()
+    ),
+    loot_table: Own((
+        entries: [
+            (
+                item: "wood.§%{woodType}.log",
+                chance: 1.,
+            )
+        ]
+    )),
+)

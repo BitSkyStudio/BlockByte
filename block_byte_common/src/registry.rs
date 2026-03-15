@@ -12,6 +12,7 @@ use image_overlay::overlay_dyn_img;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
+use ron::extensions::Extensions;
 use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -66,6 +67,9 @@ impl<T> Default for LoadRegistry<T> {
 }
 impl<T> LoadRegistry<T> {
     fn register(&mut self, id: String, data: PathBuf) -> Key<T> {
+        if self.id_map.contains_key(&id) {
+            panic!("double registration of {}", id);
+        }
         self.id_list.push(id.clone());
         self.data_list.push(data);
         let key = Key(
@@ -120,6 +124,7 @@ macro_rules! create_registries{
             let mut load_registry = LoadRegistryStorage {
                 $($id: LoadRegistry::default(),)*
             };
+            let mut encountered_error = false;
             $({
                 let mut groups = HashMap::new();
                 for asset_path in asset_paths{
@@ -154,25 +159,32 @@ macro_rules! create_registries{
                 for id in groups.keys() {
                     let mut entries = HashSet::new();
                     //todo: missing error handling
-                    fn recursively_load(registry: &LoadRegistry<$type>, groups: &HashMap<String, String>, entries: &mut HashSet<Key<$type>>, id: &str){
+                    fn recursively_load(registry: &LoadRegistry<$type>, groups: &HashMap<String, String>, entries: &mut HashSet<Key<$type>>, id: &str, encountered_error: &mut bool){
                         for line in groups.get(id).unwrap().lines(){
                             if line.is_empty(){
                                 continue;
                             }
                             if line.starts_with("#"){
-                                recursively_load(registry, groups, entries, &line[1..]);
+                                recursively_load(registry, groups, entries, &line[1..], encountered_error);
                             } else {
-                                entries.insert(registry.id_map.get(line).cloned().unwrap());
+                                match registry.id_map.get(line).cloned(){
+                                    Some(id) => {
+                                        entries.insert(id);
+                                    }
+                                    None => {
+                                        eprintln!("error loading {} tag {} - {} not found", stringify!($id), id, line);
+                                        *encountered_error = true;
+                                    }
+                                }
                             }
                         }
                     }
-                    recursively_load(&load_registry.$id, &groups, &mut entries, &id);
+                    recursively_load(&load_registry.$id, &groups, &mut entries, &id, &mut encountered_error);
                     load_registry.$id.register_group(id.to_string(), entries);
                 }
             })*
             LOAD_REGISTRIES.set(load_registry).ok().unwrap();
             let load_registry = LOAD_REGISTRIES.get().unwrap();
-            let mut encountered_error = false;
             let registries = RegistryStorage {
                 $($id: {
                     let load_registry = &load_registry.$id;
@@ -278,7 +290,10 @@ where
 
 impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
     fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
-        ron::from_str::<T>(std::fs::read_to_string(config).unwrap().as_str())
+        let data = std::fs::read_to_string(config).unwrap();
+        ron::Options::default()
+            .with_default_extension(Extensions::IMPLICIT_SOME)
+            .from_str::<T>(&data)
             .map_err(|error| anyhow::anyhow!("{}", error))
     }
 }
@@ -492,6 +507,7 @@ fn full_aabb() -> Vec<crate::coord::AABB<f32>> {
 }
 #[derive(Deserialize)]
 pub struct BlockData {
+    #[serde(default)]
     pub health: Option<BlockHealthData>,
     #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
@@ -881,7 +897,6 @@ pub type EntityKey = Key<EntityData>;
 
 #[derive(Deserialize)]
 pub struct PlantData {
-    #[cfg(feature = "client")]
     pub stages: Vec<TextureKey>,
     #[cfg(feature = "client")]
     pub size: f32,
@@ -892,6 +907,8 @@ pub struct PlantData {
     #[cfg(feature = "client")]
     pub translation: f32,
     pub growth_length: f32,
+    #[serde(default)]
+    pub harvest_reset: f32,
     pub harvest_loot: OwnOrKey<LootTableData>,
     pub break_loot: OwnOrKey<LootTableData>,
 }
@@ -971,12 +988,19 @@ impl<'de> Deserialize<'de> for ModelInstance {
                 E: serde::de::Error,
             {
                 let mut split = v.split(";");
-                let model = ModelKey::id(split.next().unwrap()).unwrap();
+                let model = split.next().unwrap();
+                let model = ModelKey::id(model).ok_or_else(|| {
+                    serde::de::Error::custom(format!("model {} not found", model))
+                })?;
                 Ok(ModelInstance {
                     model,
                     textures: split
-                        .map(|texture| TextureKey::id(texture).unwrap())
-                        .collect(),
+                        .map(|texture| {
+                            TextureKey::id(texture).ok_or_else(|| {
+                                serde::de::Error::custom(format!("texture {} not found", texture))
+                            })
+                        })
+                        .collect::<Result<Vec<TextureKey>, E>>()?,
                 })
             }
         }

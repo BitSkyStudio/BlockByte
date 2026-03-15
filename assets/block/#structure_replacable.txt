@@ -1,4 +1,4 @@
 air
-nature.leaves
 nature.rock
-nature.stick
+wood.oak.leaves
+wood.oak.stick
