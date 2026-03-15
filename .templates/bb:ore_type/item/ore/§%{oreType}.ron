@@ -1,0 +1,4 @@
+(
+    model: Model("stone;ore.§%{oreType}_chunk"),
+    stack_size: 20,
+)

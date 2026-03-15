@@ -1,5 +1,0 @@
-(
-    action: Place([(block:"nature.stone")]),
-    model: Block("nature.stone"),
-    stack_size: 20,
-)

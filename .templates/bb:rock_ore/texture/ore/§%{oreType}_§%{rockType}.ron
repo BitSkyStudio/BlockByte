@@ -1,0 +1,11 @@
+Overlay(
+    base: Image("rock.§%{rockType}"),
+    overlay: Color(
+        base: Image("ore_mask"),
+        color: (
+            r: §%{oreColorR},
+            g: §%{oreColorG},
+            b: §%{oreColorB},
+        )
+    )
+)

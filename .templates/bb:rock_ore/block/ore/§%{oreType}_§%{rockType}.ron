@@ -1,0 +1,31 @@
+(
+    render_data: Full(
+        faces: (
+            front: "ore.§%{oreType}_§%{rockType}",
+            back: "ore.§%{oreType}_§%{rockType}",
+            left: "ore.§%{oreType}_§%{rockType}",
+            right: "ore.§%{oreType}_§%{rockType}",
+            down: "ore.§%{oreType}_§%{rockType}",
+            up: "ore.§%{oreType}_§%{rockType}",
+        ),
+    ),
+    health: (health: 5., health_regen: 0.05, table: ()),
+    loot_table: Own((
+        entries: [
+            (
+                item: "rock.§%{rockType}.stone",
+                chance: 1.,
+                modifiers: [
+                    SetCount(Constant(4))
+                ]
+            ),
+            (
+                item: "ore.§%{oreType}",
+                chance: 1.,
+                modifiers: [
+                    SetCount(Constant(2))
+                ]
+            )
+        ]
+    )),
+)

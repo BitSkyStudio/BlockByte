@@ -1,0 +1,8 @@
+Color(
+    base: Image("ore_chunk"),
+    color: (
+        r: §%{oreColorR},
+        g: §%{oreColorG},
+        b: §%{oreColorB},
+    )
+)

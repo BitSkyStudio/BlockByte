@@ -1,10 +1,10 @@
 (
-    render_data: Model("rock"),
+    render_data: Model("stone;rock.§%{rockType}"),
     health: (health: 5., health_regen: 0.05, table: (Pierce: 2.)),
     loot_table: Own((
         entries: [
             (
-                item: "rock",
+                item: "rock.§%{rockType}.stone",
                 chance: 1.,
             )
         ]

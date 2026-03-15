@@ -49,9 +49,9 @@ impl UIElementType {
                         if child.is_text() {
                             return None;
                         }
-                        Some(UIElement::parse(&child).unwrap())
+                        Some(UIElement::parse(&child))
                     })
-                    .collect(),
+                    .collect::<anyhow::Result<Vec<UIElement>>>()?,
             ),
             "label" => UIElementType::Label(node.text().unwrap().to_string()),
             "image" => UIElementType::Image(

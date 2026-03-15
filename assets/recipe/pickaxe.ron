@@ -1,6 +1,6 @@
 (
     inputs: {
-        "rock": 1,
+        "rock.limestone.stone": 1,
         "wood.oak.stick": 1,
     },
     outputs: Own((

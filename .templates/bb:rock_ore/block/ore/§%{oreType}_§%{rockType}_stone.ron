@@ -1,0 +1,24 @@
+(
+    render_data: Model("stone;ore.§%{oreType}_§%{rockType}"),
+    health: (health: 5., health_regen: 0.05, table: (Pierce: 2.)),
+    loot_table: Own((
+        entries: [
+            (
+                item: "rock.§%{rockType}.stone",
+                chance: 1.,
+            ),
+            (
+                item: "ore.§%{oreType}",
+                chance: 1.,
+                modifiers: [
+                    SetCount(Constant(1))
+                ]
+            )
+        ]
+    )),
+    rotation: Horizontal,
+    item_scale: 0.6,
+    interact_action: Pickup,
+    collision: [],
+    selection: [(0.2, 0, 0.2, 0.8, 0.2, 0.8)],
+)

@@ -3,118 +3,115 @@
         chance: 1.,
         blocks: {
         (1, 0, 0): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (2, 0, -1): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (1, 0, -2): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (1, 1, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, 1, 0): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (1, 0, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (-1, 0, 0): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (-1, 0, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, 0, 1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, 0, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (-1, 1, 0): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, 0, -2): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (-1, 0, 1): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (-2, 0, 0): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (0, 0, 0): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, 1, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
-
-
-
         (1, -1, 0): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (2, -1, -1): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (1, -1, -2): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (1, -1, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (-1, -1, 0): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (-1, -1, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, -1, 1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, -1, -1): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (0, -1, -2): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
         (-1, -1, 1): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (-2, -1, 0): (
-            block: "nature.cobblestone",
+            block: "rock.limestone.cobble",
             rotation: (0),
         ),
         (0, -1, 0): (
-            block: "nature.stone",
+            block: "rock.limestone.rock",
             rotation: (0),
         ),
     })]

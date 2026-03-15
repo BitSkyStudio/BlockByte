@@ -1,7 +1,7 @@
 <box style="position: absolute;inset-bottom: 10;width:100%;align-content: center;flex-direction: column;">
     <box style="align-self: center;flex-direction: column;">
     <box style="background: wood.oak_bark;width: 40%;height: 20;align-self: flex-start;margin: 5;">
-        <box style="background: stone;width: health%;"/>
+        <box style="background: rock.limestone;width: health%;"/>
     </box>
     <box style="justify-content: center;gap-column: 10;">
         <slot id="0" class="slot" style="[hotbar_slot=0]background:slot_selected;"/>

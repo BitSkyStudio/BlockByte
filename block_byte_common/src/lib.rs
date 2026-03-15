@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{coord::Pos, registry::ItemKey};
+use serde_default_utils::*;
 
 pub mod coord;
 pub mod model;
@@ -56,6 +57,7 @@ pub struct Color {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+    #[serde(default = "default_u8::<255>")]
     pub a: u8,
 }
 impl Color {

@@ -1,10 +1,10 @@
 (
-    render_data: Model("stair;cobblestone"),
-    health: Some((health: 5., health_regen: 0.05, table: ())),
+    render_data: Model("stair;rock.§%{rockType}_cobble"),
+    health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
         entries: [
             (
-                item: "rock",
+                item: "rock.§%{rockType}.stone",
                 chance: 1.,
                 modifiers: [
                     SetCount(Constant(3))

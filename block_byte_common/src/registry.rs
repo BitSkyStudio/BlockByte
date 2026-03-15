@@ -812,6 +812,10 @@ enum ComposedTexture {
         base: Box<ComposedTexture>,
         overlay: Box<ComposedTexture>,
     },
+    Color {
+        base: Box<ComposedTexture>,
+        color: Color,
+    },
 }
 impl ComposedTexture {
     pub fn resolve(&self, texture_path: &Path) -> Arc<DynamicImage> {
@@ -829,6 +833,17 @@ impl ComposedTexture {
                 let overlay = overlay.resolve(texture_path);
                 overlay_dyn_img(&mut base, &overlay, 0, 0, image_overlay::BlendMode::Normal);
                 Arc::new(base)
+            }
+            ComposedTexture::Color { base, color } => {
+                let mut base = Arc::unwrap_or_clone(base.resolve(texture_path));
+                let mut base = base.to_rgba8();
+                for pixel in base.pixels_mut() {
+                    for (i, v) in Into::<[u8; 4]>::into(*color).into_iter().enumerate() {
+                        let p = pixel.0[i] as u16 * v as u16;
+                        pixel.0[i] = ((p + 1 + (p >> 8)) >> 8) as u8;
+                    }
+                }
+                Arc::new(base.into())
             }
         }
     }
