@@ -139,51 +139,43 @@ pub enum NetworkMessageS2C {
         research: HashSet<ResearchKey>,
     },
 }
+impl NetworkMessageS2C {
+    pub fn is_block_related(&self) -> bool {
+        match self {
+            NetworkMessageS2C::LoadChunk { .. }
+            | NetworkMessageS2C::UnloadChunk { .. }
+            | NetworkMessageS2C::SetBlock { .. }
+            | NetworkMessageS2C::UpdateBlockComponents { .. } => true,
+            _ => false,
+        }
+    }
+}
 
 pub fn make_connection_config() -> ConnectionConfig {
     ConnectionConfig {
-        available_bytes_per_tick: 60000,
+        available_bytes_per_tick: 30000,
         server_channels_config: vec![
             ChannelConfig {
                 channel_id: 0,
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::Unreliable,
-            },
-            ChannelConfig {
-                channel_id: 1,
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::ReliableUnordered {
+                max_memory_usage_bytes: 1 * 1024 * 1024,
+                send_type: SendType::ReliableOrdered {
                     resend_time: Duration::from_millis(300),
                 },
             },
             ChannelConfig {
-                channel_id: 2,
+                channel_id: 1,
                 max_memory_usage_bytes: 10 * 1024 * 1024,
                 send_type: SendType::ReliableOrdered {
                     resend_time: Duration::from_millis(300),
                 },
             },
         ],
-        client_channels_config: vec![
-            ChannelConfig {
-                channel_id: 0,
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::Unreliable,
+        client_channels_config: vec![ChannelConfig {
+            channel_id: 0,
+            max_memory_usage_bytes: 1 * 1024 * 1024,
+            send_type: SendType::ReliableOrdered {
+                resend_time: Duration::from_millis(300),
             },
-            ChannelConfig {
-                channel_id: 1,
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::ReliableUnordered {
-                    resend_time: Duration::from_millis(300),
-                },
-            },
-            ChannelConfig {
-                channel_id: 2,
-                max_memory_usage_bytes: 5 * 1024 * 1024,
-                send_type: SendType::ReliableOrdered {
-                    resend_time: Duration::from_millis(300),
-                },
-            },
-        ],
+        }],
     }
 }

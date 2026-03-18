@@ -7,7 +7,7 @@ use std::{
 };
 
 use block_byte_common::{
-    Color, DamageType, InventoryView, LookDirection,
+    CharacterController, Color, DamageType, InventoryView, LookDirection, MoveMode,
     coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Orientation, Pos},
     net::NetworkMessageS2C,
     registry::{
@@ -533,7 +533,7 @@ pub struct Entity {
 }
 #[derive(Serialize, Deserialize)]
 pub struct InternalEntityState {
-    pub velocity: Pos,
+    pub character_controller: CharacterController,
     pub teleport: Option<Pos>,
     pub removed: bool,
     pub hand_slot: usize,
@@ -562,7 +562,7 @@ impl Entity {
             events: Mutex::new(SmallVec::new()),
             controller: None,
             state: Mutex::new(InternalEntityState {
-                velocity: Pos::ZERO,
+                character_controller: CharacterController::new(),
                 removed: false,
                 teleport: None,
                 hand_slot: 0,
@@ -631,13 +631,25 @@ impl Entity {
                     state.removed = true;
                 }
                 EntityEvent::Knockback { knockback } => {
-                    state.velocity += knockback;
+                    state.character_controller.velocity += knockback;
                 }
             }
         }
         if self.controller.is_none() {
             let hitbox = self.key.data().hitbox();
-            let mut movement = state.velocity;
+            let mut new_position = self.position;
+            state.character_controller.tick(
+                &mut new_position,
+                1. / server.tps as f32,
+                |block| server.get_block(block),
+                Pos::ZERO,
+                MoveMode::Normal,
+                hitbox,
+            );
+            if new_position != self.position && state.teleport.is_none() {
+                state.teleport = Some(new_position);
+            }
+            /*let mut movement = state.velocity;
             movement.y -= 10. * server.delta_time();
 
             let mut friction = 0.;
@@ -736,16 +748,16 @@ impl Entity {
                 None => {}
             }
 
-            state.velocity = movement;
+            state.velocity = movement;*/
         } else {
-            if state.velocity.length_squared() > 0. {
+            if state.character_controller.velocity.length_squared() > 0. {
                 server.send_message(
                     self.controller.unwrap(),
                     NetworkMessageS2C::Knockback {
-                        velocity: state.velocity,
+                        velocity: state.character_controller.velocity,
                     },
                 );
-                state.velocity = Pos::ZERO;
+                state.character_controller.velocity = Pos::ZERO;
             }
         }
         {

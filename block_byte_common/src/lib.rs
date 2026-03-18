@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{coord::Pos, registry::ItemKey};
+use crate::{
+    coord::{AABB, BlockPos, Pos},
+    registry::{BlockEntry, ItemKey},
+};
 use serde_default_utils::*;
 
 pub mod coord;
@@ -20,6 +23,7 @@ pub enum MoveMode {
 pub struct PlayerAbilities {
     pub move_mode: MoveMode,
     pub speed: f32,
+    pub max_stamina: f32,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ClientItem {
@@ -191,3 +195,125 @@ macro_rules! create_damage_types {
     };
 }
 create_damage_types!(Blunt, Pierce, Slash, Cut);
+
+#[derive(Serialize, Deserialize)]
+pub struct CharacterController {
+    pub velocity: Pos,
+    pub on_ground: bool,
+}
+impl CharacterController {
+    pub fn new() -> CharacterController {
+        CharacterController {
+            velocity: Pos::ZERO,
+            on_ground: false,
+        }
+    }
+    pub fn tick(
+        &mut self,
+        position: &mut Pos,
+        delta_time: f32,
+        block_query: impl Fn(BlockPos) -> Option<BlockEntry>,
+        move_vector: Pos,
+        move_mode: MoveMode,
+        hitbox: AABB<f32>,
+    ) {
+        match move_mode {
+            MoveMode::Normal => {
+                self.velocity.y -= 25. * delta_time;
+            }
+            MoveMode::Fly | MoveMode::NoClip => {}
+        }
+        let ground_multiplier = if self.on_ground { 1. } else { 0.5 };
+        let acceleration = ground_multiplier * 40.;
+        let mut error = (move_vector - self.velocity);
+        match move_mode {
+            MoveMode::Normal => {
+                error.y = 0.;
+            }
+            MoveMode::Fly | MoveMode::NoClip => {}
+        }
+        if error.length() > 0. {
+            self.velocity += (error.normalize() * (error.length().min(acceleration * delta_time)));
+        }
+        self.velocity *= ((1_f32 - 0.1 * ground_multiplier).powf(delta_time));
+        let total_move = self.velocity * delta_time;
+        match move_mode {
+            MoveMode::Normal | MoveMode::Fly => {
+                if !Self::collides_at(
+                    *position
+                        + Pos {
+                            x: total_move.x,
+                            y: 0.,
+                            z: 0.,
+                        },
+                    &block_query,
+                    hitbox,
+                ) {
+                    position.x += total_move.x;
+                } else {
+                    self.velocity.x = 0.;
+                }
+                if !Self::collides_at(
+                    *position
+                        + Pos {
+                            x: 0.,
+                            y: total_move.y,
+                            z: 0.,
+                        },
+                    &block_query,
+                    hitbox,
+                ) {
+                    position.y += total_move.y;
+                    self.on_ground = false;
+                } else {
+                    self.on_ground = self.velocity.y < 0.;
+                    self.velocity.y = 0.;
+                }
+                if !Self::collides_at(
+                    *position
+                        + Pos {
+                            x: 0.,
+                            y: 0.,
+                            z: total_move.z,
+                        },
+                    &block_query,
+                    hitbox,
+                ) {
+                    position.z += total_move.z;
+                } else {
+                    self.velocity.z = 0.;
+                }
+            }
+            MoveMode::NoClip => {
+                *position += total_move;
+            }
+        }
+    }
+    fn collides_at(
+        position: Pos,
+        block_query: &impl Fn(BlockPos) -> Option<BlockEntry>,
+        hitbox: AABB<f32>,
+    ) -> bool {
+        let player_collider = hitbox.offset(position);
+        let player_block_collider = player_collider.to_block();
+        for block in player_block_collider {
+            match block_query(block) {
+                Some(block_entry) => {
+                    let block_collider = &block_entry.block.data().collision;
+                    for block_collider in block_collider {
+                        if player_collider.intersects(
+                            block_entry
+                                .rotation
+                                .rotate_aabb(*block_collider)
+                                .offset(block.to_pos()),
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+                None => return false,
+            }
+        }
+        false
+    }
+}

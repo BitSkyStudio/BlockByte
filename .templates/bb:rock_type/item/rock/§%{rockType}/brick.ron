@@ -1,0 +1,5 @@
+(
+    action: Place([(block:"rock.§%{rockType}.bricks", use_count: 4)]),
+    model: Model("brick;rock.§%{rockType}"),
+    stack_size: 80,
+)

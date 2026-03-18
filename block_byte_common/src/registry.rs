@@ -472,20 +472,20 @@ pub enum ItemModel {
 pub struct ToolData {
     pub damage: f32,
     pub swing_time: f32,
-    pub hit_time: f32,
     pub damage_type: DamageType,
     pub reach: f32,
     pub knockback: f32,
+    pub stamina: f32,
 }
 impl ToolData {
     pub fn hand() -> ToolData {
         ToolData {
             damage: 1.,
             swing_time: 0.5,
-            hit_time: 0.25,
             damage_type: DamageType::Blunt,
             reach: 7.,
             knockback: 2.,
+            stamina: 10.,
         }
     }
 }

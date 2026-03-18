@@ -1,0 +1,24 @@
+(
+    render_data: Full(
+        faces: (
+            front: "rock.§%{rockType}_bricks",
+            back: "rock.§%{rockType}_bricks",
+            left: "rock.§%{rockType}_bricks",
+            right: "rock.§%{rockType}_bricks",
+            down: "rock.§%{rockType}_bricks",
+            up: "rock.§%{rockType}_bricks",
+        ),
+    ),
+    health: (health: 5., health_regen: 0.05, table: ()),
+    loot_table: Own((
+        entries: [
+            (
+                item: "rock.§%{rockType}.brick",
+                chance: 1.,
+                modifiers: [
+                    SetCount(Constant(4))
+                ]
+            )
+        ]
+    )),
+)

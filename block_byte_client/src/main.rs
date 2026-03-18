@@ -17,7 +17,8 @@ use std::{
 use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities, TexCoords,
+    CharacterController, ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities,
+    TexCoords,
     coord::{
         AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos, Ray,
         Vec3,
@@ -94,6 +95,7 @@ fn main() {
             player_abilities: PlayerAbilities {
                 move_mode: MoveMode::Normal,
                 speed: 1.,
+                max_stamina: 100.,
             },
             mspt: 0.,
         })
@@ -147,10 +149,10 @@ impl ApplicationHandler for App {
         match event {
             DeviceEvent::MouseMotion { delta } => {
                 if self.game.screen.is_none() {
-                    let sensitivity = 0.4;
+                    let sensitivity = 0.6;
                     self.camera.update_orientation(
-                        -delta.1 as f32 * sensitivity,
-                        delta.0 as f32 * sensitivity,
+                        -delta.1 as f32 * sensitivity * 0.022,
+                        delta.0 as f32 * sensitivity * 0.022,
                     );
                 }
             }
@@ -200,14 +202,14 @@ impl ApplicationHandler for App {
                             }
                         }
                         if key_code == KeyCode::KeyE && self.game.screen.is_none() {
-                            match self.camera.raycast(&self.game) {
+                            match self.camera.raycast(&self.game, false) {
                                 RayCastResult::Empty => {}
                                 RayCastResult::Block(position, _) => {
                                     let block = self.game.get_block(position).unwrap().block.data();
                                     match &block.interact_action {
                                         BlockInteractAction::Ignore => {}
                                         _ => {
-                                            self.game.viewmodel_player.trigger("build");
+                                            self.game.viewmodel_player.trigger("interact");
                                             self.send_message(NetworkMessageC2S::InteractBlock {
                                                 position,
                                             });
@@ -220,7 +222,7 @@ impl ApplicationHandler for App {
                                     match &entity_data.interact_action {
                                         EntityInteractAction::Ignore => {}
                                         _ => {
-                                            self.game.viewmodel_player.trigger("build");
+                                            self.game.viewmodel_player.trigger("interact");
                                             self.send_message(NetworkMessageC2S::InteractEntity {
                                                 entity,
                                             });
@@ -322,43 +324,14 @@ impl ApplicationHandler for App {
                 device_id,
                 state,
                 button,
-            } => {
-                match state {
-                    ElementState::Pressed => {
-                        self.game.buttons.press(button);
-                    }
-                    ElementState::Released => {
-                        self.game.buttons.release(button);
-                    }
+            } => match state {
+                ElementState::Pressed => {
+                    self.game.buttons.press(button);
                 }
-                if state == ElementState::Pressed && self.game.screen.is_none() {
-                    match (self.camera.raycast(&self.game), button) {
-                        (RayCastResult::Block(position, face), MouseButton::Right) => {
-                            if let Some(hand_item) =
-                                self.game.held_item().as_ref().map(|item| item.item)
-                            {
-                                match &hand_item.data().action {
-                                    ItemAction::Ignore => {}
-                                    _ => {
-                                        self.game.viewmodel_player.trigger("build");
-                                        self.send_message(NetworkMessageC2S::PlaceBlock {
-                                            position,
-                                            face,
-                                            variant: self
-                                                .game
-                                                .item_variation
-                                                .get(&hand_item)
-                                                .cloned()
-                                                .unwrap_or(0),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
+                ElementState::Released => {
+                    self.game.buttons.release(button);
                 }
-            }
+            },
             WindowEvent::RedrawRequested => {
                 let dt = self.last_update.elapsed().as_secs_f32();
                 self.last_update = Instant::now();
@@ -368,6 +341,13 @@ impl ApplicationHandler for App {
                 // It's preferable for applications that do not render continuously to render in
                 // this event rather than in AboutToWait, since rendering in here allows
                 // the program to gracefully handle redraws requested by the OS.
+
+                self.game
+                    .hud
+                    .properties
+                    .0
+                    .insert("stamina".to_string(), self.game.stamina);
+                self.game.stamina = self.game.stamina.min(self.player_abilities.max_stamina);
 
                 self.render_state
                     .as_ref()
@@ -397,6 +377,7 @@ impl ApplicationHandler for App {
                     &mut damage_mesh,
                     &frustum,
                     dt,
+                    &self.connection,
                 );
                 {
                     let viewmodel_light = Matrix4::from_angle_x(Rad(self.camera.direction.pitch))
@@ -425,7 +406,7 @@ impl ApplicationHandler for App {
                         self.game.player_position.z,
                         1. / dt,
                         self.mspt,
-                        match self.camera.raycast(&self.game) {
+                        match self.camera.raycast(&self.game, true) {
                             RayCastResult::Block(position, face) =>
                                 format!("looking at {:?} {:?} ", position, face),
                             _ => String::new(),
@@ -522,6 +503,35 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                if self.game.buttons.is_just_down(MouseButton::Right) && self.game.screen.is_none()
+                {
+                    match self.camera.raycast(&self.game, true) {
+                        RayCastResult::Block(position, face) => {
+                            if let Some(hand_item) =
+                                self.game.held_item().as_ref().map(|item| item.item)
+                            {
+                                match &hand_item.data().action {
+                                    ItemAction::Ignore => {}
+                                    _ => {
+                                        self.game.viewmodel_player.trigger("build");
+                                        self.send_message(NetworkMessageC2S::PlaceBlock {
+                                            position,
+                                            face,
+                                            variant: self
+                                                .game
+                                                .item_variation
+                                                .get(&hand_item)
+                                                .cloned()
+                                                .unwrap_or(0),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 let render_state = self.render_state.as_mut().unwrap();
 
                 if self.game.screen.is_none() {
@@ -542,7 +552,7 @@ impl ApplicationHandler for App {
                         Color::WHITE,
                     );
 
-                    if let Some(tooltip) = match self.camera.raycast(&self.game) {
+                    if let Some(tooltip) = match self.camera.raycast(&self.game, false) {
                         RayCastResult::Empty => None,
                         RayCastResult::Block(pos, face) => self
                             .game
@@ -582,6 +592,7 @@ impl ApplicationHandler for App {
                         );
                     }
                 }
+
                 match render_state.render(
                     &self.camera,
                     &self.game,
@@ -612,14 +623,14 @@ impl ApplicationHandler for App {
                         && self.game.hit_timer.is_none()
                         && self.game.screen.is_none()
                     {
-                        self.game.hit_timer = Some(0.);
+                        let stamina_cost = self.game.active_tool().stamina;
+                        if self.game.stamina >= stamina_cost {
+                            self.game.stamina -= stamina_cost;
+                            self.game.hit_timer = Some(0.);
+                        }
                     }
-                    self.camera.update_position(
-                        dt,
-                        &self.game,
-                        &self.player_abilities,
-                        self.game.get_player_data(),
-                    );
+                    self.camera
+                        .update_position(dt, &mut self.game, &self.player_abilities);
                     self.game.player_position = self.camera.position;
                     self.send_message(NetworkMessageC2S::PlayerPosition {
                         position: self.camera.position,
@@ -629,9 +640,10 @@ impl ApplicationHandler for App {
                     if let Some(hit_timer) = self.game.hit_timer {
                         let new_hit_timer = hit_timer + dt;
                         let active_tool = self.game.active_tool();
-                        if hit_timer < active_tool.hit_time && new_hit_timer >= active_tool.hit_time
+                        if hit_timer < active_tool.swing_time * 0.5
+                            && new_hit_timer >= active_tool.swing_time * 0.5
                         {
-                            match self.camera.raycast(&self.game) {
+                            match self.camera.raycast(&self.game, true) {
                                 RayCastResult::Block(position, face) => {
                                     self.send_message(NetworkMessageC2S::AttackBlock {
                                         position,
@@ -656,7 +668,7 @@ impl ApplicationHandler for App {
                             self.game.hit_timer = None;
                         }
                     }
-                    while let Ok(mut message) = self.connection.rx.try_recv() {
+                    while let Ok((mut message, time)) = self.connection.rx.try_recv() {
                         match message {
                             NetworkMessageS2C::LoadChunk {
                                 position,
@@ -752,7 +764,7 @@ impl ApplicationHandler for App {
                                 if let Some(entity) = self.game.entities.get_mut(&uuid) {
                                     entity.previous_position = entity.position;
                                     entity.previous_direction = entity.direction;
-                                    entity.update_timestamp = Instant::now();
+                                    entity.update_timestamp = time;
                                     entity.position = position;
                                     entity.direction = direction;
                                 }
@@ -834,7 +846,7 @@ impl ApplicationHandler for App {
                                 }
                             }
                             NetworkMessageS2C::Knockback { velocity } => {
-                                self.camera.velocity += velocity;
+                                self.camera.controller.velocity += velocity;
                             }
                             NetworkMessageS2C::UpdateResearch { research } => {
                                 self.game.researched = research;
@@ -1092,19 +1104,17 @@ pub enum RayCastResult {
 }
 pub struct ClientPlayer {
     pub position: Pos,
-    pub velocity: Pos,
     pub direction: LookDirection,
-    pub on_ground: bool,
+    pub controller: CharacterController,
     pub running: bool,
 }
 impl Default for ClientPlayer {
     fn default() -> Self {
         ClientPlayer {
             position: Pos::ZERO,
-            velocity: Pos::ZERO,
             direction: LookDirection { pitch: 0., yaw: 0. },
-            on_ground: false,
             running: false,
+            controller: CharacterController::new(),
         }
     }
 }
@@ -1131,7 +1141,7 @@ impl ClientPlayer {
                 z: 0.,
             }
     }
-    pub fn raycast(&self, world: &ClientGame) -> RayCastResult {
+    pub fn raycast(&self, world: &ClientGame, ignore_plants: bool) -> RayCastResult {
         let ray = Ray {
             position: self.get_eye(world.get_player_data()),
             direction: self.direction.make_front() * world.active_tool().reach,
@@ -1170,43 +1180,45 @@ impl ClientPlayer {
                 }
             }
         }
-        //todo: this lookup should probably be smarter
-        for chunk_position in (AABB {
-            min: ChunkPos::all(-1),
-            max: ChunkPos::all(1),
-        })
-        .offset(ray.position.to_chunk_pos())
-        {
-            if let Some(chunk) = world.chunks.get(&chunk_position) {
-                for (offset, plants) in &chunk.components.plant.components {
-                    for (i, plant) in plants.plants.iter().enumerate() {
-                        let plant_data = plant.0.data();
-                        let block_position = chunk_position.to_block_pos() + offset.xyz();
-                        let aabb = AABB {
-                            min: Pos {
-                                x: -plant_data.size / 2.,
-                                y: 0.,
-                                z: -plant_data.size / 2.,
-                            },
-                            max: Pos {
-                                x: plant_data.size / 2.,
-                                y: plant_data.height,
-                                z: plant_data.size / 2.,
-                            },
-                        }
-                        .offset(
-                            block_position.to_pos()
-                                + Pos {
-                                    x: 0.5,
-                                    y: 1.,
-                                    z: 0.5,
+        if !ignore_plants {
+            //todo: this lookup should probably be smarter
+            for chunk_position in (AABB {
+                min: ChunkPos::all(-1),
+                max: ChunkPos::all(1),
+            })
+            .offset(ray.position.to_chunk_pos())
+            {
+                if let Some(chunk) = world.chunks.get(&chunk_position) {
+                    for (offset, plants) in &chunk.components.plant.components {
+                        for (i, plant) in plants.plants.iter().enumerate() {
+                            let plant_data = plant.0.data();
+                            let block_position = chunk_position.to_block_pos() + offset.xyz();
+                            let aabb = AABB {
+                                min: Pos {
+                                    x: -plant_data.size / 2.,
+                                    y: 0.,
+                                    z: -plant_data.size / 2.,
                                 },
-                        );
-                        if let Some(result) = ray.aabb_raycast(aabb) {
-                            let distance = result.position.distance(ray.position);
-                            if distance < min_distance {
-                                min_distance = distance;
-                                raycast_result = RayCastResult::Plant(block_position, i);
+                                max: Pos {
+                                    x: plant_data.size / 2.,
+                                    y: plant_data.height,
+                                    z: plant_data.size / 2.,
+                                },
+                            }
+                            .offset(
+                                block_position.to_pos()
+                                    + Pos {
+                                        x: 0.5,
+                                        y: 1.,
+                                        z: 0.5,
+                                    },
+                            );
+                            if let Some(result) = ray.aabb_raycast(aabb) {
+                                let distance = result.position.distance(ray.position);
+                                if distance < min_distance {
+                                    min_distance = distance;
+                                    raycast_result = RayCastResult::Plant(block_position, i);
+                                }
                             }
                         }
                     }
@@ -1218,10 +1230,10 @@ impl ClientPlayer {
     pub fn update_position(
         &mut self,
         delta_time: f32,
-        game: &ClientGame,
+        game: &mut ClientGame,
         abilities: &PlayerAbilities,
-        player_entity_data: Option<&EntityData>,
     ) {
+        let player_entity_data = game.get_player_data();
         let mut forward =
             cgmath::Vector3::new(self.direction.yaw.sin(), 0., -self.direction.yaw.cos());
         use cgmath::InnerSpace;
@@ -1254,116 +1266,42 @@ impl ClientPlayer {
         }
         move_vector *= abilities.speed;
         move_vector *= 4.5 * 1.2;
-        let running = game.keys.is_down(KeyCode::ControlLeft);
-        self.running = running && move_vector.length_squared() > 0.;
-        move_vector *= if running { 1.5 } else { 1. };
+        self.running = game.keys.is_down(KeyCode::ControlLeft);
+        if move_vector.length_squared() == 0. {
+            self.running = false;
+        }
+        if self.running {
+            game.stamina -= delta_time * 15.;
+            if game.stamina <= 0. {
+                game.stamina = 0.;
+                self.running = false;
+            }
+        }
+        move_vector *= if self.running { 1.5 } else { 1. };
         match abilities.move_mode {
             MoveMode::Normal => {
                 if game.keys.is_down(KeyCode::ShiftLeft) {
                     move_vector /= 2.;
                 }
-                if game.keys.is_down(KeyCode::Space) && self.on_ground {
-                    self.velocity.y += 8.2;
+                if game.keys.is_down(KeyCode::Space) && self.controller.on_ground {
+                    self.controller.velocity.y += 8.2;
                 }
-                self.velocity.y -= 25. * delta_time;
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }
-        let acceleration = if self.on_ground { 1. } else { 0.5 } * 40.;
-        let mut error = (move_vector - self.velocity);
-        match abilities.move_mode {
-            MoveMode::Normal => {
-                error.y = 0.;
-            }
-            MoveMode::Fly | MoveMode::NoClip => {}
-        }
-        if error.length() > 0. {
-            self.velocity += (error.normalize() * (error.length().min(acceleration * delta_time)));
-        }
-        let total_move = self.velocity * delta_time;
-        match abilities.move_mode {
-            MoveMode::Normal | MoveMode::Fly => {
-                if !Self::collides_at(
-                    self.position
-                        + Pos {
-                            x: total_move.x,
-                            y: 0.,
-                            z: 0.,
-                        },
-                    game,
-                    player_entity_data,
-                ) {
-                    self.position.x += total_move.x;
-                } else {
-                    self.velocity.x = 0.;
-                }
-                if !Self::collides_at(
-                    self.position
-                        + Pos {
-                            x: 0.,
-                            y: total_move.y,
-                            z: 0.,
-                        },
-                    game,
-                    player_entity_data,
-                ) {
-                    self.position.y += total_move.y;
-                    self.on_ground = false;
-                } else {
-                    self.on_ground = self.velocity.y < 0.;
-                    self.velocity.y = 0.;
-                }
-                if !Self::collides_at(
-                    self.position
-                        + Pos {
-                            x: 0.,
-                            y: 0.,
-                            z: total_move.z,
-                        },
-                    game,
-                    player_entity_data,
-                ) {
-                    self.position.z += total_move.z;
-                } else {
-                    self.velocity.z = 0.;
-                }
-            }
-            MoveMode::NoClip => {
-                self.position += total_move;
-            }
-        }
-    }
-    fn collides_at(
-        position: Pos,
-        world: &ClientGame,
-        player_entity_data: Option<&EntityData>,
-    ) -> bool {
-        match player_entity_data {
-            Some(player_entity_data) => {
-                let player_collider = player_entity_data.hitbox().offset(position);
-                let player_block_collider = player_collider.to_block();
-                for block in player_block_collider {
-                    match world.get_block(block) {
-                        Some(block_entry) => {
-                            let block_collider = &block_entry.block.data().collision;
-                            for block_collider in block_collider {
-                                if player_collider.intersects(
-                                    block_entry
-                                        .rotation
-                                        .rotate_aabb(*block_collider)
-                                        .offset(block.to_pos()),
-                                ) {
-                                    return true;
-                                }
-                            }
-                        }
-                        None => return false,
-                    }
-                }
-                false
-            }
-            None => true,
-        }
+        self.controller.tick(
+            &mut self.position,
+            delta_time,
+            |block| game.get_block(block),
+            move_vector,
+            abilities.move_mode,
+            player_entity_data
+                .map(|entity_data| entity_data.hitbox())
+                .unwrap_or(AABB {
+                    min: Pos::ZERO,
+                    max: Pos::ZERO,
+                }),
+        );
     }
     fn eye_height_diff(&self) -> f32 {
         2. - 0.15
@@ -1441,6 +1379,8 @@ pub struct ClientGame {
         std::sync::mpsc::Receiver<(ChunkPos, Option<(Buffer, u32)>, u64)>,
     ),
     pub researched: HashSet<ResearchKey>,
+    pub stamina: f32,
+    pub place_message: Option<NetworkMessageC2S>,
 }
 impl Default for ClientGame {
     fn default() -> Self {
@@ -1467,6 +1407,8 @@ impl Default for ClientGame {
             viewmodel_player: AnimationPlayer::new(viewmodel_graph()),
             swap_hand_item: None,
             researched: HashSet::new(),
+            stamina: 0.,
+            place_message: None,
         }
     }
 }
@@ -1521,6 +1463,7 @@ impl ClientGame {
         damage_mesh: &mut DamageMesh,
         frustum: &Frustum,
         dt: f32,
+        connection: &ClientConnection,
     ) {
         /*let animation = if self.equip_animation > 0. {
             Some(DrawAnimation {
@@ -1567,13 +1510,18 @@ impl ClientGame {
             });
             animation.push(DrawAnimation {
                 animation: "hit",
-                time,
+                time: time / 2.,
                 weight: 1. - weight,
             });
         }
         for observer in observers {
             if observer == "swap_hand_item" {
                 self.swap_hand_item = self.held_item().clone();
+            }
+            if observer == "place" {
+                if let Some(message) = self.place_message.take() {
+                    connection.tx.send(message);
+                }
             }
         }
         if (self.viewmodel_player.current_animation == "idle"
@@ -1672,7 +1620,9 @@ impl ClientGame {
                 continue;
             }
             let lerp_time = (entity.update_timestamp.elapsed().as_secs_f32() / (1. / 40.)).min(1.);
-            let position = entity.previous_position.lerp(entity.position, lerp_time);
+            let position = entity
+                .previous_position
+                .lerp(entity.position, lerp_time + 1.);
             let rotation = -block_byte_common::coord::lerp_number(
                 entity.previous_direction.yaw,
                 entity.direction.yaw,
@@ -1875,94 +1825,97 @@ impl ClientGame {
         }
 
         if let Some(held_item) = self.held_item() {
-            match &held_item.item.data().action {
-                ItemAction::Place(place_block) => match camera.raycast(self) {
-                    RayCastResult::Block(position, face) => {
-                        let place_block = &place_block[self
-                            .item_variation
-                            .get(&held_item.item)
-                            .cloned()
-                            .unwrap_or(0)];
-                        let block_position = position + face.get_block_offset();
-                        let mut blocked = place_block.use_count > held_item.count;
-                        for entity in self.entities.values() {
-                            if entity
-                                .key
-                                .data()
-                                .hitbox()
-                                .offset(entity.position)
-                                .to_block()
-                                .contains(block_position)
-                            {
-                                blocked = true;
-                                break;
-                            }
-                        }
-                        let (chunk, offset) = block_position.to_chunk_pos_offset();
-                        if let Some(chunk) = self.chunks.get(&chunk) {
-                            let block = chunk
-                                .mesh_build_data
-                                .blocks
-                                .read()
-                                .get(offset.index())
-                                .unwrap()
-                                .block;
-                            if block == air_block() {
-                                let rotation = place_block
-                                    .block
+            if self.keys.is_down(KeyCode::AltLeft) {
+                match &held_item.item.data().action {
+                    ItemAction::Place(place_block) => match camera.raycast(self, true) {
+                        RayCastResult::Block(position, face) => {
+                            let place_block = &place_block[self
+                                .item_variation
+                                .get(&held_item.item)
+                                .cloned()
+                                .unwrap_or(0)];
+                            let block_position = position + face.get_block_offset();
+                            let mut blocked = place_block.use_count > held_item.count;
+                            for entity in self.entities.values() {
+                                if entity
+                                    .key
                                     .data()
-                                    .rotation
-                                    .from_look_direction(camera.direction);
-                                let orientation: Orientation = rotation.into();
-                                let right = orientation.right.get_offset();
-                                let up = orientation.up.get_offset();
-                                let front = orientation.forward.get_offset();
-                                render::draw_block_model(
-                                    place_block.block,
-                                    Matrix4::from_translation(Vector3::new(
-                                        block_position.x as f32 + 0.5,
-                                        block_position.y as f32 + 0.5,
-                                        block_position.z as f32 + 0.5,
-                                    )) * Matrix4::from_cols(
-                                        Vector4::new(right.x, right.y, right.z, 0.),
-                                        Vector4::new(up.x, up.y, up.z, 0.),
-                                        Vector4::new(-front.x, -front.y, -front.z, 0.),
-                                        Vector4::new(0., 0., 0., 1.),
-                                    ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
-                                    &mut |position, tex_coords, normals| {
-                                        entity_mesh.vertices.push(Vertex {
-                                            position,
-                                            tex_coords,
-                                            normals,
-                                            color: if blocked {
-                                                Color {
-                                                    r: 255,
-                                                    g: 100,
-                                                    b: 100,
-                                                    a: 100,
+                                    .hitbox()
+                                    .offset(entity.position)
+                                    .to_block()
+                                    .contains(block_position)
+                                {
+                                    blocked = true;
+                                    break;
+                                }
+                            }
+                            let (chunk, offset) = block_position.to_chunk_pos_offset();
+                            if let Some(chunk) = self.chunks.get(&chunk) {
+                                let block = chunk
+                                    .mesh_build_data
+                                    .blocks
+                                    .read()
+                                    .get(offset.index())
+                                    .unwrap()
+                                    .block;
+                                if block == air_block() {
+                                    let rotation = place_block
+                                        .block
+                                        .data()
+                                        .rotation
+                                        .from_look_direction(camera.direction);
+                                    let orientation: Orientation = rotation.into();
+                                    let right = orientation.right.get_offset();
+                                    let up = orientation.up.get_offset();
+                                    let front = orientation.forward.get_offset();
+                                    render::draw_block_model(
+                                        place_block.block,
+                                        Matrix4::from_translation(Vector3::new(
+                                            block_position.x as f32 + 0.5,
+                                            block_position.y as f32 + 0.5,
+                                            block_position.z as f32 + 0.5,
+                                        )) * Matrix4::from_cols(
+                                            Vector4::new(right.x, right.y, right.z, 0.),
+                                            Vector4::new(up.x, up.y, up.z, 0.),
+                                            Vector4::new(-front.x, -front.y, -front.z, 0.),
+                                            Vector4::new(0., 0., 0., 1.),
+                                        ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
+                                        &mut |position, tex_coords, normals| {
+                                            entity_mesh.vertices.push(Vertex {
+                                                position,
+                                                tex_coords,
+                                                normals,
+                                                color: if blocked {
+                                                    Color {
+                                                        r: 255,
+                                                        g: 100,
+                                                        b: 100,
+                                                        a: 100,
+                                                    }
+                                                } else {
+                                                    Color {
+                                                        r: 255,
+                                                        g: 255,
+                                                        b: 255,
+                                                        a: 150,
+                                                    }
                                                 }
-                                            } else {
-                                                Color {
-                                                    r: 255,
-                                                    g: 255,
-                                                    b: 255,
-                                                    a: 150,
-                                                }
-                                            }
-                                            .into(),
-                                        });
-                                    },
-                                );
+                                                .into(),
+                                            });
+                                        },
+                                    );
+                                }
                             }
                         }
-                    }
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
+                }
             }
         }
     }
     pub fn tick_server(&mut self, dt: f32) {
+        self.stamina += dt * 10.;
         for (_, chunk) in &mut self.chunks {
             chunk
                 .components
@@ -2477,6 +2430,13 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         inverted: false,
                         reset: true,
                         to: "place".to_string(),
+                        time: 0.0,
+                    },
+                    AnimationTransition {
+                        condition: "interact".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "interact".to_string(),
                         time: 0.1,
                     },
                     AnimationTransition {
@@ -2493,13 +2453,6 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         to: "running".to_string(),
                         time: 0.25,
                     },
-                    AnimationTransition {
-                        condition: "empty_hand".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "down".to_string(),
-                        time: 0.25,
-                    },
                 ],
                 observers: vec![],
             },
@@ -2510,9 +2463,29 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                 next: "idle".to_string(),
                 model_animation: "place".to_string(),
                 length: 0.38,
+                speed: 2.,
+                transitions: vec![AnimationTransition {
+                    condition: "build".to_string(),
+                    inverted: false,
+                    reset: true,
+                    to: "place".to_string(),
+                    time: 0.05,
+                }],
+                observers: vec![
+                    //(0.1, "place".to_string()),
+                    (0.1, "swap_hand_item".to_string()),
+                ],
+            },
+        );
+        animations.insert(
+            "interact".to_string(),
+            AnimationNode {
+                next: "idle".to_string(),
+                model_animation: "place".to_string(),
+                length: 0.38,
                 speed: 1.,
                 transitions: vec![],
-                observers: vec![(0.13, "swap_hand_item".to_string())],
+                observers: vec![(0.1, "swap_hand_item".to_string())],
             },
         );
         animations.insert(
@@ -2527,7 +2500,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                     reset: true,
                     inverted: false,
                     to: "equip".to_string(),
-                    time: 0.1,
+                    time: 0.,
                 }],
                 observers: vec![(0.25, "swap_hand_item".to_string())],
             },
@@ -2552,6 +2525,13 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         inverted: false,
                         reset: true,
                         to: "place".to_string(),
+                        time: 0.,
+                    },
+                    AnimationTransition {
+                        condition: "interact".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "interact".to_string(),
                         time: 0.1,
                     },
                     AnimationTransition {
@@ -2561,46 +2541,6 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         to: "equip".to_string(),
                         time: 0.1,
                     },
-                ],
-                observers: vec![],
-            },
-        );
-        animations.insert(
-            "down".to_string(),
-            AnimationNode {
-                next: "down".to_string(),
-                model_animation: "down".to_string(),
-                length: 1.,
-                speed: 1.,
-                transitions: vec![
-                    AnimationTransition {
-                        condition: "empty_hand".to_string(),
-                        reset: true,
-                        inverted: true,
-                        to: "idle".to_string(),
-                        time: 0.25,
-                    },
-                    AnimationTransition {
-                        condition: "run".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "running".to_string(),
-                        time: 0.25,
-                    },
-                    AnimationTransition {
-                        condition: "build".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "place".to_string(),
-                        time: 0.1,
-                    },
-                    /*AnimationTransition {
-                        condition: "equip".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "equip".to_string(),
-                        time: 0.1,
-                    },*/
                 ],
                 observers: vec![],
             },
@@ -2612,7 +2552,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
     })
 }
 pub struct ClientConnection {
-    rx: std::sync::mpsc::Receiver<NetworkMessageS2C>,
+    rx: std::sync::mpsc::Receiver<(NetworkMessageS2C, Instant)>,
     tx: std::sync::mpsc::Sender<NetworkMessageC2S>,
     state: Arc<Mutex<ClientConnectionState>>,
 }
@@ -2647,7 +2587,7 @@ impl ClientConnection {
                 let mut transport =
                     NetcodeClientTransport::new(current_time, authentication, socket).unwrap();
                 loop {
-                    let delta_time_duration = Duration::from_secs_f32(1. / 60.);
+                    let delta_time_duration = Duration::from_secs_f32(1. / 250.);
                     match { *state.lock() } {
                         ClientConnectionState::Connecting => {
                             if client.is_connected() {
@@ -2656,20 +2596,20 @@ impl ClientConnection {
                         }
                         ClientConnectionState::Connected => {
                             while let Ok(message) = c2s_rx.try_recv() {
-                                client.send_message(
-                                    DefaultChannel::ReliableOrdered,
-                                    serde_cbor::to_vec(&message).unwrap(),
-                                );
+                                client.send_message(0, serde_cbor::to_vec(&message).unwrap());
                             }
                             client.update(delta_time_duration);
-                            while let Some(mut message) =
-                                client.receive_message(DefaultChannel::ReliableOrdered)
+                            let client = RefCell::new(&mut client);
+                            for mut message in
+                                std::iter::from_fn(|| client.borrow_mut().receive_message(0)).chain(
+                                    std::iter::from_fn(|| client.borrow_mut().receive_message(1)),
+                                )
                             {
                                 let mut message = &message[..];
                                 let mut rdr = lz4_flex::frame::FrameDecoder::new(&mut message);
                                 let message: NetworkMessageS2C =
                                     serde_cbor::from_reader(&mut rdr).unwrap();
-                                s2c_tx.send(message);
+                                s2c_tx.send((message, Instant::now()));
                             }
                         }
                         ClientConnectionState::Disconnect => break,
@@ -2679,6 +2619,7 @@ impl ClientConnection {
                         transport.update(delta_time_duration, &mut client).unwrap();
                         transport.send_packets(&mut client).unwrap();
                     } else {
+                        println!("disconnect {:?}", client.disconnect_reason());
                         *state.lock() = ClientConnectionState::Disconnected;
                         return;
                     }

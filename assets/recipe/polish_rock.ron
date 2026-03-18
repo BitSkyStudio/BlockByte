@@ -1,0 +1,13 @@
+(
+    inputs: {
+        "rock.limestone.stone": 1,
+    },
+    outputs: Own((
+        entries: [
+            (
+                item: "rock.limestone.brick",
+                chance: 1.,
+            )
+        ]
+    )),
+)

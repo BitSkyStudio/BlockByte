@@ -1,19 +1,24 @@
 <box style="position: absolute;inset-bottom: 10;width:100%;align-content: center;flex-direction: column;">
     <box style="align-self: center;flex-direction: column;">
-    <box style="background: wood.oak_bark;width: 40%;height: 20;align-self: flex-start;margin: 5;">
-        <box style="background: rock.limestone;width: health%;"/>
-    </box>
-    <box style="justify-content: center;gap-column: 10;">
-        <slot id="0" class="slot" style="[hotbar_slot=0]background:slot_selected;"/>
-        <slot id="1" class="slot" style="[hotbar_slot=1]background:slot_selected;"/>
-        <slot id="2" class="slot" style="[hotbar_slot=2]background:slot_selected;"/>
-        <slot id="3" class="slot" style="[hotbar_slot=3]background:slot_selected;"/>
-        <slot id="4" class="slot" style="[hotbar_slot=4]background:slot_selected;"/>
-        <slot id="5" class="slot" style="[hotbar_slot=5]background:slot_selected;"/>
-        <slot id="6" class="slot" style="[hotbar_slot=6]background:slot_selected;"/>
-        <slot id="7" class="slot" style="[hotbar_slot=7]background:slot_selected;"/>
-        <slot id="8" class="slot" style="[hotbar_slot=8]background:slot_selected;"/>
-        <slot id="9" class="slot" style="[hotbar_slot=9]background:slot_selected;"/>
-    </box>
+        <box>
+            <box style="background: wood.oak_bark;width: 50%;height: 20;align-self: flex-start;margin: 5;">
+                <box style="background: rock.limestone;width: health%;"/>
+            </box>
+            <box style="background: wood.oak_bark;width: 50%;height: 20;align-self: flex-start;margin: 5;">
+                <box style="background: rock.limestone;width: stamina%;"/>
+            </box>
+        </box>
+        <box style="justify-content: center;gap-column: 10;">
+            <slot id="0" class="slot" style="[hotbar_slot=0]background:slot_selected;"/>
+            <slot id="1" class="slot" style="[hotbar_slot=1]background:slot_selected;"/>
+            <slot id="2" class="slot" style="[hotbar_slot=2]background:slot_selected;"/>
+            <slot id="3" class="slot" style="[hotbar_slot=3]background:slot_selected;"/>
+            <slot id="4" class="slot" style="[hotbar_slot=4]background:slot_selected;"/>
+            <slot id="5" class="slot" style="[hotbar_slot=5]background:slot_selected;"/>
+            <slot id="6" class="slot" style="[hotbar_slot=6]background:slot_selected;"/>
+            <slot id="7" class="slot" style="[hotbar_slot=7]background:slot_selected;"/>
+            <slot id="8" class="slot" style="[hotbar_slot=8]background:slot_selected;"/>
+            <slot id="9" class="slot" style="[hotbar_slot=9]background:slot_selected;"/>
+        </box>
     </box>
 </box>

@@ -131,6 +131,10 @@ fn main() {
         for (user, spawn_position) in player_spawns.drain(..) {
             let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
             let full_view = entity.inventory.get_mut().full_view();
+            entity.inventory.get_mut().add_item(
+                &full_view,
+                ItemStack::new(ItemKey::id("arrow").unwrap(), 20),
+            );
             /*entity
                 .inventory
                 .get_mut()
@@ -163,6 +167,10 @@ fn main() {
                 .inventory
                 .get_mut()
                 .add_item(&full_view, ItemStack::new(ItemKey::id("wood").unwrap(), 20));*/
+            entity.inventory.get_mut().add_item(
+                &full_view,
+                ItemStack::new(ItemKey::id("rock.limestone.stone").unwrap(), 80),
+            );
             entity.controller = Some(user);
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
@@ -186,6 +194,7 @@ fn main() {
                     abilities: PlayerAbilities {
                         move_mode: MoveMode::Normal,
                         speed: 1.,
+                        max_stamina: 100.,
                     },
                 },
             );
@@ -253,9 +262,7 @@ fn main() {
         let mut view_chunk_chunk_changed_users: HashMap<UserIndex, (ChunkPos, ChunkPos)> =
             HashMap::new();
         for (user_id, user) in &server.users {
-            while let Some(message) =
-                network_server.receive_message(user.client_id, DefaultChannel::ReliableOrdered)
-            {
+            while let Some(message) = network_server.receive_message(user.client_id, 0) {
                 let message: NetworkMessageC2S = serde_cbor::from_slice(&message).unwrap();
                 let find_entity_next_to_player = |entity_id: Uuid| {
                     for chunk in (AABB {
@@ -473,7 +480,9 @@ fn main() {
                                     damage_type: tool.damage_type,
                                 });
                                 entity.events.get_mut().push(EntityEvent::Knockback {
-                                    knockback: knockback_direction * tool.knockback,
+                                    knockback: (knockback_direction + Pos::Y * 0.3)
+                                        * tool.knockback
+                                        * 5.,
                                 });
                             }
                         }
@@ -507,7 +516,8 @@ fn main() {
                             let mut throw_velocity =
                                 entity.state.get_mut().direction.make_front() * throw_force;
                             throw_velocity.y = 0.1;
-                            item_entity.state.get_mut().velocity = throw_velocity;
+                            item_entity.state.get_mut().character_controller.velocity =
+                                throw_velocity;
                             item_entity.inventory.get_mut().items[0] = Some(drop_item);
                             server.spawn_entity(item_entity);
                         }
@@ -956,41 +966,44 @@ fn main() {
 
         chunk_viewing_manager.manage(&mut server, &database, &world_generator);
 
-        {
-            let mut skipping_users = HashSet::new();
-            server.message_queue.0.get_mut().retain(|(user, message)| {
-                if skipping_users.contains(user) {
-                    return true;
-                }
-                let client_id = match server.users.get(*user) {
-                    Some(user) => user.client_id,
-                    None => return false,
-                };
-                //idk why it is broken and needs + 1000
-                if network_server
-                    .channel_available_memory(client_id, DefaultChannel::ReliableOrdered)
-                    < message.len() + 1000
-                {
-                    skipping_users.insert(*user);
-                    return true;
-                }
-                network_server.send_message(
-                    client_id,
-                    DefaultChannel::ReliableOrdered,
-                    message.clone(),
-                );
-                false
-            });
-        }
-
         network_server.broadcast_message(
-            DefaultChannel::ReliableOrdered,
+            0,
             MessageQueue::encode_message(NetworkMessageS2C::GameTick {
                 ticks_passed: server.ticks_passed,
                 dt: server.delta_time(),
                 mspt: tick_start_time.elapsed().as_secs_f32() * 1000.,
             }),
         );
+
+        {
+            let mut skipping_users = HashSet::new();
+            server
+                .message_queue
+                .0
+                .get_mut()
+                .retain(|(user, message, block_related)| {
+                    let client_id = match server.users.get(*user) {
+                        Some(user) => user.client_id,
+                        None => return false,
+                    };
+                    if *block_related {
+                        if skipping_users.contains(user) {
+                            return true;
+                        }
+                        //1000 buffer for broadcast message
+                        if network_server.channel_available_memory(client_id, 1)
+                            < message.len() + 1000
+                        {
+                            skipping_users.insert(*user);
+                            return true;
+                        }
+                        network_server.send_message(client_id, 1, message.clone());
+                    } else {
+                        network_server.send_message(client_id, 0, message.clone());
+                    }
+                    false
+                });
+        }
 
         network_transport.send_packets(&mut network_server);
 
@@ -1005,7 +1018,7 @@ fn main() {
     }
 }
 #[derive(Default)]
-pub struct MessageQueue(Mutex<Vec<(UserIndex, renet::Bytes)>>);
+pub struct MessageQueue(Mutex<Vec<(UserIndex, renet::Bytes, bool)>>);
 impl MessageQueue {
     pub fn encode_message(message: NetworkMessageS2C) -> Bytes {
         let mut wtr = lz4_flex::frame::FrameEncoder::new(Vec::new());
@@ -1017,10 +1030,11 @@ impl MessageQueue {
         users: impl Iterator<Item = T>,
         message: NetworkMessageS2C,
     ) {
+        let block_related = message.is_block_related();
         let message = Self::encode_message(message);
         let mut message_queue = self.0.lock();
         for user in users {
-            message_queue.push((*user.borrow(), message.clone()));
+            message_queue.push((*user.borrow(), message.clone(), block_related));
         }
     }
 }
@@ -1070,7 +1084,7 @@ impl Server {
     }
     pub fn spawn_item(&self, item: ItemStack, position: Pos) -> Result<(), ()> {
         let mut item_entity = Entity::new(EntityKey::id("item").unwrap(), position);
-        item_entity.state.get_mut().velocity = Pos {
+        item_entity.state.get_mut().character_controller.velocity = Pos {
             x: rand::random::<f32>() * 2. - 1.,
             y: rand::random::<f32>(),
             z: rand::random::<f32>() * 2. - 1.,
@@ -1389,7 +1403,7 @@ impl ChunkViewingManager {
                         .message_queue
                         .0
                         .get_mut()
-                        .push((*user, load_message.clone()));
+                        .push((*user, load_message.clone(), true));
                 }
                 server.chunks.insert(position, chunk);
 
