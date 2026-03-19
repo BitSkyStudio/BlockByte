@@ -637,12 +637,35 @@ impl Entity {
         }
         if self.controller.is_none() {
             let hitbox = self.key.data().hitbox();
+            let mut move_vector = Pos::ZERO;
+            match self.key.data().ai_tasks.get(0) {
+                Some(task) => match task {
+                    block_byte_common::registry::MobAiTask::Attack {
+                        targets,
+                        damage,
+                        damage_type,
+                    } => todo!(),
+                    block_byte_common::registry::MobAiTask::Wander => {
+                        if state.character_controller.on_ground {
+                            state.character_controller.velocity.y += 15.;
+                        }
+                        let front = state.direction.make_front();
+                        move_vector.x = front.x * 1.;
+                        move_vector.z = front.z * 1.;
+                        if rand::random_bool(1. / 40. / 5.) {
+                            state.direction.yaw =
+                                rand::random_range((0.)..(std::f32::consts::PI * 2.))
+                        }
+                    }
+                },
+                None => {}
+            }
             let mut new_position = self.position;
             state.character_controller.tick(
                 &mut new_position,
                 1. / server.tps as f32,
                 |block| server.get_block(block),
-                Pos::ZERO,
+                move_vector,
                 MoveMode::Normal,
                 hitbox,
             );

@@ -482,7 +482,7 @@ fn main() {
                                 entity.events.get_mut().push(EntityEvent::Knockback {
                                     knockback: (knockback_direction + Pos::Y * 0.3)
                                         * tool.knockback
-                                        * 5.,
+                                        * 4.,
                                 });
                             }
                         }
