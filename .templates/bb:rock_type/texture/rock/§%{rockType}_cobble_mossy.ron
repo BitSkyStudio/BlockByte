@@ -1,0 +1,4 @@
+Overlay(
+    base: Image("rock.§%{rockType}_cobble"),
+    overlay: Image("moss_mask"),
+)

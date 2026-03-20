@@ -212,7 +212,7 @@ fn main() {
                     println!("Client {client_id} connected");
                     let spawn_position = Pos {
                         x: 0.,
-                        y: 85.,
+                        y: 90.,
                         z: 0.,
                     };
                     let user = server.users.insert(User {
@@ -1310,7 +1310,6 @@ impl ChunkViewingManager {
                                 Some(entity)
                             })
                             .collect(),
-                        decorated: chunk.decorated,
                     },
                 )
             })
@@ -1335,7 +1334,6 @@ impl ChunkViewingManager {
             drop(statement);
             transaction.commit().unwrap();
         }
-        let mut to_decorate = Vec::new();
         {
             let db = db.lock();
             let mut stmt = db
@@ -1374,7 +1372,6 @@ impl ChunkViewingManager {
                                 position,
                                 viewers: HashSet::new(),
                                 entities: Vec::new(),
-                                decorated: data.decorated,
                             },
                             data.entities,
                         ),
@@ -1406,120 +1403,8 @@ impl ChunkViewingManager {
                         .push((*user, load_message.clone(), true));
                 }
                 server.chunks.insert(position, chunk);
-
-                for chunk_position in (AABB {
-                    min: ChunkPos::all(-1),
-                    max: ChunkPos::all(1),
-                }
-                .offset(position))
-                {
-                    if let Some(chunk) = server.chunks.get(&chunk_position) {
-                        if !chunk.decorated {
-                            let mut failed = false;
-                            for neighbor in (AABB {
-                                min: ChunkPos::all(-1),
-                                max: ChunkPos::all(1),
-                            }
-                            .offset(chunk_position))
-                            {
-                                if !server.chunks.contains_key(&neighbor) {
-                                    failed = true;
-                                    break;
-                                }
-                            }
-                            if !failed {
-                                to_decorate.push(chunk_position);
-                                server.chunks.get_mut(&chunk_position).unwrap().decorated = true;
-                            }
-                        }
-                    }
-                }
             }
         }
-        to_decorate.par_iter().for_each(|position| {
-            let column_data = world_generator.get_column_generation(*position);
-            use rand::SeedableRng;
-            let mut rng = StdRng::from_seed(
-                Seeder::from((world_generator.seed as u32, *position)).make_seed(),
-            );
-            let mut chunks_blocks = (AABB {
-                min: ChunkPos::all(-1),
-                max: ChunkPos::all(1),
-            })
-            .offset(*position)
-            .into_iter()
-            .map(|pos| server.get_chunk(pos).unwrap().blocks.write())
-            .collect::<Vec<_>>();
-            let block_offset_position = position.to_block_pos();
-            let viewers = &server.get_chunk(*position).unwrap().viewers;
-            let replacable_tag = KeyGroup::parse("#structure_replacable").unwrap();
-            for biome in &column_data.unique_biomes {
-                for decorator in &biome.data().decorators {
-                    for i in 0..decorator.count {
-                        if !rng.random_bool(decorator.chance as f64) {
-                            continue;
-                        }
-                        let rotation = rng.random_range(0..4);
-                        let rotation = [Face::Front, Face::Back, Face::Left, Face::Right][rotation];
-                        let rotation = Orientation::from_front_up(rotation, Face::Up).unwrap();
-                        let offset_x = rng.random_range(0..CHUNK_SIZE) as i32;
-                        let offset_z = rng.random_range(0..CHUNK_SIZE) as i32;
-                        let height =
-                            column_data.height[offset_x as usize][offset_z as usize] as i32 + 1;
-                        if column_data.biomes[offset_x as usize][offset_z as usize] != *biome {
-                            continue;
-                        }
-                        let block_position = BlockPos {
-                            x: block_offset_position.x + offset_x,
-                            y: height,
-                            z: block_offset_position.z + offset_z,
-                        };
-                        if height >= block_offset_position.y
-                            && height < block_offset_position.y + CHUNK_SIZE as i32
-                        {
-                            let structure = decorator.structure.data();
-                            for part in &structure.parts {
-                                if !rng.random_bool(part.chance as f64) {
-                                    continue;
-                                }
-                                for (offset, block) in &part.blocks {
-                                    let offset = rotation.rotate_block_pos(*offset);
-                                    let mut block = *block;
-                                    block.rotation = block.block.data().rotation.get_nearest_valid(
-                                        rotation
-                                            .compose(Into::<Orientation>::into(block.rotation))
-                                            .into(),
-                                    );
-                                    let place_position = block_position + offset;
-                                    let (place_chunk, place_chunk_offset) =
-                                        place_position.to_chunk_pos_offset();
-                                    let place_chunk = place_chunk - *position;
-                                    let place_chunk_index = (place_chunk.x + 1)
-                                        + (place_chunk.y + 1) * 3
-                                        + (place_chunk.z + 1) * 9;
-                                    if replacable_tag.contains(
-                                        chunks_blocks[place_chunk_index as usize]
-                                            .get(place_chunk_offset.index())
-                                            .unwrap()
-                                            .block,
-                                    ) {
-                                        chunks_blocks[place_chunk_index as usize]
-                                            .set(place_chunk_offset.index(), &block);
-                                        server.send_message_multiple(
-                                            viewers.iter(),
-                                            NetworkMessageS2C::SetBlock {
-                                                position: place_position,
-                                                block,
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        });
     }
 }
 

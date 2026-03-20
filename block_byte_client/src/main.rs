@@ -2473,7 +2473,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                 }],
                 observers: vec![
                     //(0.1, "place".to_string()),
-                    (0.1, "swap_hand_item".to_string()),
+                    (0.07, "swap_hand_item".to_string()),
                 ],
             },
         );

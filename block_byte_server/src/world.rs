@@ -8,12 +8,12 @@ use std::{
 
 use block_byte_common::{
     CharacterController, Color, DamageType, InventoryView, LookDirection, MoveMode,
-    coord::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPos, Orientation, Pos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::NetworkMessageS2C,
     registry::{
         BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
-        BlockMachineAction, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, PlantKey,
-        ResearchKey, air_block,
+        BlockMachineAction, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, KeyGroup,
+        PlantKey, ResearchKey, StructureKey, air_block,
     },
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
@@ -42,7 +42,6 @@ pub struct ChunkSaveData {
     pub block_events: Vec<(ChunkOffset, BlockEvent)>,
     pub components: ChunkBlockComponents,
     pub entities: Vec<Entity>,
-    pub decorated: bool,
 }
 pub struct Chunk {
     pub position: ChunkPos,
@@ -51,7 +50,6 @@ pub struct Chunk {
     pub block_events: Mutex<Vec<(ChunkOffset, BlockEvent)>>,
     pub components: ChunkBlockComponents,
     pub entities: Vec<EntityIndex>,
-    pub decorated: bool,
 }
 impl Chunk {
     pub fn generate(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
@@ -131,6 +129,60 @@ impl Chunk {
                 }
             }
         }
+        let replacable_tag = KeyGroup::parse("#structure_replacable").unwrap();
+        for neighbor_chunk in (AABB {
+            min: ChunkPos { x: -1, y: 0, z: -1 },
+            max: ChunkPos { x: 1, y: 0, z: 1 },
+        })
+        .offset(position)
+        {
+            let block_offset = neighbor_chunk.to_block_pos();
+            let column = generator.get_column_generation(neighbor_chunk);
+            for placed_structure in &column.structures {
+                let height = column.height[placed_structure.x as usize][placed_structure.z as usize]
+                    as i32
+                    + 1;
+                let block_position = BlockPos {
+                    x: block_offset.x + placed_structure.x as i32,
+                    y: height,
+                    z: block_offset.z + placed_structure.z as i32,
+                };
+                //todo: do bounding box calculations to cull
+                if
+                /*height >= block_offset.y && height < block_offset.y + CHUNK_SIZE as i32*/
+                true {
+                    let structure = placed_structure.structure.data();
+                    let rotation = [Face::Front, Face::Back, Face::Left, Face::Right]
+                        [placed_structure.rotation as usize];
+                    let rotation = Orientation::from_front_up(rotation, Face::Up).unwrap();
+                    for part in &structure.parts {
+                        //todo
+                        /*if !rng.random_bool(part.chance as f64) {
+                            continue;
+                        }*/
+                        for (offset, block) in &part.blocks {
+                            let offset = rotation.rotate_block_pos(*offset);
+                            let mut block = *block;
+                            block.rotation = block.block.data().rotation.get_nearest_valid(
+                                rotation
+                                    .compose(Into::<Orientation>::into(block.rotation))
+                                    .into(),
+                            );
+                            let place_position = block_position + offset;
+                            let (place_chunk, place_chunk_offset) =
+                                place_position.to_chunk_pos_offset();
+                            if place_chunk == position {
+                                if replacable_tag
+                                    .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
+                                {
+                                    blocks.set(place_chunk_offset.index(), &block);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         //blocks.set(ChunkOffset::new(16, 16, 16).index(), &grass);
         Chunk {
             position,
@@ -139,7 +191,6 @@ impl Chunk {
             block_events: Mutex::new(Vec::new()),
             components,
             entities: Vec::new(),
-            decorated: false,
         }
     }
     pub fn tick(&self, server: &Server) {
@@ -919,6 +970,13 @@ pub struct ChunkColumnGeneration {
     pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
     pub height: [[u16; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
     pub unique_biomes: Vec<BiomeKey>,
+    pub structures: Vec<ChunkColumnStructure>,
+}
+struct ChunkColumnStructure {
+    structure: StructureKey,
+    x: u8,
+    z: u8,
+    rotation: u8,
 }
 pub struct WorldGenerator {
     pub seed: u64,
@@ -971,10 +1029,36 @@ impl WorldGenerator {
                 splines::Key::new(120., 0.8, Interpolation::Linear),
                 splines::Key::new(200., 0., Interpolation::Linear),
             ]);
+            let unique_biomes = vec![forest];
+            use rand::SeedableRng;
+            let mut rng = StdRng::from_seed(Seeder::from((self.seed as u32, chunk)).make_seed());
+            let mut structures = Vec::new();
+            for biome in &unique_biomes {
+                for decorator in &biome.data().decorators {
+                    for i in 0..decorator.count {
+                        if !rng.random_bool(decorator.chance as f64) {
+                            continue;
+                        }
+                        let rotation = rng.random_range(0..4) as u8;
+                        let offset_x = rng.random_range(0..CHUNK_SIZE) as u8;
+                        let offset_z = rng.random_range(0..CHUNK_SIZE) as u8;
+                        if biome_map[offset_x as usize][offset_z as usize] != *biome {
+                            continue;
+                        }
+                        structures.push(ChunkColumnStructure {
+                            structure: decorator.structure,
+                            x: offset_x,
+                            z: offset_z,
+                            rotation,
+                        });
+                    }
+                }
+            }
             Arc::new(ChunkColumnGeneration {
                 biomes: biome_map,
                 height: height_map,
-                unique_biomes: vec![forest],
+                unique_biomes,
+                structures,
             })
         })
     }
