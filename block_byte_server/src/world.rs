@@ -98,7 +98,7 @@ impl Chunk {
                     }*/
                     if y_pos == height {
                         blocks.set(offset.index(), &BlockEntry::simple(biome.top_block));
-                        let spawned_plants: Vec<_> = biome
+                        let spawned_plants: SmallVec<_> = biome
                             .plants
                             .iter()
                             .filter_map(|spawner| {
@@ -940,7 +940,7 @@ impl Into<ClientBlockDamage> for &BlockDamage {
 }
 #[derive(Serialize, Deserialize)]
 pub struct BlockPlants {
-    pub plants: Vec<(PlantKey, f32)>,
+    pub plants: SmallVec<[(PlantKey, f32); 1]>,
 }
 impl Into<ClientBlockPlants> for &BlockPlants {
     fn into(self) -> ClientBlockPlants {
@@ -951,9 +951,8 @@ impl Into<ClientBlockPlants> for &BlockPlants {
                 .map(|(plant, growth)| {
                     let plant_data = plant.data();
                     let stage = (((*growth / plant_data.growth_length)
-                        * plant_data.stages.len() as f32)
-                        as usize)
-                        .min(plant_data.stages.len() - 1);
+                        * (plant_data.stages.len() - 1) as f32)
+                        as usize);
                     (*plant, stage as u8)
                 })
                 .collect(),

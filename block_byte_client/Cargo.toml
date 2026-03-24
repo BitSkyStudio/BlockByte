@@ -31,3 +31,4 @@ lz4_flex = { version = "0.12", default-features = false, features = [
     "std",
 ] }
 ahash = "0.8.12"
+smallvec = { version = "1.15.1", features = ["serde"] }

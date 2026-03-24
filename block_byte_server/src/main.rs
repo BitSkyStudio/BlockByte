@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    env::args,
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
     sync::{
@@ -35,10 +36,11 @@ use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use ron::ser::PrettyConfig;
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
+use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::{
-    inventory::{Inventory, ItemDurability, ItemStack, generate_loot_table},
+    inventory::{Inventory, ItemDurability, ItemQuality, ItemStack, generate_loot_table},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
         BlockEvent, BlockMachine, BlockPlants, Chunk, ChunkSaveData, Entity, EntityEvent,
@@ -48,13 +50,20 @@ use crate::{
 
 mod inventory;
 mod world;
+mod worldgen_vis;
 
 fn main() {
+    load_registries(&[&Path::new("assets"), &Path::new("assets_generated")]);
     /*rayon::ThreadPoolBuilder::new()
     .num_threads(8)
     .build_global()
     .unwrap();*/
-    load_registries(&[&Path::new("assets"), &Path::new("assets_generated")]);
+    if let Some(arg) = args().nth(1) {
+        if arg == "worldgen_vis" {
+            worldgen_vis::visualise();
+            return;
+        }
+    }
     let mut network_server = RenetServer::new(make_connection_config());
     const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
     let network_socket: UdpSocket = UdpSocket::bind(SERVER_ADDR).unwrap();
@@ -336,14 +345,22 @@ fn main() {
                             let entity = server.entities.get_mut(entity).unwrap();
                             let hotbar_slot = entity.state.get_mut().hand_slot;
                             let inventory = entity.inventory.get_mut();
-                            let tool = inventory.items[hotbar_slot]
-                                .as_ref()
-                                .and_then(|item| item.item.data().tool)
+                            let item = inventory.items[hotbar_slot].as_ref();
+                            let tool = item
+                                .and_then(|item| item.item.data().tool.clone())
                                 .unwrap_or(ToolData::hand());
+                            let quality_multiplier = match item {
+                                Some(item) => item
+                                    .components
+                                    .get_component::<ItemQuality>()
+                                    .map(|quality| quality.factor())
+                                    .unwrap_or(1.),
+                                None => 1.,
+                            };
                             server.schedule_block_event(
                                 position,
                                 BlockEvent::Damage {
-                                    damage: tool.damage,
+                                    damage: tool.damage * quality_multiplier,
                                     damage_type: tool.damage_type,
                                 },
                             );
@@ -410,9 +427,11 @@ fn main() {
                                                     server.get_chunk(plant_chunk_position).unwrap();
                                                 let mut chunk_plants =
                                                     plant_chunk.components.plant.write();
-                                                let plants = chunk_plants
-                                                    .get_or_init(plant_offset, || BlockPlants {
-                                                        plants: Vec::new(),
+                                                let plants =
+                                                    chunk_plants.get_or_init(plant_offset, || {
+                                                        BlockPlants {
+                                                            plants: SmallVec::new(),
+                                                        }
                                                     });
                                                 plants.plants.push((*key, 0.));
                                                 server.send_message_multiple(
@@ -469,14 +488,22 @@ fn main() {
                                     player_entity.state.get_mut().direction.make_front();
                                 let hotbar_slot = player_entity.state.get_mut().hand_slot;
                                 let inventory = player_entity.inventory.get_mut();
-                                let tool = inventory.items[hotbar_slot]
-                                    .as_ref()
-                                    .and_then(|item| item.item.data().tool)
+                                let item = inventory.items[hotbar_slot].as_ref();
+                                let tool = item
+                                    .and_then(|item| item.item.data().tool.clone())
                                     .unwrap_or(ToolData::hand());
+                                let quality_multiplier = match item {
+                                    Some(item) => item
+                                        .components
+                                        .get_component::<ItemQuality>()
+                                        .map(|quality| quality.factor())
+                                        .unwrap_or(1.),
+                                    None => 1.,
+                                };
 
                                 let entity = server.entities.get_mut(entity).unwrap();
                                 entity.events.get_mut().push(EntityEvent::Damage {
-                                    damage: tool.damage,
+                                    damage: tool.damage * quality_multiplier,
                                     damage_type: tool.damage_type,
                                 });
                                 entity.events.get_mut().push(EntityEvent::Knockback {

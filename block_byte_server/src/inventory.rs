@@ -1,8 +1,11 @@
 use std::path::Path;
 
 use block_byte_common::{
-    registry::{ItemKey, LootItemModifier, LootModifierInteger, LootTableData, LootTableKey},
     ClientItem, InventoryView,
+    registry::{
+        ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierInteger, LootTableData,
+        LootTableKey,
+    },
 };
 use parking_lot::{RwLock, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
@@ -266,7 +269,7 @@ macro_rules! create_component_enum{
     }
 }
 
-create_component_enum!(ItemDurability, ItemMana);
+create_component_enum!(ItemDurability, ItemMana, ItemQuality);
 
 pub trait ItemComponentManipulation: Sized {
     fn merge(&self, other: &Self) -> Option<Self>;
@@ -306,6 +309,43 @@ impl ItemComponentManipulation for ItemMana {
     }
     fn description(&self) -> String {
         format!("Mana: {}", self.0)
+    }
+}
+
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+pub enum ItemQuality {
+    Horrible,
+    Bad,
+    Normal,
+    Good,
+    VeryGood,
+    Excellent,
+    Masterpiece,
+    Legendary,
+}
+impl ItemQuality {
+    pub fn factor(self) -> f32 {
+        match self {
+            ItemQuality::Horrible => 0.5,
+            ItemQuality::Bad => 0.8,
+            ItemQuality::Normal => 1.,
+            ItemQuality::Good => 1.2,
+            ItemQuality::VeryGood => 1.4,
+            ItemQuality::Excellent => 1.8,
+            ItemQuality::Masterpiece => 2.5,
+            ItemQuality::Legendary => 4.,
+        }
+    }
+}
+impl ItemComponentManipulation for ItemQuality {
+    fn merge(&self, other: &Self) -> Option<Self> {
+        if *self == *other { Some(*self) } else { None }
+    }
+    fn split(&self, first_count: ItemCount, second_count: ItemCount) -> (Self, Self) {
+        (*self, *self)
+    }
+    fn description(&self) -> String {
+        format!("Quality: {:?}", self)
     }
 }
 
@@ -398,12 +438,12 @@ impl Inventory {
         }
         Some(item)
     }
-    pub fn count_item(&self, view: &InventoryView, item: ItemKey) -> ItemCount {
+    pub fn count_item(&self, view: &InventoryView, item: impl ItemMatcher) -> ItemCount {
         let mut count = 0;
         for slot in &view.slots {
             match &self.items[*slot] {
                 Some(stack) => {
-                    if stack.item == item {
+                    if item.matches(stack) {
                         count += stack.count
                     }
                 }
@@ -415,14 +455,14 @@ impl Inventory {
     pub fn remove_item(
         &mut self,
         view: &InventoryView,
-        item: ItemKey,
+        item: impl ItemMatcher,
         mut count: ItemCount,
     ) -> ItemCount {
         for slot_index in &view.slots {
             let mut slot = &mut self.items[*slot_index];
             if slot.is_some() {
                 let mut item_slot = slot.as_mut().unwrap();
-                if item_slot.item != item {
+                if !item.matches(item_slot) {
                     continue;
                 }
                 let take = count.min(item_slot.count);
@@ -438,6 +478,19 @@ impl Inventory {
             }
         }
         count
+    }
+}
+trait ItemMatcher {
+    fn matches(&self, item: &ItemStack) -> bool;
+}
+impl ItemMatcher for ItemKey {
+    fn matches(&self, item: &ItemStack) -> bool {
+        item.item == *self
+    }
+}
+impl ItemMatcher for KeyGroup<ItemData> {
+    fn matches(&self, item: &ItemStack) -> bool {
+        self.contains(item.item)
     }
 }
 pub struct LootGenerationContext {}
@@ -463,6 +516,10 @@ pub fn generate_loot_table(loot_table: &LootTableData) -> Vec<ItemStack> {
                 match modifier {
                     LootItemModifier::SetCount(value) => {
                         item.count = context.generate_integer(value) as u16;
+                    }
+                    LootItemModifier::ApplyQuality => {
+                        //todo: randomness
+                        item.components.set_component(ItemQuality::Good);
                     }
                 }
             }

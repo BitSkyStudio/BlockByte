@@ -936,6 +936,21 @@ pub struct BiomeData {
     pub bottom_block: BlockKey,
     pub plants: Vec<PlantSpawner>,
     pub decorators: Vec<BiomeDecorator>,
+    #[serde(default)]
+    pub debug_color: Color,
+    pub temperature: BiomeNoiseConfig,
+    pub moisture: BiomeNoiseConfig,
+    pub elevation: BiomeNoiseConfig,
+}
+#[derive(Deserialize)]
+pub struct BiomeNoiseConfig {
+    pub target: f32,
+    pub weight: f32,
+}
+impl BiomeNoiseConfig {
+    pub fn get_error(&self, value: f32) -> f32 {
+        (self.target - value).abs() * self.weight
+    }
 }
 #[derive(Deserialize)]
 pub struct PlantSpawner {
@@ -965,6 +980,7 @@ pub struct LootTableEntry {
 #[derive(Deserialize)]
 pub enum LootItemModifier {
     SetCount(LootModifierInteger),
+    ApplyQuality,
 }
 #[derive(Deserialize)]
 pub enum LootModifierInteger {

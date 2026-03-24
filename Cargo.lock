@@ -208,6 +208,7 @@ dependencies = [
  "renet_netcode",
  "rusttype",
  "serde_cbor",
+ "smallvec",
  "taffy",
  "texture_packer",
  "uuid",
@@ -231,6 +232,7 @@ dependencies = [
  "serde",
  "serde_default_utils",
  "serde_json",
+ "smallvec",
  "taffy",
  "uuid",
  "walkdir",
@@ -241,6 +243,7 @@ name = "block_byte_server"
 version = "0.1.0"
 dependencies = [
  "block_byte_common",
+ "image",
  "lz4_flex",
  "moka",
  "noise",

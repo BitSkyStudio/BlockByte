@@ -1192,6 +1192,9 @@ impl ClientPlayer {
                     for (offset, plants) in &chunk.components.plant.components {
                         for (i, plant) in plants.plants.iter().enumerate() {
                             let plant_data = plant.0.data();
+                            if i != plant_data.stages.len() - 1 {
+                                continue;
+                            }
                             let block_position = chunk_position.to_block_pos() + offset.xyz();
                             let aabb = AABB {
                                 min: Pos {

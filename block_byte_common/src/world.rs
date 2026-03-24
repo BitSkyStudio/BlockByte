@@ -1,6 +1,7 @@
 use std::num::NonZero;
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 use crate::{coord::ChunkOffset, registry::PlantKey};
 
@@ -220,5 +221,5 @@ pub struct ClientBlockDamage {
 }
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockPlants {
-    pub plants: Vec<(PlantKey, u8)>,
+    pub plants: SmallVec<[(PlantKey, u8); 1]>,
 }

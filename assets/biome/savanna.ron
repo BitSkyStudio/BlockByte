@@ -2,9 +2,9 @@
     top_block: "nature.grass",
     middle_block: "nature.dirt",
     bottom_block: "nature.dirt",
-    debug_color: (r: 0, g: 255, b: 0),
-    temperature: (target: 0.3, weight: 1.2),
-    moisture: (target: 0.5, weight: 1.2),
+    debug_color: (r: 255, g: 150, b: 0),
+    temperature: (target: 0.4, weight: 1.5),
+    moisture: (target: 0.15, weight: 1.5),
     elevation: (target: 0, weight: 0.5),
     plants: [(
         chance: 0.08,
