@@ -19,6 +19,10 @@ use walkdir::WalkDir;
 
 use crate::coord::{AABB, BlockPos, Face, FaceMap, Orientation, Pos, Vec3};
 use crate::model::Model;
+use crate::scripts::{
+    CompiledScript, ExternalScriptByteCode, RegisterId, RegisterOrImmediate, ScriptLabel,
+    ScriptParseContext, ScriptParseError, expect_argument_count,
+};
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
 
@@ -638,39 +642,123 @@ impl Default for BlockInteractAction {
 pub struct BlockMachineData {
     pub inventory_size: usize,
     #[serde(default)]
-    pub actions: Vec<BlockMachineAction>,
     pub faces: FaceMap<BlockMachineFace>,
+    pub script: CompiledScript<MachineInstrution>,
 }
-#[derive(Default, Deserialize)]
-pub struct BlockMachineFace {
-    #[serde(default)]
-    pub input: InventoryView,
-    #[serde(default)]
-    pub output: InventoryView,
-}
-#[derive(Deserialize)]
-pub enum BlockMachineAction {
-    Craft {
-        base_speed: f32,
-        recipes: KeyGroup<RecipeData>,
-        input_view: InventoryView,
-        output_view: InventoryView,
+pub enum MachineInstrution {
+    Next,
+    Sleep {
+        time: f32,
     },
-    TransferItem {
-        view: InventoryView,
-        speed: f32,
-        face: Face,
-        offset: BlockPos,
+    Suspend,
+    TranferItem {
+        self_view: InventoryView,
+        other: BlockPos,
+        other_face: Face,
         pull: bool,
-        break_on_full_inventory: bool,
+    },
+    ReadSignal {
+        face: Face,
+        register: RegisterId,
+        success: ScriptLabel,
+    },
+    ReadSignalBlock {
+        face: Face,
+        register: RegisterId,
+    },
+    ReadLogic {
+        face: Face,
+        register: RegisterId,
+    },
+    WriteSignal {
+        face: Face,
+        value: RegisterOrImmediate,
+    },
+    WriteValue {
+        face: Face,
+        value: RegisterOrImmediate,
+    },
+}
+impl ExternalScriptByteCode for MachineInstrution {
+    fn parse<'a>(
+        opcode: &'a str,
+        arguments: &[&'a str],
+        parse_context: &mut ScriptParseContext,
+    ) -> Result<Self, ScriptParseError<'a>> {
+        let parse_face = |input: &str| -> Result<Face, ScriptParseError<'static>> {
+            Ok(match input {
+                "front" => Face::Front,
+                "back" => Face::Back,
+                "left" => Face::Left,
+                "right" => Face::Right,
+                "up" => Face::Up,
+                "down" => Face::Down,
+                other => {
+                    return Err(ScriptParseError::ExternalError {
+                        line: parse_context.current_line_num,
+                        error: format!("expected face, got {}", other),
+                    });
+                }
+            })
+        };
+        Ok(match opcode {
+            "next" => MachineInstrution::Next,
+            "sleep" => {
+                expect_argument_count(parse_context.current_line_num, arguments, 2)?;
+                let sleep_time = arguments[0].parse().unwrap();
+                MachineInstrution::Sleep { time: sleep_time }
+            }
+            "suspend" => MachineInstrution::Suspend,
+            "transfer_pull" | "transfer_push" => {
+                expect_argument_count(parse_context.current_line_num, arguments, 5)?;
+                let view = InventoryView {
+                    slots: arguments[0]
+                        .split(",")
+                        .map(|slot| slot.parse::<usize>().unwrap())
+                        .collect(),
+                };
+                let x = arguments[1].parse().unwrap();
+                let y = arguments[2].parse().unwrap();
+                let z = arguments[3].parse().unwrap();
+                MachineInstrution::TranferItem {
+                    self_view: view,
+                    other: BlockPos { x, y, z },
+                    other_face: parse_face(arguments[4])?,
+                    pull: match opcode {
+                        "transfer_pull" => true,
+                        "transfer_push" => false,
+                        _ => unreachable!(),
+                    },
+                }
+            }
+            _ => {
+                return Err(ScriptParseError::UnknownOpCode {
+                    line: parse_context.current_line_num,
+                    opcode,
+                });
+            }
+        })
+    }
+}
+
+#[derive(Deserialize)]
+pub enum BlockMachineFace {
+    InventoryAccess {
         #[serde(default)]
-        filter_slots: Option<InventoryView>,
+        input: InventoryView,
+        #[serde(default)]
+        output: InventoryView,
     },
-    MoveItem {
-        from: InventoryView,
-        to: InventoryView,
-        speed: f32,
-    },
+    LogicInput,
+    LogicOutput,
+    SignalInput,
+    SignalOutput,
+    Empty,
+}
+impl Default for BlockMachineFace {
+    fn default() -> Self {
+        BlockMachineFace::Empty
+    }
 }
 #[derive(Deserialize)]
 #[cfg(feature = "client")]

@@ -5,7 +5,7 @@ use std::{
     path::Path,
     sync::{
         OnceLock,
-        atomic::{AtomicU32, AtomicUsize},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -19,6 +19,7 @@ use block_byte_common::{
         BlockStructurePart, EntityKey, ItemAction, ItemKey, KeyGroup, ToolData, air_block,
         load_registries,
     },
+    scripts::ScriptState,
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants},
 };
@@ -1219,7 +1220,10 @@ impl Server {
                 offset,
                 BlockMachine {
                     inventory: RwLock::new(inventory),
-                    cooldown: Mutex::new(0.),
+                    sleep_cooldown: Mutex::new(0.),
+                    script_state: Mutex::new(ScriptState::new(&machine_data.script)),
+                    logic_state: Mutex::new(Default::default()),
+                    blocked: AtomicBool::new(false),
                 },
             );
         }

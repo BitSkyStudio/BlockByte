@@ -194,7 +194,9 @@ impl ApplicationHandler for App {
                                         self.game.swap_hand_item = self.game.held_item().clone();
                                         self.game.hotbar_slot = slot;
                                         self.send_message(NetworkMessageC2S::HotbarSelect { slot });
-                                        if self.game.held_item().is_some() {
+                                        if self.game.held_item().is_some()
+                                            || self.game.swap_hand_item.is_some()
+                                        {
                                             self.game.viewmodel_player.trigger("equip");
                                         }
                                     }
@@ -312,7 +314,8 @@ impl ApplicationHandler for App {
                             self.send_message(NetworkMessageC2S::HotbarSelect {
                                 slot: new_slot as usize,
                             });
-                            if self.game.held_item().is_some() {
+                            if self.game.held_item().is_some() || self.game.swap_hand_item.is_some()
+                            {
                                 self.game.viewmodel_player.trigger("equip");
                             }
                         }

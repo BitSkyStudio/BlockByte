@@ -596,6 +596,11 @@ impl<T> FaceMap<T> {
         FaceMap::init(|face| mapper(self.by_face(face)))
     }
 }
+impl<T: Default> Default for FaceMap<T> {
+    fn default() -> Self {
+        Self::init(|_| Default::default())
+    }
+}
 #[derive(Clone, Copy)]
 pub struct Ray {
     pub position: Pos,

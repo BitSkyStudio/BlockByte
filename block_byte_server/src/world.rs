@@ -3,18 +3,22 @@ use std::{
     mem::MaybeUninit,
     ops::Deref,
     path::Path,
-    sync::{Arc, OnceLock, atomic::AtomicBool},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use block_byte_common::{
     CharacterController, Color, DamageType, InventoryView, LookDirection, MoveMode,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos},
     net::NetworkMessageS2C,
     registry::{
         BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
-        BlockMachineAction, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, KeyGroup,
-        PlantKey, ResearchKey, StructureKey, air_block,
+        BlockMachineFace, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, KeyGroup,
+        MachineInstrution, PlantKey, ResearchKey, StructureKey, air_block,
     },
+    scripts::{self, CallbackResult, ExternalScriptByteCode, ScriptState, ScriptValue},
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
         ClientChunkBlockComponents,
@@ -305,15 +309,203 @@ impl Chunk {
                     }
                 }
                 BlockEvent::PlantHarvest { player } => {}
+                BlockEvent::LogicSignal { value, world_face } => {
+                    let block_state = *self.blocks.read().get(block.index()).unwrap();
+                    let block_data = block_state.block.data();
+                    let mut machines = self.components.machine.write();
+                    if let Some(machine) = machines.get_mut(block) {
+                        let orientation = Into::<Orientation>::into(block_state.rotation);
+                        let own_face = orientation.inverse_apply(world_face);
+                        match block_data.machine.as_ref().unwrap().faces.by_face(own_face) {
+                            BlockMachineFace::SignalInput => {
+                                machine.blocked.store(false, Ordering::Relaxed);
+                                *machine.logic_state.lock().by_face_mut(own_face) = Some(value);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                BlockEvent::UpdateLogicState { value, world_face } => {
+                    let block_state = *self.blocks.read().get(block.index()).unwrap();
+                    let block_data = block_state.block.data();
+                    let mut machines = self.components.machine.write();
+                    if let Some(machine) = machines.get_mut(block) {
+                        let orientation = Into::<Orientation>::into(block_state.rotation);
+                        let own_face = orientation.inverse_apply(world_face);
+                        match block_data.machine.as_ref().unwrap().faces.by_face(own_face) {
+                            BlockMachineFace::LogicInput => {
+                                machine.blocked.store(false, Ordering::Relaxed);
+                                *machine.logic_state.lock().by_face_mut(own_face) = Some(value);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
         for (offset, machine) in &self.components.machine.read().components {
             let block = *self.blocks.read().get(offset.index()).unwrap();
             let block_data = block.block.data();
             let machine_data = block_data.machine.as_ref().unwrap();
-            let mut cooldown = machine.cooldown.lock();
+            let mut cooldown = machine.sleep_cooldown.lock();
             if *cooldown <= 0. {
-                for action in &machine_data.actions {
+                if machine.blocked.load(Ordering::Relaxed) {
+                    continue;
+                }
+                match machine.script_state.lock().run(
+                    &machine_data.script,
+                    |state, instruction| match instruction {
+                        MachineInstrution::Next => CallbackResult::Suspend,
+                        MachineInstrution::Sleep { time } => {
+                            *cooldown = *time;
+                            CallbackResult::Suspend
+                        }
+                        MachineInstrution::Suspend => {
+                            machine.blocked.store(true, Ordering::Relaxed);
+                            CallbackResult::Suspend
+                        }
+                        MachineInstrution::TranferItem {
+                            self_view: view,
+                            other: push_offset,
+                            other_face,
+                            pull,
+                        } => {
+                            let orientation = Into::<Orientation>::into(block.rotation);
+                            let other_position = orientation.rotate_block_pos(*push_offset)
+                                + offset.xyz()
+                                + self.position.to_block_pos();
+                            let Some(other_block) = server.get_block(other_position) else {
+                                return CallbackResult::Continue;
+                            };
+                            let other_block_data = other_block.block.data();
+                            if let Some(other_machine_data) = &other_block_data.machine {
+                                let (other_chunk, other_offset) =
+                                    other_position.to_chunk_pos_offset();
+                                let other_chunk_machines = server
+                                    .get_chunk(other_chunk)
+                                    .unwrap()
+                                    .components
+                                    .machine
+                                    .read();
+                                let other_machine = other_chunk_machines.get(other_offset).unwrap();
+                                let face_rotated = Into::<Orientation>::into(other_block.rotation)
+                                    .inverse_apply(orientation.apply(*other_face));
+                                let face_data = other_machine_data.faces.by_face(face_rotated);
+                                match face_data {
+                                    BlockMachineFace::InventoryAccess { input, output } => {
+                                        let other_view = if *pull { output } else { input };
+                                        let (mut first_inventory, mut second_inventory) =
+                                            lock_inventories(
+                                                &machine.inventory,
+                                                &other_machine.inventory,
+                                            );
+                                        if *pull {
+                                            std::mem::swap(
+                                                &mut first_inventory,
+                                                &mut second_inventory,
+                                            );
+                                        }
+                                        let mut exit = false;
+                                        for slot in &view.slots {
+                                            if let Some(item) =
+                                                first_inventory.get_slot_mut_raw(*slot)
+                                            {
+                                                if second_inventory
+                                                    .add_item(other_view, item.copy(1))
+                                                    .is_none()
+                                                {
+                                                    item.count -= 1;
+                                                    if item.count == 0 {
+                                                        first_inventory.items[*slot] = None;
+                                                    }
+                                                    exit = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::ReadSignal {
+                            face,
+                            register,
+                            success,
+                        } => {
+                            match machine.logic_state.lock().by_face_mut(*face).take() {
+                                Some(value) => {
+                                    state.registers[*register] = value;
+                                    state.pc = *success;
+                                }
+                                None => {}
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::ReadSignalBlock { face, register } => {
+                            match machine.logic_state.lock().by_face_mut(*face).take() {
+                                Some(value) => {
+                                    state.registers[*register] = value;
+                                    CallbackResult::Continue
+                                }
+                                None => CallbackResult::Wait,
+                            }
+                        }
+                        MachineInstrution::ReadLogic { face, register } => {
+                            state.registers[*register] =
+                                machine.logic_state.lock().by_face(*face).unwrap_or(0);
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::WriteSignal { face, value } => {
+                            let value = state.resolve_value(value);
+                            let orientation = Into::<Orientation>::into(block.rotation);
+                            let world_face = orientation.apply(*face);
+                            let target_position = self.position.to_block_pos()
+                                + offset.xyz()
+                                + world_face.get_block_offset();
+                            server.schedule_block_event(
+                                target_position,
+                                BlockEvent::LogicSignal {
+                                    value,
+                                    world_face: world_face.opposite(),
+                                },
+                            );
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::WriteValue { face, value } => {
+                            let value = state.resolve_value(value);
+                            let mut logic_state = machine.logic_state.lock();
+                            let mut logic_state = logic_state.by_face_mut(*face);
+                            if let Some(previous) = logic_state {
+                                if *previous == value {
+                                    return CallbackResult::Continue;
+                                }
+                            }
+                            *logic_state = Some(value);
+                            let orientation = Into::<Orientation>::into(block.rotation);
+                            let world_face = orientation.apply(*face);
+                            let target_position = self.position.to_block_pos()
+                                + offset.xyz()
+                                + world_face.get_block_offset();
+                            server.schedule_block_event(
+                                target_position,
+                                BlockEvent::UpdateLogicState {
+                                    value,
+                                    world_face: world_face.opposite(),
+                                },
+                            );
+                            CallbackResult::Continue
+                        }
+                    },
+                    500,
+                ) {
+                    scripts::RunResult::Suspended => {}
+                    scripts::RunResult::TimedOut => {
+                        eprintln!("script of block {} timed out", block.block.text_id());
+                    }
+                }
+                /*for action in &machine_data.actions {
                     match action {
                         BlockMachineAction::Craft {
                             base_speed,
@@ -454,7 +646,7 @@ impl Chunk {
                             }
                         }
                     }
-                }
+                }*/
             } else {
                 *cooldown -= server.delta_time();
             }
@@ -549,6 +741,14 @@ pub enum BlockEvent {
     },
     PlantHarvest {
         player: EntityIndexSave,
+    },
+    LogicSignal {
+        value: ScriptValue,
+        world_face: Face,
+    },
+    UpdateLogicState {
+        value: ScriptValue,
+        world_face: Face,
     },
 }
 
@@ -963,7 +1163,10 @@ impl Into<ClientBlockPlants> for &BlockPlants {
 pub struct BlockMachine {
     pub inventory: RwLock<Inventory>,
     #[serde(default)]
-    pub cooldown: Mutex<f32>,
+    pub sleep_cooldown: Mutex<f32>,
+    pub script_state: Mutex<ScriptState>,
+    pub logic_state: Mutex<FaceMap<Option<ScriptValue>>>,
+    pub blocked: AtomicBool,
 }
 pub struct ChunkColumnGeneration {
     pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
