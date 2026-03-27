@@ -24,7 +24,7 @@ use crate::scripts::{
     ScriptParseContext, ScriptParseError, expect_argument_count,
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
-use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection};
+use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection, ViewSlot};
 
 use serde_default_utils::*;
 
@@ -644,6 +644,8 @@ pub struct BlockMachineData {
     #[serde(default)]
     pub faces: FaceMap<BlockMachineFace>,
     pub script: CompiledScript<MachineInstrution>,
+    #[serde(default)]
+    pub script_views: Vec<InventoryView>,
 }
 pub enum MachineInstrution {
     Next,
@@ -652,7 +654,7 @@ pub enum MachineInstrution {
     },
     Suspend,
     TranferItem {
-        self_view: InventoryView,
+        self_view: usize,
         other: BlockPos,
         other_face: Face,
         pull: bool,
@@ -677,6 +679,20 @@ pub enum MachineInstrution {
     WriteValue {
         face: Face,
         value: RegisterOrImmediate,
+    },
+    GetSlotItemCount {
+        slot: RegisterOrImmediate,
+        register: RegisterId,
+    },
+    MoveItem {
+        from_view: usize,
+        to_view: usize,
+    },
+    Craft {
+        recipes: KeyGroup<RecipeData>,
+        input_view: usize,
+        output_view: usize,
+        speed: f32,
     },
 }
 impl ExternalScriptByteCode for MachineInstrution {
@@ -711,17 +727,11 @@ impl ExternalScriptByteCode for MachineInstrution {
             "suspend" => MachineInstrution::Suspend,
             "transfer_pull" | "transfer_push" => {
                 expect_argument_count(parse_context.current_line_num, arguments, 5)?;
-                let view = InventoryView {
-                    slots: arguments[0]
-                        .split(",")
-                        .map(|slot| slot.parse::<usize>().unwrap())
-                        .collect(),
-                };
                 let x = arguments[1].parse().unwrap();
                 let y = arguments[2].parse().unwrap();
                 let z = arguments[3].parse().unwrap();
                 MachineInstrution::TranferItem {
-                    self_view: view,
+                    self_view: arguments[0].parse().unwrap(),
                     other: BlockPos { x, y, z },
                     other_face: parse_face(arguments[4])?,
                     pull: match opcode {
@@ -729,6 +739,13 @@ impl ExternalScriptByteCode for MachineInstrution {
                         "transfer_push" => false,
                         _ => unreachable!(),
                     },
+                }
+            }
+            "get_slot_item_count" => {
+                expect_argument_count(parse_context.current_line_num, arguments, 2)?;
+                MachineInstrution::GetSlotItemCount {
+                    slot: parse_context.parse_value(arguments[1]),
+                    register: parse_context.parse_register(arguments[0]),
                 }
             }
             _ => {
@@ -790,6 +807,13 @@ impl BlockEntry {
             rotation: Default::default(),
             state: Default::default(),
         }
+    }
+    pub fn colliders(&self, position: BlockPos) -> impl Iterator<Item = AABB<f32>> {
+        self.block.data().collision.iter().map(move |collider| {
+            self.rotation
+                .rotate_aabb(*collider)
+                .offset(position.to_pos())
+        })
     }
 }
 pub fn skip_if_default<T: Default + PartialEq>(value: &T) -> bool {

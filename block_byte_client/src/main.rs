@@ -26,10 +26,10 @@ use block_byte_common::{
     model::{DrawAnimation, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, BlockRotation,
-        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key, KeyGroup, ModelData,
-        ModelInstance, ModelKey, Registry, ResearchKey, TextureData, TextureKey, ToolData,
-        TranslationLanguageData, air_block, load_registries,
+        self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
+        BlockRotation, EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key,
+        KeyGroup, ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData,
+        TextureKey, ToolData, TranslationLanguageData, air_block, load_registries,
     },
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
@@ -1842,14 +1842,23 @@ impl ClientGame {
                                 .unwrap_or(0)];
                             let block_position = position + face.get_block_offset();
                             let mut blocked = place_block.use_count > held_item.count;
+                            let rotation = place_block
+                                .block
+                                .data()
+                                .rotation
+                                .from_look_direction(camera.direction);
+                            let fake_block_entry = BlockEntry {
+                                block: place_block.block,
+                                rotation,
+                                color: BlockColor::default(),
+                                state: 0,
+                            };
                             for entity in self.entities.values() {
-                                if entity
-                                    .key
-                                    .data()
-                                    .hitbox()
-                                    .offset(entity.position)
-                                    .to_block()
-                                    .contains(block_position)
+                                let entity_hitbox =
+                                    entity.key.data().hitbox().offset(entity.position);
+                                if fake_block_entry
+                                    .colliders(block_position)
+                                    .any(|collider| entity_hitbox.intersects(collider))
                                 {
                                     blocked = true;
                                     break;
@@ -1865,11 +1874,6 @@ impl ClientGame {
                                     .unwrap()
                                     .block;
                                 if block == air_block() {
-                                    let rotation = place_block
-                                        .block
-                                        .data()
-                                        .rotation
-                                        .from_look_direction(camera.direction);
                                     let orientation: Orientation = rotation.into();
                                     let right = orientation.right.get_offset();
                                     let up = orientation.up.get_offset();

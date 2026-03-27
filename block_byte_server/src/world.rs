@@ -370,6 +370,7 @@ impl Chunk {
                             other_face,
                             pull,
                         } => {
+                            let view = &machine_data.script_views[*view];
                             let orientation = Into::<Orientation>::into(block.rotation);
                             let other_position = orientation.rotate_block_pos(*push_offset)
                                 + offset.xyz()
@@ -408,15 +409,18 @@ impl Chunk {
                                         let mut exit = false;
                                         for slot in &view.slots {
                                             if let Some(item) =
-                                                first_inventory.get_slot_mut_raw(*slot)
+                                                first_inventory.get_slot_mut_raw(slot.slot)
                                             {
                                                 if second_inventory
                                                     .add_item(other_view, item.copy(1))
                                                     .is_none()
                                                 {
+                                                    other_machine
+                                                        .blocked
+                                                        .store(false, Ordering::Relaxed);
                                                     item.count -= 1;
                                                     if item.count == 0 {
-                                                        first_inventory.items[*slot] = None;
+                                                        first_inventory.items[slot.slot] = None;
                                                     }
                                                     exit = true;
                                                     break;
@@ -497,22 +501,48 @@ impl Chunk {
                             );
                             CallbackResult::Continue
                         }
-                    },
-                    500,
-                ) {
-                    scripts::RunResult::Suspended => {}
-                    scripts::RunResult::TimedOut => {
-                        eprintln!("script of block {} timed out", block.block.text_id());
-                    }
-                }
-                /*for action in &machine_data.actions {
-                    match action {
-                        BlockMachineAction::Craft {
-                            base_speed,
+                        MachineInstrution::GetSlotItemCount { slot, register } => {
+                            if let Some(item) = machine
+                                .inventory
+                                .read()
+                                .items
+                                .get(state.resolve_value(slot) as usize)
+                            {
+                                state.registers[*register] =
+                                    item.as_ref().map(|item| item.count).unwrap_or(0);
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::MoveItem { from_view, to_view } => {
+                            let from_view = &machine_data.script_views[*from_view];
+                            let to_view = &machine_data.script_views[*to_view];
+                            let mut inventory = machine.inventory.write();
+                            for slot in &from_view.slots {
+                                if let Some(item) =
+                                    inventory.items[slot.slot].as_ref().map(|item| item.copy(1))
+                                {
+                                    if inventory.add_item(to_view, item).is_none() {
+                                        let item =
+                                            inventory.get_slot_mut_raw(slot.slot).as_mut().unwrap();
+                                        item.count -= 1;
+                                        if item.count == 0 {
+                                            inventory.items[slot.slot] = None;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            //todo: notify about completion
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::Craft {
                             recipes,
                             input_view,
                             output_view,
+                            speed,
                         } => {
+                            let input_view = &machine_data.script_views[*input_view];
+                            let output_view = &machine_data.script_views[*output_view];
                             let mut inventory = machine.inventory.write();
                             for recipe in recipes.list() {
                                 let recipe = recipe.data();
@@ -532,121 +562,20 @@ impl Chunk {
                                 for output in generate_loot_table(recipe.outputs.data()) {
                                     inventory.add_item(output_view, output);
                                 }
-                                *cooldown = recipe.craft_time * base_speed;
-                                break;
+                                *cooldown = recipe.craft_time * speed;
+                                return CallbackResult::Suspend;
                             }
+                            //todo: return state back to script
+                            CallbackResult::Continue
                         }
-                        BlockMachineAction::TransferItem {
-                            view,
-                            speed,
-                            face,
-                            offset: push_offset,
-                            pull,
-                            break_on_full_inventory,
-                            filter_slots,
-                        } => {
-                            let orientation = Into::<Orientation>::into(block.rotation);
-                            let other_position = orientation.rotate_block_pos(*push_offset)
-                                + offset.xyz()
-                                + self.position.to_block_pos();
-                            let Some(other_block) = server.get_block(other_position) else {
-                                continue;
-                            };
-                            let other_block_data = other_block.block.data();
-                            if let Some(other_machine_data) = &other_block_data.machine {
-                                let (other_chunk, other_offset) =
-                                    other_position.to_chunk_pos_offset();
-                                let other_chunk_machines = server
-                                    .get_chunk(other_chunk)
-                                    .unwrap()
-                                    .components
-                                    .machine
-                                    .read();
-                                let other_machine = other_chunk_machines.get(other_offset).unwrap();
-                                let face_rotated = Into::<Orientation>::into(other_block.rotation)
-                                    .inverse_apply(orientation.apply(*face));
-                                let face_data = other_machine_data.faces.by_face(face_rotated);
-                                if face_data.input.size() == 0 {
-                                    continue;
-                                }
-                                let other_view = if *pull {
-                                    &face_data.output
-                                } else {
-                                    &face_data.input
-                                };
-                                let item_filter: Option<HashSet<_>> = match filter_slots {
-                                    Some(filter) => Some(
-                                        filter
-                                            .slots
-                                            .iter()
-                                            .filter_map(|i| {
-                                                machine.inventory.read().items[*i]
-                                                    .as_ref()
-                                                    .map(|item| item.item)
-                                            })
-                                            .collect(),
-                                    ),
-                                    None => None,
-                                };
-                                let (mut first_inventory, mut second_inventory) =
-                                    lock_inventories(&machine.inventory, &other_machine.inventory);
-                                if *pull {
-                                    std::mem::swap(&mut first_inventory, &mut second_inventory);
-                                }
-                                let mut exit = false;
-                                for slot in &view.slots {
-                                    if let Some(item) = first_inventory.get_slot_mut_raw(*slot) {
-                                        if let Some(item_filter) = &item_filter {
-                                            if !item_filter.contains(&item.item) {
-                                                exit = true;
-                                                break;
-                                            }
-                                        }
-                                        if second_inventory
-                                            .add_item(other_view, item.copy(1))
-                                            .is_none()
-                                        {
-                                            item.count -= 1;
-                                            if item.count == 0 {
-                                                first_inventory.items[*slot] = None;
-                                            }
-                                            *cooldown = *speed;
-                                            exit = true;
-                                            break;
-                                        } else {
-                                            if *break_on_full_inventory {
-                                                exit = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                if exit {
-                                    break;
-                                }
-                            }
-                        }
-                        BlockMachineAction::MoveItem { from, to, speed } => {
-                            let mut inventory = machine.inventory.write();
-                            for slot in &from.slots {
-                                if let Some(item) =
-                                    inventory.items[*slot].as_ref().map(|item| item.copy(1))
-                                {
-                                    if inventory.add_item(&to, item).is_none() {
-                                        let item =
-                                            inventory.get_slot_mut_raw(*slot).as_mut().unwrap();
-                                        item.count -= 1;
-                                        if item.count == 0 {
-                                            inventory.items[*slot] = None;
-                                        }
-                                        *cooldown = *speed;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                    },
+                    500,
+                ) {
+                    scripts::RunResult::Suspended => {}
+                    scripts::RunResult::TimedOut => {
+                        eprintln!("script of block {} timed out", block.block.text_id());
                     }
-                }*/
+                }
             } else {
                 *cooldown -= server.delta_time();
             }
@@ -868,9 +797,6 @@ impl Entity {
                                         items_present = true;
                                     }
                                 }
-                            }
-                            for i in 0..inventory.items.len() {
-                                inventory.slot_changed(i);
                             }
                             if !items_present {
                                 self.schedule_event(EntityEvent::Remove);

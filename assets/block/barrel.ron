@@ -11,14 +11,14 @@
     ),
     health: Some((health: 5., health_regen: 0.05, table: ())),
     loot_table: Key("empty"),
-    interact_action: OpenInventory(screen:"barrel", view:[0,1,2,3,4,5,6,7,8,9]),
+    interact_action: OpenInventory(screen:"barrel", view:[(slot:0),(slot:1),(slot:2),(slot:3),(slot:4),(slot:5),(slot:6),(slot:7),(slot:8),(slot:9)]),
     machine: Some((
         inventory_size: 10,
         script: "",
         faces: (
             front: Empty,
             back: InventoryAccess(
-                input: [2,3]
+                input: [(slot:2),(slot:3)]
             ),
             left: Empty,
             right: Empty,

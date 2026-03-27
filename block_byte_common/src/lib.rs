@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     coord::{AABB, BlockPos, Pos},
-    registry::{BlockEntry, ItemKey},
+    registry::{BlockEntry, ItemData, ItemKey, KeyGroup},
 };
 use serde_default_utils::*;
 
@@ -139,14 +139,34 @@ impl ItemMoveMode {
         }
     }
 }
+#[derive(Clone, Deserialize)]
+pub struct ViewSlot {
+    pub slot: usize,
+    #[serde(default)]
+    pub stack_size_override: Option<u16>,
+    #[serde(default)]
+    pub filter: Option<KeyGroup<ItemData>>,
+}
+
+pub static DEFAULT_VIEWSLOT: ViewSlot = ViewSlot {
+    slot: 0,
+    filter: None,
+    stack_size_override: None,
+};
 #[derive(Default, Clone)]
 pub struct InventoryView {
-    pub slots: Vec<usize>,
+    pub slots: Vec<ViewSlot>,
 }
 impl InventoryView {
     pub fn from_range(range: std::ops::Range<usize>) -> Self {
         InventoryView {
-            slots: range.collect(),
+            slots: range
+                .map(|slot| ViewSlot {
+                    slot,
+                    stack_size_override: None,
+                    filter: None,
+                })
+                .collect(),
         }
     }
     pub fn size(&self) -> usize {
@@ -159,7 +179,7 @@ impl<'de> Deserialize<'de> for InventoryView {
         D: serde::Deserializer<'de>,
     {
         Ok(InventoryView {
-            slots: Vec::<usize>::deserialize(deserializer)?,
+            slots: Vec::<ViewSlot>::deserialize(deserializer)?,
         })
     }
 }

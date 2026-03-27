@@ -11,7 +11,7 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, Color, InventoryView, LookDirection, MoveMode, PlayerAbilities,
+    ClientItem, Color, DEFAULT_VIEWSLOT, InventoryView, LookDirection, MoveMode, PlayerAbilities,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -600,7 +600,10 @@ fn main() {
                             if let Some(source) = from_item.as_mut() {
                                 let count = mode.get_count(source.count);
                                 if let Some(destination) = to_item.as_mut() {
-                                    if let Some((a, b)) = destination.merge(&source.copy(count)) {
+                                    //todo: correct viewslot
+                                    if let Some((a, b)) =
+                                        destination.merge(&source.copy(count), &DEFAULT_VIEWSLOT)
+                                    {
                                         *destination = a;
                                         source.count += b.map(|item| item.count).unwrap_or(0);
                                         source.count -= count;
@@ -1199,7 +1202,11 @@ impl Server {
             if let Some(chunk) = self.get_chunk(chunk) {
                 for entity in &chunk.entities {
                     let entity = self.entities.get(*entity).unwrap();
-                    if entity.get_hitbox().to_block().contains(position) {
+                    let hitbox = entity.get_hitbox();
+                    if block
+                        .colliders(position)
+                        .any(|collider| collider.intersects(hitbox))
+                    {
                         return Err(());
                     }
                 }
