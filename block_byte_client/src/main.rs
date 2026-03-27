@@ -1192,7 +1192,7 @@ impl ClientPlayer {
             .offset(ray.position.to_chunk_pos())
             {
                 if let Some(chunk) = world.chunks.get(&chunk_position) {
-                    for (offset, plants) in &chunk.components.plant.components {
+                    for (offset, plants) in chunk.components.plant.iter() {
                         for (i, plant) in plants.plants.iter().enumerate() {
                             let plant_data = plant.0.data();
                             if i != plant_data.stages.len() - 1 {
@@ -1674,7 +1674,7 @@ impl ClientGame {
                 continue;
             }
             if let Some(chunk) = self.chunks.get(&chunk_position) {
-                for (offset, damage) in &chunk.components.damage.components {
+                for (offset, damage) in chunk.components.damage.iter() {
                     let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
                     if base_position.distance_squared(self.player_position)
                         > (view_distance * view_distance) as f32
@@ -1758,7 +1758,7 @@ impl ClientGame {
                         }
                     }
                 }
-                for (offset, plants) in &chunk.components.plant.components {
+                for (offset, plants) in chunk.components.plant.iter() {
                     let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
                     if base_position.distance_squared(self.player_position)
                         > (view_distance * view_distance) as f32
@@ -1923,29 +1923,29 @@ impl ClientGame {
     pub fn tick_server(&mut self, dt: f32) {
         self.stamina += dt * 10.;
         for (_, chunk) in &mut self.chunks {
-            chunk
-                .components
-                .damage
-                .components
-                .retain_mut(|(offset, health)| {
-                    let blocks = chunk.mesh_build_data.blocks.read();
-                    let data = blocks.get(offset.index()).unwrap().block.data();
-                    if let Some(health_data) = &data.health {
-                        health.damage -= dt
-                            * blocks
-                                .get(offset.index())
-                                .unwrap()
-                                .block
-                                .data()
-                                .health
-                                .as_ref()
-                                .map(|health| health.health_regen)
-                                .unwrap_or(1.);
-                        health.damage > 0.
-                    } else {
-                        false
+            let mut damage_to_clear = Vec::new();
+            let blocks = chunk.mesh_build_data.blocks.read();
+            for (offset, health) in chunk.components.damage.iter_mut() {
+                let data = blocks.get(offset.index()).unwrap().block.data();
+                if let Some(health_data) = &data.health {
+                    health.damage -= dt
+                        * blocks
+                            .get(offset.index())
+                            .unwrap()
+                            .block
+                            .data()
+                            .health
+                            .as_ref()
+                            .map(|health| health.health_regen)
+                            .unwrap_or(1.);
+                    if health.damage <= 0. {
+                        damage_to_clear.push(offset);
                     }
-                });
+                }
+            }
+            for block in damage_to_clear {
+                chunk.components.damage.remove(block);
+            }
         }
     }
     pub fn get_player_data(&self) -> Option<&'static EntityData> {

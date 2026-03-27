@@ -21,7 +21,9 @@ use block_byte_common::{
     },
     scripts::ScriptState,
     ui::{PropertyMap, UIScreenKey},
-    world::{ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants},
+    world::{
+        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
+    },
 };
 use palettevec::PaletteVec;
 use parking_lot::{Mutex, RwLock};
@@ -44,8 +46,8 @@ use crate::{
     inventory::{Inventory, ItemDurability, ItemQuality, ItemStack, generate_loot_table},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
-        BlockEvent, BlockMachine, BlockPlants, Chunk, ChunkSaveData, Entity, EntityEvent,
-        EntityIndex, WorldGenerator,
+        BlockEvent, BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity,
+        EntityEvent, EntityIndex, WorldGenerator,
     },
 };
 

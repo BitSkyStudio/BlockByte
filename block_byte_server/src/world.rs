@@ -343,7 +343,7 @@ impl Chunk {
                 }
             }
         }
-        for (offset, machine) in &self.components.machine.read().components {
+        for (offset, machine) in self.components.machine.read().iter() {
             let block = *self.blocks.read().get(offset.index()).unwrap();
             let block_data = block.block.data();
             let machine_data = block_data.machine.as_ref().unwrap();
@@ -666,24 +666,27 @@ impl Chunk {
         }
         {
             let blocks = self.blocks.read();
-            self.components
-                .damage
-                .write()
-                .components
-                .retain_mut(|(offset, damage)| {
-                    damage.damage -= 1.
-                        * server.delta_time()
-                        * blocks
-                            .get(offset.index())
-                            .unwrap()
-                            .block
-                            .data()
-                            .health
-                            .as_ref()
-                            .map(|health| health.health_regen)
-                            .unwrap();
-                    damage.damage > 0.
-                });
+            let mut damage = self.components.damage.write();
+            let mut damage_to_clear = Vec::new();
+            for (offset, damage) in damage.iter_mut() {
+                damage.damage -= 1.
+                    * server.delta_time()
+                    * blocks
+                        .get(offset.index())
+                        .unwrap()
+                        .block
+                        .data()
+                        .health
+                        .as_ref()
+                        .map(|health| health.health_regen)
+                        .unwrap();
+                if damage.damage <= 0. {
+                    damage_to_clear.push(offset);
+                }
+            }
+            for block in damage_to_clear {
+                damage.remove(block);
+            }
         }
     }
 }
@@ -1107,7 +1110,7 @@ macro_rules! create_chunk_block_components{
 pub fn skip_serializing_component_storage<T>(
     components: &parking_lot::RwLock<BlockComponentStorage<T>>,
 ) -> bool {
-    components.read().components.is_empty()
+    components.read().iter().count() == 0
 }
 
 macro_rules! create_chunk_block_components_client_mapping {

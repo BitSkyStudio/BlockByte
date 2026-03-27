@@ -6,8 +6,8 @@ use smallvec::SmallVec;
 use crate::{coord::ChunkOffset, registry::PlantKey};
 
 pub struct BlockComponentStorage<T> {
-    pub components: Vec<(ChunkOffset, T)>,
-    pub tree: BlockComponentTree,
+    components: Vec<(ChunkOffset, T)>,
+    tree: BlockComponentTree,
 }
 impl<T: Serialize> Serialize for BlockComponentStorage<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -72,6 +72,14 @@ impl<T> BlockComponentStorage<T> {
         } else {
             None
         }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (ChunkOffset, &T)> {
+        self.components.iter().map(|(offset, data)| (*offset, data))
+    }
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (ChunkOffset, &mut T)> {
+        self.components
+            .iter_mut()
+            .map(|(offset, data)| (*offset, data))
     }
 }
 type TreeIndex = Option<NonZero<u16>>;

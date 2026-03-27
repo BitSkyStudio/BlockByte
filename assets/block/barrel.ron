@@ -14,16 +14,16 @@
     interact_action: OpenInventory(screen:"barrel", view:[0,1,2,3,4,5,6,7,8,9]),
     machine: Some((
         inventory_size: 10,
-        actions: [],
+        script: "",
         faces: (
-            front: (),
-            back: (
+            front: Empty,
+            back: InventoryAccess(
                 input: [2,3]
             ),
-            left: (),
-            right: (),
-            up: (),
-            down: (),
+            left: Empty,
+            right: Empty,
+            up: Empty,
+            down: Empty,
         )
     )),
 )
