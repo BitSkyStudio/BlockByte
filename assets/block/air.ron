@@ -3,4 +3,5 @@
     selection: [],
     collision: [],
     loot_table: Key("empty"),
+    supporting: (up: false, down: false, left: false, right: false, front: false, back: false),
 )

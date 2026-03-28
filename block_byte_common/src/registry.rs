@@ -520,8 +520,6 @@ pub struct BlockData {
     pub selection: Vec<AABB<f32>>,
     #[serde(default = "full_aabb")]
     pub collision: Vec<AABB<f32>>,
-    #[serde(default)]
-    pub plantable: bool,
     pub loot_table: OwnOrKey<LootTableData>,
     #[serde(default)]
     pub interact_action: BlockInteractAction,
@@ -531,6 +529,13 @@ pub struct BlockData {
     pub rotation: BlockRotationMode,
     #[serde(default = "default_item_scale")]
     pub item_scale: f32,
+    #[serde(default)]
+    pub hanging: Option<Face>,
+    #[serde(default = "default_supporting_map")]
+    pub supporting: FaceMap<bool>,
+}
+fn default_supporting_map() -> FaceMap<bool> {
+    FaceMap::init(|_| true)
 }
 fn default_item_scale() -> f32 {
     0.35
@@ -815,6 +820,12 @@ impl BlockEntry {
                 .offset(position.to_pos())
         })
     }
+    pub fn supports(&self, world_face: Face) -> bool {
+        let block_data = self.block.data();
+        let orientation = Into::<Orientation>::into(self.rotation);
+        let face = orientation.inverse_apply(world_face);
+        *block_data.supporting.by_face(face)
+    }
 }
 pub fn skip_if_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
@@ -1038,6 +1049,7 @@ pub struct PlantData {
     pub harvest_reset: f32,
     pub harvest_loot: OwnOrKey<LootTableData>,
     pub break_loot: OwnOrKey<LootTableData>,
+    pub allowed_soil: KeyGroup<BlockData>,
 }
 pub type PlantKey = Key<PlantData>;
 

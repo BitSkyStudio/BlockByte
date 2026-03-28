@@ -6,5 +6,6 @@
     translation: 0.2,
     growth_length: 10.,
     harvest_loot: Key("empty"),
-    break_loot: Key("empty")
+    break_loot: Key("empty"),
+    allowed_soil: "#soil",
 )

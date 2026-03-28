@@ -1271,7 +1271,7 @@ impl ClientPlayer {
             move_vector.z /= xz_mag;
         }
         move_vector *= abilities.speed;
-        move_vector *= 4.5 * 1.2;
+        move_vector *= 5.;
         self.running = game.keys.is_down(KeyCode::ControlLeft);
         if move_vector.length_squared() == 0. {
             self.running = false;
@@ -1283,7 +1283,7 @@ impl ClientPlayer {
                 self.running = false;
             }
         }
-        move_vector *= if self.running { 1.5 } else { 1. };
+        move_vector *= if self.running { 1.35 } else { 1. };
         match abilities.move_mode {
             MoveMode::Normal => {
                 if game.keys.is_down(KeyCode::ShiftLeft) {
@@ -1841,12 +1841,10 @@ impl ClientGame {
                                 .cloned()
                                 .unwrap_or(0)];
                             let block_position = position + face.get_block_offset();
+                            let block_data = place_block.block.data();
                             let mut blocked = place_block.use_count > held_item.count;
-                            let rotation = place_block
-                                .block
-                                .data()
-                                .rotation
-                                .from_look_direction(camera.direction);
+                            let rotation =
+                                block_data.rotation.from_look_direction(camera.direction);
                             let fake_block_entry = BlockEntry {
                                 block: place_block.block,
                                 rotation,
@@ -1862,6 +1860,22 @@ impl ClientGame {
                                 {
                                     blocked = true;
                                     break;
+                                }
+                            }
+                            if let Some(hanging) = block_data.hanging {
+                                let orientation = Into::<Orientation>::into(rotation);
+                                let world_hanging = orientation.apply(hanging);
+                                match self
+                                    .get_block(block_position + world_hanging.get_block_offset())
+                                {
+                                    Some(hanging_block) => {
+                                        if !hanging_block.supports(world_hanging.opposite()) {
+                                            blocked = true;
+                                        }
+                                    }
+                                    None => {
+                                        blocked = true;
+                                    }
                                 }
                             }
                             let (chunk, offset) = block_position.to_chunk_pos_offset();

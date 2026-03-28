@@ -14,4 +14,6 @@
     interact_action: Pickup,
     collision: [],
     selection: [(0.2, 0, 0.2, 0.8, 0.2, 0.8)],
+    hanging: Down,
+    supporting: (up: false, down: false, left: false, right: false, front: false, back: false),
 )

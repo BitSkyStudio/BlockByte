@@ -341,6 +341,29 @@ impl Chunk {
                         }
                     }
                 }
+                BlockEvent::NeighborDestroyed { world_face } => {
+                    let block_pos = self.position.to_block_pos() + block.xyz();
+                    let block = *self.blocks.read().get(block.index()).unwrap();
+                    let block_data = block.block.data();
+                    let orientation = Into::<Orientation>::into(block.rotation);
+                    let face = orientation.inverse_apply(world_face);
+                    if let Some(support_face) = block_data.hanging {
+                        if face == support_face {
+                            let drops = server.destroy(block_pos);
+                            for item in drops {
+                                server.spawn_item(
+                                    item,
+                                    block_pos.to_pos()
+                                        + Pos {
+                                            x: 0.5,
+                                            y: 0.5,
+                                            z: 0.5,
+                                        },
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
         for (offset, machine) in self.components.machine.read().iter() {
@@ -680,6 +703,9 @@ pub enum BlockEvent {
     },
     UpdateLogicState {
         value: ScriptValue,
+        world_face: Face,
+    },
+    NeighborDestroyed {
         world_face: Face,
     },
 }

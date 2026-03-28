@@ -16,4 +16,5 @@
     rotation: Full,
     collision: [(0.25, 0.25, 0.25, 0.75, 0.75, 0.75)],
     selection: [(0.25, 0.25, 0.25, 0.75, 0.75, 0.75)],
+    hanging: Front,
 )

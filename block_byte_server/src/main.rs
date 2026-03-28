@@ -409,9 +409,6 @@ fn main() {
                                             },
                                         ) {
                                             item.count -= place.use_count;
-                                            if item.count == 0 {
-                                                inventory.items[hotbar_slot] = None;
-                                            }
                                         }
                                     }
                                     ItemAction::SpawnEntity(key) => {
@@ -419,11 +416,13 @@ fn main() {
                                         let place_position = position.to_pos() + face.get_offset();
                                         //todo: placement checks
                                         server.spawn_entity(Entity::new(*key, place_position));
+                                        item.count -= 1;
                                     }
                                     ItemAction::Plant(key) => {
+                                        let plant_data = key.data();
                                         let plant_position = position + face.get_block_offset();
                                         if let Some(block) = server.get_block(plant_position) {
-                                            if block.block.data().plantable {
+                                            if plant_data.allowed_soil.contains(block.block) {
                                                 let (plant_chunk_position, plant_offset) =
                                                     plant_position.to_chunk_pos_offset();
                                                 let mut plant_chunk =
@@ -445,9 +444,13 @@ fn main() {
                                                         data: ClientBlockComponentUpdate::ClientBlockPlants(Some((&*plants).into())),
                                                     },
                                                 );
+                                                item.count -= 1;
                                             }
                                         }
                                     }
+                                }
+                                if item.count == 0 {
+                                    inventory.items[hotbar_slot] = None;
                                 }
                             }
                         }
@@ -542,7 +545,7 @@ fn main() {
                                 pitch: 0.,
                                 yaw: entity.state.get_mut().direction.yaw,
                             };
-                            let throw_force = 3.;
+                            let throw_force = 10.;
                             let mut throw_velocity =
                                 entity.state.get_mut().direction.make_front() * throw_force;
                             throw_velocity.y = 0.1;
@@ -1150,22 +1153,20 @@ impl Server {
             );
         }
         let mut drops = generate_loot_table(block_data.loot_table.data());
-        if block_data.plantable {
-            if let Some(plants) = chunk.components.plant.write().remove(offset) {
-                for (plant, growth) in plants.plants {
-                    let plant = plant.data();
-                    drops.append(&mut generate_loot_table(plant.harvest_loot.data()));
-                    //todo: harvest
-                }
-                self.send_message_multiple(
-                    chunk.viewers.iter(),
-                    NetworkMessageS2C::UpdateBlockComponents {
-                        chunk: chunk.position,
-                        offset,
-                        data: Option::<ClientBlockPlants>::None.into(),
-                    },
-                );
+        if let Some(plants) = chunk.components.plant.write().remove(offset) {
+            for (plant, growth) in plants.plants {
+                let plant = plant.data();
+                drops.append(&mut generate_loot_table(plant.harvest_loot.data()));
+                //todo: harvest
             }
+            self.send_message_multiple(
+                chunk.viewers.iter(),
+                NetworkMessageS2C::UpdateBlockComponents {
+                    chunk: chunk.position,
+                    offset,
+                    data: Option::<ClientBlockPlants>::None.into(),
+                },
+            );
         }
         if let Some(_) = &block_data.machine {
             let machine = chunk.components.machine.write().remove(offset).unwrap();
@@ -1182,6 +1183,14 @@ impl Server {
                 block: BlockEntry::simple(air_block()),
             },
         );
+        for face in Face::all() {
+            self.schedule_block_event(
+                position + face.get_block_offset(),
+                BlockEvent::NeighborDestroyed {
+                    world_face: face.opposite(),
+                },
+            );
+        }
         drops
     }
     pub fn place(&self, position: BlockPos, block: BlockEntry) -> Result<(), ()> {
@@ -1210,6 +1219,17 @@ impl Server {
                         return Err(());
                     }
                 }
+            }
+        }
+        if let Some(hanging) = block_data.hanging {
+            let orientation = Into::<Orientation>::into(block.rotation);
+            let world_hanging = orientation.apply(hanging);
+            let Some(hanging_block) = self.get_block(position + world_hanging.get_block_offset())
+            else {
+                return Err(());
+            };
+            if !hanging_block.supports(world_hanging.opposite()) {
+                return Err(());
             }
         }
         {
