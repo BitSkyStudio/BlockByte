@@ -3,6 +3,7 @@ mod ui;
 
 use core::f32;
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{BinaryHeap, HashMap, HashSet},
     fmt::format,
@@ -27,8 +28,8 @@ use block_byte_common::{
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
-        BlockRotation, EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, Key,
-        KeyGroup, ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData,
+        BlockRotation, EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel,
+        Key, KeyGroup, ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData,
         TextureKey, ToolData, TranslationLanguageData, air_block, load_registries,
     },
     ui::PropertyMap,
@@ -186,12 +187,14 @@ impl ApplicationHandler for App {
                                                 .item_variation
                                                 .entry(held_item.item)
                                                 .or_insert(0);
+                                            if *variation != slot {
+                                                self.game.viewmodel_player.trigger("equip");
+                                            }
                                             *variation = slot;
                                         }
                                     }
                                 } else {
                                     if self.game.hotbar_slot != slot {
-                                        self.game.swap_hand_item = self.game.held_item().clone();
                                         self.game.hotbar_slot = slot;
                                         self.send_message(NetworkMessageC2S::HotbarSelect { slot });
                                         if self.game.held_item().is_some()
@@ -295,18 +298,24 @@ impl ApplicationHandler for App {
                             if let Some(held_item) = self.game.held_item() {
                                 let variation_count =
                                     held_item.item.data().action.variation_count() as isize;
-                                let mut new_variant =
-                                    *self.game.item_variation.get(&held_item.item).unwrap_or(&0)
+                                if variation_count > 1 {
+                                    let mut new_variant = *self
+                                        .game
+                                        .item_variation
+                                        .get(&held_item.item)
+                                        .unwrap_or(&0)
                                         as isize;
-                                new_variant -= scroll as isize;
-                                new_variant = ((new_variant % variation_count) + variation_count)
-                                    % variation_count;
-                                self.game
-                                    .item_variation
-                                    .insert(held_item.item, new_variant as usize);
+                                    new_variant -= scroll as isize;
+                                    new_variant = ((new_variant % variation_count)
+                                        + variation_count)
+                                        % variation_count;
+                                    self.game
+                                        .item_variation
+                                        .insert(held_item.item, new_variant as usize);
+                                    self.game.viewmodel_player.trigger("equip");
+                                }
                             }
                         } else {
-                            self.game.swap_hand_item = self.game.held_item().clone();
                             let mut new_slot = self.game.hotbar_slot as isize;
                             new_slot += -scroll as isize;
                             new_slot = ((new_slot % 10) + 10) % 10;
@@ -1379,7 +1388,7 @@ pub struct ClientGame {
     pub hotbar_slot: usize,
     pub item_variation: HashMap<ItemKey, usize>,
     pub viewmodel_player: AnimationPlayer,
-    pub swap_hand_item: Option<ClientItem>,
+    pub swap_hand_item: Option<(ItemKey, usize)>,
     pub chunk_mesh_channels: (
         std::sync::mpsc::Sender<(ChunkPos, Option<(Buffer, u32)>, u64)>,
         std::sync::mpsc::Receiver<(ChunkPos, Option<(Buffer, u32)>, u64)>,
@@ -1520,9 +1529,10 @@ impl ClientGame {
                 weight: 1. - weight,
             });
         }
+        let mut update_hand_item = false;
         for observer in observers {
             if observer == "swap_hand_item" {
-                self.swap_hand_item = self.held_item().clone();
+                update_hand_item = true;
             }
             if observer == "place" {
                 if let Some(message) = self.place_message.take() {
@@ -1534,8 +1544,15 @@ impl ClientGame {
             || self.viewmodel_player.current_animation == "running")
             && self.viewmodel_player.transition.is_none()
             || self.viewmodel_player.current_animation == "down"
+            || update_hand_item
         {
-            self.swap_hand_item = self.held_item().clone();
+            self.swap_hand_item = match self.held_item() {
+                Some(item) => {
+                    let item = item.item;
+                    Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
+                }
+                None => None,
+            };
         }
         render::draw_model(
             &ModelInstance {
@@ -1546,7 +1563,20 @@ impl ClientGame {
             &mut viewmodel_mesh.vertex_consumer(),
             &animation,
             |binding| match binding {
-                "hand" => self.swap_hand_item.clone(),
+                "hand" => {
+                    let (item, variant) = match self.swap_hand_item.as_ref() {
+                        Some(item) => item,
+                        None => return None,
+                    };
+                    let item_data = item.data();
+                    match &item_data.action {
+                        ItemAction::Place(item_block_placements) => {
+                            let placement = &item_block_placements[*variant];
+                            Some(Cow::Owned(ItemModel::Block((placement.block))))
+                        }
+                        _ => Some(Cow::Borrowed(&item_data.model)),
+                    }
+                }
                 _ => None,
             },
         );
@@ -1640,7 +1670,12 @@ impl ClientGame {
                     * Matrix4::from_angle_y(Rad(rotation)),
                 &mut entity_mesh.vertex_consumer(),
                 &[],
-                |slot| entity.hand_item.clone(),
+                |slot| {
+                    entity
+                        .hand_item
+                        .as_ref()
+                        .map(|item| Cow::Borrowed(&item.item.data().model))
+                },
             );
         }
         /*let crack_textures: Vec<_> = (0..=3)
@@ -2468,14 +2503,14 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         inverted: false,
                         reset: true,
                         to: "equip".to_string(),
-                        time: 0.1,
+                        time: 0.,
                     },
                     AnimationTransition {
                         condition: "run".to_string(),
                         inverted: false,
                         reset: true,
                         to: "running".to_string(),
-                        time: 0.25,
+                        time: 0.1,
                     },
                 ],
                 observers: vec![],
@@ -2563,7 +2598,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                         inverted: false,
                         reset: true,
                         to: "equip".to_string(),
-                        time: 0.1,
+                        time: 0.,
                     },
                 ],
                 observers: vec![],

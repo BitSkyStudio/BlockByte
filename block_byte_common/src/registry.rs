@@ -467,7 +467,7 @@ impl Default for ItemAction {
         Self::Ignore
     }
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub enum ItemModel {
     Block(BlockKey),
     Model(ModelInstance),
@@ -1123,6 +1123,7 @@ impl RegistryConfigLoadable for ModelData {
         })
     }
 }
+#[derive(Clone)]
 pub struct ModelInstance {
     pub model: ModelKey,
     pub textures: Vec<TextureKey>,

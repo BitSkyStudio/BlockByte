@@ -10,6 +10,7 @@ use cgmath::{Deg, EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform,
 use image::RgbaImage;
 use rand::rngs::StdRng;
 use rand_seeder::Seeder;
+use std::borrow::Cow;
 use std::f64::consts::PI;
 use std::iter;
 use std::mem::size_of;
@@ -1172,7 +1173,7 @@ pub fn draw_model(
     matrix: Matrix4<f32>,
     vertex_consumer: &mut impl FnMut([f32; 3], [f32; 2], [f32; 3]),
     animations: &[DrawAnimation],
-    item_query: impl Fn(&str) -> Option<ClientItem>,
+    binding_query: impl Fn(&str) -> Option<Cow<'static, ItemModel>>,
 ) {
     let model_data = &model.model.data().model;
     let embed_textures = &TEXTURE_ATLAS.get().unwrap().models[model.model.numeric_id()];
@@ -1194,13 +1195,13 @@ pub fn draw_model(
             );
         },
         |matrix, binding| {
-            if let Some(item) = item_query(binding) {
+            if let Some(item) = binding_query(binding) {
                 item_models.push((matrix, item, binding.to_string()));
             }
         },
     );
-    for (matrix, item, binding) in item_models {
-        let anchor = match &item.item.data().model {
+    for (matrix, model, binding) in item_models {
+        let anchor = match &*model {
             ItemModel::Block(block) => match &block.data().render_data {
                 BlockRenderData::Air => Matrix4::identity(),
                 BlockRenderData::Full { faces } => Matrix4::identity(),
@@ -1226,7 +1227,7 @@ pub fn draw_model(
                 .map(|matrix| matrix.invert().unwrap())
                 .unwrap_or(Matrix4::identity()),
         };
-        draw_item_model(&item.item.data().model, matrix * anchor, vertex_consumer);
+        draw_item_model(&*model, matrix * anchor, vertex_consumer);
     }
 }
 pub fn draw_item_model(
