@@ -169,8 +169,8 @@ impl Chunk {
                             let mut block = *block;
                             block.rotation = block.block.data().rotation.get_nearest_valid(
                                 rotation
-                                    .compose(Into::<Orientation>::into(block.rotation))
-                                    .into(),
+                                    .compose(Orientation::from_block_rotation(block.rotation))
+                                    .into_block_rotation(),
                             );
                             let place_position = block_position + offset;
                             let (place_chunk, place_chunk_offset) =
@@ -314,8 +314,7 @@ impl Chunk {
                     let block_data = block_state.block.data();
                     let mut machines = self.components.machine.write();
                     if let Some(machine) = machines.get_mut(block) {
-                        let orientation = Into::<Orientation>::into(block_state.rotation);
-                        let own_face = orientation.inverse_apply(world_face);
+                        let own_face = block_state.rotation.inverse_rotate_face(world_face);
                         match block_data.machine.as_ref().unwrap().faces.by_face(own_face) {
                             BlockMachineFace::SignalInput => {
                                 machine.blocked.store(false, Ordering::Relaxed);
@@ -330,8 +329,7 @@ impl Chunk {
                     let block_data = block_state.block.data();
                     let mut machines = self.components.machine.write();
                     if let Some(machine) = machines.get_mut(block) {
-                        let orientation = Into::<Orientation>::into(block_state.rotation);
-                        let own_face = orientation.inverse_apply(world_face);
+                        let own_face = block_state.rotation.inverse_rotate_face(world_face);
                         match block_data.machine.as_ref().unwrap().faces.by_face(own_face) {
                             BlockMachineFace::LogicInput => {
                                 machine.blocked.store(false, Ordering::Relaxed);
@@ -345,8 +343,7 @@ impl Chunk {
                     let block_pos = self.position.to_block_pos() + block.xyz();
                     let block = *self.blocks.read().get(block.index()).unwrap();
                     let block_data = block.block.data();
-                    let orientation = Into::<Orientation>::into(block.rotation);
-                    let face = orientation.inverse_apply(world_face);
+                    let face = block.rotation.inverse_rotate_face(world_face);
                     if let Some(support_face) = block_data.hanging {
                         if face == support_face {
                             let drops = server.destroy(block_pos);
@@ -394,8 +391,7 @@ impl Chunk {
                             pull,
                         } => {
                             let view = &machine_data.script_views[*view];
-                            let orientation = Into::<Orientation>::into(block.rotation);
-                            let other_position = orientation.rotate_block_pos(*push_offset)
+                            let other_position = block.rotation.rotate_block_pos(*push_offset)
                                 + offset.xyz()
                                 + self.position.to_block_pos();
                             let Some(other_block) = server.get_block(other_position) else {
@@ -412,8 +408,9 @@ impl Chunk {
                                     .machine
                                     .read();
                                 let other_machine = other_chunk_machines.get(other_offset).unwrap();
-                                let face_rotated = Into::<Orientation>::into(other_block.rotation)
-                                    .inverse_apply(orientation.apply(*other_face));
+                                let face_rotated = other_block
+                                    .rotation
+                                    .inverse_rotate_face(block.rotation.rotate_face(*other_face));
                                 let face_data = other_machine_data.faces.by_face(face_rotated);
                                 match face_data {
                                     BlockMachineFace::InventoryAccess { input, output } => {
@@ -486,8 +483,7 @@ impl Chunk {
                         }
                         MachineInstrution::WriteSignal { face, value } => {
                             let value = state.resolve_value(value);
-                            let orientation = Into::<Orientation>::into(block.rotation);
-                            let world_face = orientation.apply(*face);
+                            let world_face = block.rotation.rotate_face(*face);
                             let target_position = self.position.to_block_pos()
                                 + offset.xyz()
                                 + world_face.get_block_offset();
@@ -510,8 +506,7 @@ impl Chunk {
                                 }
                             }
                             *logic_state = Some(value);
-                            let orientation = Into::<Orientation>::into(block.rotation);
-                            let world_face = orientation.apply(*face);
+                            let world_face = block.rotation.rotate_face(*face);
                             let target_position = self.position.to_block_pos()
                                 + offset.xyz()
                                 + world_face.get_block_offset();

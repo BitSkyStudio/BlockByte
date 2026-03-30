@@ -8,7 +8,7 @@ use std::{
 use num_integer::{Integer, Roots};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::TexCoords;
+use crate::{TexCoords, registry::BlockRotation};
 
 pub const CHUNK_SIZE_BITS: u8 = 5;
 pub const CHUNK_SIZE: usize = 32;
@@ -1164,5 +1164,17 @@ impl Orientation {
             }
             result.try_into().unwrap()
         })
+    }
+    pub fn from_block_rotation(block_rotation: BlockRotation) -> Orientation {
+        Orientation::all()[block_rotation.0 as usize]
+    }
+    pub fn into_block_rotation(self) -> BlockRotation {
+        //todo: this shouldnt iterate
+        BlockRotation(
+            Orientation::all()
+                .iter()
+                .position(|orientation| *orientation == self)
+                .unwrap() as u8,
+        )
     }
 }

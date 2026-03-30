@@ -1763,7 +1763,7 @@ impl ClientGame {
                             }
                         }
                         BlockRenderData::Model(model) => {
-                            let orientation: Orientation = block.rotation.into();
+                            let orientation = Orientation::from_block_rotation(block.rotation);
                             let right = orientation.right.get_offset();
                             let up = orientation.up.get_offset();
                             let front = orientation.forward.get_offset();
@@ -1878,8 +1878,9 @@ impl ClientGame {
                             let block_position = position + face.get_block_offset();
                             let block_data = place_block.block.data();
                             let mut blocked = place_block.use_count > held_item.count;
-                            let rotation =
-                                block_data.rotation.from_look_direction(camera.direction);
+                            let rotation = block_data
+                                .rotation
+                                .from_look_direction(camera.direction, face);
                             let fake_block_entry = BlockEntry {
                                 block: place_block.block,
                                 rotation,
@@ -1898,8 +1899,7 @@ impl ClientGame {
                                 }
                             }
                             if let Some(hanging) = block_data.hanging {
-                                let orientation = Into::<Orientation>::into(rotation);
-                                let world_hanging = orientation.apply(hanging);
+                                let world_hanging = rotation.rotate_face(hanging);
                                 match self
                                     .get_block(block_position + world_hanging.get_block_offset())
                                 {
@@ -1923,7 +1923,7 @@ impl ClientGame {
                                     .unwrap()
                                     .block;
                                 if block == air_block() {
-                                    let orientation: Orientation = rotation.into();
+                                    let orientation = Orientation::from_block_rotation(rotation);
                                     let right = orientation.right.get_offset();
                                     let up = orientation.up.get_offset();
                                     let front = orientation.forward.get_offset();
@@ -2221,7 +2221,7 @@ impl ClientChunk {
                                 y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32 + 0.5,
                                 z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
                             };
-                            let orientation: Orientation = block.rotation.into();
+                            let orientation = Orientation::from_block_rotation(block.rotation);
                             let right = orientation.right.get_offset();
                             let up = orientation.up.get_offset();
                             let front = orientation.forward.get_offset();

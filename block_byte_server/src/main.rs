@@ -404,6 +404,7 @@ fn main() {
                                                     .rotation
                                                     .from_look_direction(
                                                         entity.state.lock().direction,
+                                                        face,
                                                     ),
                                                 state: 0,
                                             },
@@ -1222,8 +1223,7 @@ impl Server {
             }
         }
         if let Some(hanging) = block_data.hanging {
-            let orientation = Into::<Orientation>::into(block.rotation);
-            let world_hanging = orientation.apply(hanging);
+            let world_hanging = block.rotation.rotate_face(hanging);
             let Some(hanging_block) = self.get_block(position + world_hanging.get_block_offset())
             else {
                 return Err(());

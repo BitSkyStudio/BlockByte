@@ -17,7 +17,7 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, BlockPos, Face, FaceMap, Orientation, Pos, Vec3};
+use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, Orientation, Pos, Vec3};
 use crate::model::Model;
 use crate::scripts::{
     CompiledScript, ExternalScriptByteCode, RegisterId, RegisterOrImmediate, ScriptLabel,
@@ -548,59 +548,66 @@ pub enum BlockRotationMode {
     FullOriented,
 }
 impl BlockRotationMode {
-    pub fn from_look_direction(self, direction: LookDirection) -> BlockRotation {
-        fn closest_face_to_offset(offset: Pos, enable_vertical: bool) -> Face {
+    pub fn from_look_direction(self, direction: LookDirection, up_face: Face) -> BlockRotation {
+        fn closest_face_to_offset(offset: Pos, filter: impl Fn(Face) -> bool) -> Face {
             let face_fitness = |face: Face| -> f32 {
                 let face_offset = face.get_offset();
                 (offset.x * face_offset.x) + (offset.y * face_offset.y) + (offset.z * face_offset.z)
             };
             *Face::all()
                 .iter()
-                .filter(|face| enable_vertical || face.get_block_offset().y == 0)
+                .filter(|face| filter(**face))
                 .max_by(|face1, face2| face_fitness(**face1).total_cmp(&face_fitness(**face2)))
                 .unwrap()
         }
         let orientation = match self {
             BlockRotationMode::None => Orientation::IDENTITY,
             BlockRotationMode::Horizontal => {
-                let face = closest_face_to_offset(direction.make_front(), false);
-                Orientation::from_front_right(face, face.cross(Face::Up))
-                    .unwrap_or(Orientation::IDENTITY)
+                let face = closest_face_to_offset(direction.make_front(), |face| {
+                    face.axis_direction().0 != Axis::Y
+                });
+                Orientation::from_front_up(face, Face::Up).unwrap()
             }
             BlockRotationMode::Full => {
-                let face = closest_face_to_offset(direction.make_front(), true);
-                Orientation::from_front_right(
+                let face = closest_face_to_offset(direction.make_front(), |_| true);
+                Orientation::from_front_up(
                     face,
-                    face.cross(if face.get_block_offset().y == 0 {
-                        Face::Up
-                    } else {
-                        Face::Front
-                    }),
+                    match face {
+                        Face::Up => Face::Back,
+                        Face::Down => Face::Front,
+                        _ => Face::Up,
+                    },
                 )
-                .unwrap_or(Orientation::IDENTITY)
+                .unwrap()
             }
-            BlockRotationMode::FullOriented => Orientation::from_front_right(
-                closest_face_to_offset(direction.make_front(), true),
-                closest_face_to_offset(direction.make_right(), true),
+            BlockRotationMode::FullOriented => Orientation::from_front_up(
+                closest_face_to_offset(direction.make_front(), |face| {
+                    face.axis_direction().0 != up_face.axis_direction().0
+                }),
+                up_face,
             )
-            .unwrap_or(Orientation::IDENTITY),
+            .unwrap(),
         };
-        orientation.into()
+        orientation.into_block_rotation()
     }
     pub fn get_nearest_valid(self, value: BlockRotation) -> BlockRotation {
         match self {
             BlockRotationMode::None => BlockRotation::default(),
-            BlockRotationMode::Horizontal => match Into::<Orientation>::into(value).forward {
-                Face::Up | Face::Down => Orientation::from_front_up(Face::Front, Face::Up).unwrap(),
-                front => Orientation::from_front_up(front, Face::Up).unwrap(),
+            BlockRotationMode::Horizontal => {
+                match Orientation::from_block_rotation(value).forward {
+                    Face::Up | Face::Down => {
+                        Orientation::from_front_up(Face::Front, Face::Up).unwrap()
+                    }
+                    front => Orientation::from_front_up(front, Face::Up).unwrap(),
+                }
+                .into_block_rotation()
             }
-            .into(),
-            BlockRotationMode::Full => match Into::<Orientation>::into(value).forward {
+            BlockRotationMode::Full => match Orientation::from_block_rotation(value).forward {
                 Face::Up => Orientation::from_front_up(Face::Up, Face::Back).unwrap(),
                 Face::Down => Orientation::from_front_up(Face::Down, Face::Front).unwrap(),
                 front => Orientation::from_front_up(front, Face::Up).unwrap(),
             }
-            .into(),
+            .into_block_rotation(),
             BlockRotationMode::FullOriented => value,
         }
     }
@@ -822,7 +829,7 @@ impl BlockEntry {
     }
     pub fn supports(&self, world_face: Face) -> bool {
         let block_data = self.block.data();
-        let orientation = Into::<Orientation>::into(self.rotation);
+        let orientation = Orientation::from_block_rotation(self.rotation);
         let face = orientation.inverse_apply(world_face);
         *block_data.supporting.by_face(face)
     }
@@ -832,31 +839,16 @@ pub fn skip_if_default<T: Default + PartialEq>(value: &T) -> bool {
 }
 impl Default for BlockRotation {
     fn default() -> Self {
-        BlockRotation::from(Orientation::IDENTITY)
+        Orientation::IDENTITY.into_block_rotation()
     }
 }
-impl Into<Orientation> for BlockRotation {
-    fn into(self) -> Orientation {
-        Orientation::all()[self.0 as usize]
-    }
-}
-impl From<Orientation> for BlockRotation {
-    fn from(value: Orientation) -> Self {
-        //todo: this shouldnt iterate
-        BlockRotation(
-            Orientation::all()
-                .iter()
-                .position(|orientation| *orientation == value)
-                .unwrap() as u8,
-        )
-    }
-}
+
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
-pub struct BlockRotation(u8);
+pub struct BlockRotation(pub u8);
 impl BlockRotation {
     pub fn rotate_aabb(self, aabb: AABB<f32>) -> AABB<f32> {
         let aabb = aabb.offset(Vec3::all(-0.5));
-        let orientation: Orientation = self.into();
+        let orientation = Orientation::from_block_rotation(self);
         AABB::bound(
             [
                 orientation.rotate_pos(aabb.min),
@@ -880,6 +872,18 @@ impl BlockRotation {
         )
         .unwrap()
         .offset(Vec3::all(0.5))
+    }
+    pub fn rotate_face(self, face: Face) -> Face {
+        Orientation::from_block_rotation(self).apply(face)
+    }
+    pub fn inverse_rotate_face(self, face: Face) -> Face {
+        Orientation::from_block_rotation(self).inverse_apply(face)
+    }
+    pub fn rotate_pos(self, v: Pos) -> Pos {
+        Orientation::from_block_rotation(self).rotate_pos(v)
+    }
+    pub fn rotate_block_pos(self, v: BlockPos) -> BlockPos {
+        Orientation::from_block_rotation(self).rotate_block_pos(v)
     }
 }
 
