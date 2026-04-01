@@ -670,6 +670,7 @@ pub enum MachineInstrution {
         other: BlockPos,
         other_face: Face,
         pull: bool,
+        success: ScriptLabel,
     },
     ReadSignal {
         face: Face,
@@ -699,12 +700,14 @@ pub enum MachineInstrution {
     MoveItem {
         from_view: usize,
         to_view: usize,
+        success: ScriptLabel,
     },
     Craft {
         recipes: KeyGroup<RecipeData>,
         input_view: usize,
         output_view: usize,
         speed: f32,
+        success: ScriptLabel,
     },
 }
 impl ExternalScriptByteCode for MachineInstrution {
@@ -751,6 +754,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                         "transfer_push" => false,
                         _ => unreachable!(),
                     },
+                    success: arguments[4].parse().unwrap(),
                 }
             }
             "get_slot_item_count" => {
@@ -758,6 +762,24 @@ impl ExternalScriptByteCode for MachineInstrution {
                 MachineInstrution::GetSlotItemCount {
                     slot: parse_context.parse_value(arguments[1]),
                     register: parse_context.parse_register(arguments[0]),
+                }
+            }
+            "move_item" => {
+                expect_argument_count(parse_context.current_line_num, arguments, 3)?;
+                MachineInstrution::MoveItem {
+                    from_view: arguments[0].parse().unwrap(),
+                    to_view: arguments[1].parse().unwrap(),
+                    success: arguments[2].parse().unwrap(),
+                }
+            }
+            "craft" => {
+                expect_argument_count(parse_context.current_line_num, arguments, 5)?;
+                MachineInstrution::Craft {
+                    recipes: KeyGroup::parse(arguments[0]).unwrap(),
+                    input_view: arguments[1].parse().unwrap(),
+                    output_view: arguments[2].parse().unwrap(),
+                    speed: arguments[3].parse().unwrap(),
+                    success: arguments[4].parse().unwrap(),
                 }
             }
             _ => {
@@ -888,7 +910,7 @@ impl BlockRotation {
 }
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
-pub struct BlockColor(u16);
+pub struct BlockColor(pub u16);
 impl Into<Color> for BlockColor {
     fn into(self) -> Color {
         Color {
@@ -901,7 +923,7 @@ impl Into<Color> for BlockColor {
 }
 impl Default for BlockColor {
     fn default() -> Self {
-        Self(2 ^ 15 - 1)
+        Self(32767)
     }
 }
 

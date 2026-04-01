@@ -5,6 +5,7 @@ use std::{
     sync::OnceLock,
 };
 
+use cgmath::{EuclideanSpace, Matrix4, Point3, Transform, Vector3};
 use num_integer::{Integer, Roots};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -64,6 +65,14 @@ impl<'de, T: Copy + Deserialize<'de>> Deserialize<'de> for Vec3<T> {
             }
         }
         deserializer.deserialize_tuple(3, Vec3Visitor::<T>(PhantomData))
+    }
+}
+impl<T: Copy> Vec3<T> {
+    pub fn from_array([x, y, z]: [T; 3]) -> Self {
+        Self { x, y, z }
+    }
+    pub fn into_array(self) -> [T; 3] {
+        [self.x, self.y, self.z]
     }
 }
 impl<T: Debug + Copy> Debug for Vec3<T> {
@@ -240,6 +249,22 @@ impl Pos {
     }
     pub fn normalize(self) -> Pos {
         self / self.length()
+    }
+    pub fn multiply_point(self, matrix: Matrix4<f32>) -> Pos {
+        let transformed = matrix.transform_point(Point3::new(self.x, self.y, self.z));
+        Pos {
+            x: transformed.x,
+            y: transformed.y,
+            z: transformed.z,
+        }
+    }
+    pub fn multiply_vector(self, matrix: Matrix4<f32>) -> Pos {
+        let transformed = matrix.transform_vector(Vector3::new(self.x, self.y, self.z));
+        Pos {
+            x: transformed.x,
+            y: transformed.y,
+            z: transformed.z,
+        }
     }
 }
 pub fn lerp_number(a: f32, b: f32, v: f32) -> f32 {
@@ -881,12 +906,7 @@ pub struct AABBRaycastResult {
     pub face: Face,
 }
 impl Face {
-    pub fn add_vertices(
-        self,
-        coords: TexCoords,
-        rotation: u8,
-        mut vertex_consumer: impl FnMut(Pos, (f32, f32)),
-    ) {
+    pub fn get_vertices(self, coords: TexCoords, rotation: u8) -> [(Pos, [f32; 2]); 4] {
         let (first, second, third, fourth) = match self {
             Face::Front => (
                 Pos {
@@ -1022,20 +1042,18 @@ impl Face {
             ),
         };
         let get_uv = |id: u8| match (id + rotation) % 4 {
-            0 => (coords.u1, coords.v1),
-            1 => (coords.u2, coords.v1),
-            2 => (coords.u2, coords.v2),
-            3 => (coords.u1, coords.v2),
+            0 => [coords.u1, coords.v1],
+            1 => [coords.u2, coords.v1],
+            2 => [coords.u2, coords.v2],
+            3 => [coords.u1, coords.v2],
             _ => unreachable!(),
         };
-
-        vertex_consumer(first, get_uv(0));
-        vertex_consumer(fourth, get_uv(3));
-        vertex_consumer(third, get_uv(2));
-
-        vertex_consumer(third, get_uv(2));
-        vertex_consumer(second, get_uv(1));
-        vertex_consumer(first, get_uv(0));
+        [
+            (first, get_uv(0)),
+            (second, get_uv(1)),
+            (third, get_uv(2)),
+            (fourth, get_uv(3)),
+        ]
     }
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]

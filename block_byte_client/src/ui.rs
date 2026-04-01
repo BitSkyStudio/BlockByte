@@ -1,4 +1,4 @@
-use std::{cell::RefCell, sync::OnceLock};
+use std::{cell::RefCell, sync::OnceLock, u32};
 
 use block_byte_common::{
     ClientItem, Color, TexCoords,
@@ -21,7 +21,7 @@ use winit::{
 
 use crate::{
     ClientGame, ClientPlayer, GUIMesh, TexCoordsExt, TexCoordsIndexExt,
-    render::{CameraUniform, GUIVertex, item_model_icon_view},
+    render::{CameraUniform, GUIVertex, MeshVertexConsumer, item_model_icon_view},
     translate,
 };
 
@@ -626,39 +626,55 @@ impl UIElementRenderContext<'_> {
         //todo: clip
         let matrix =
             cgmath::perspective(cgmath::Deg(20.), 1., 0.05, 5.) * item_model_icon_view(icon);
-        crate::render::draw_item_model(icon, Matrix4::identity(), &mut |pos, texture, normal| {
-            let x =
-                (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2. - self.aspect_ratio;
-            let y =
-                -((self.content.pos.y + quad.pos.y + quad.size.y) / self.gui_size as f32 * 2. - 1.);
-            let w = quad.size.x / self.gui_size as f32 * 2.;
-            let h = quad.size.y / self.gui_size as f32 * 2.;
-            let pos = matrix.transform_point(cgmath::Point3 {
-                x: pos[0],
-                y: pos[1],
-                z: pos[2],
-            });
-            let normal = Pos {
-                x: normal[0],
-                y: normal[1],
-                z: normal[2],
-            };
-            let light = Pos {
-                x: 1.,
-                y: 1.,
-                z: 1.,
+        let light = Pos {
+            x: 1.,
+            y: 3.,
+            z: 2.,
+        }
+        .normalize();
+        struct IconVertexConsumer<'a> {
+            pub mesh: &'a mut GUIMesh,
+            pub projection: Matrix4<f32>,
+            pub light: Pos,
+            pub rect: UIRect,
+        }
+        impl MeshVertexConsumer for IconVertexConsumer<'_> {
+            fn add_vertex(&mut self, vertex: crate::render::MeshVertex) -> u32 {
+                let position = vertex.position.multiply_point(self.projection);
+                if vertex.normal.x + vertex.normal.y + vertex.normal.z <= 0. {
+                    return u32::MAX;
+                }
+                let light_dot = vertex.normal.dot(self.light);
+                self.mesh.add_vertex(GUIVertex {
+                    position: [
+                        self.rect.pos.x + (position.x + 1.) / 2. * self.rect.size.x,
+                        self.rect.pos.y + (position.y + 1.) / 2. * self.rect.size.y,
+                    ],
+                    tex_coords: vertex.uv,
+                    color: Color::grayscale(((1. - (1. - light_dot) / 1.5) * 255.) as u8).into(),
+                })
             }
-            .normalize();
-            let dot = normal.dot(light);
-            if dot > 0. {
-                let shade_color = 1. - normal.x.abs() * 0.5 - normal.z.abs() * 0.2;
-                self.buffer.vertices.push(GUIVertex {
-                    color: Color::grayscale((shade_color * 255.) as u8).into(),
-                    tex_coords: texture,
-                    position: [x + (pos.x + 1.) / 2. * w, y + (pos.y + 1.) / 2. * h],
-                });
+            fn add_index(&mut self, index: u32) {
+                if index == u32::MAX {
+                    return;
+                }
+                self.mesh.add_index(index);
             }
-        });
+        }
+        let x = (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2. - self.aspect_ratio;
+        let y = -((self.content.pos.y + quad.pos.y + quad.size.y) / self.gui_size as f32 * 2. - 1.);
+        let w = quad.size.x / self.gui_size as f32 * 2.;
+        let h = quad.size.y / self.gui_size as f32 * 2.;
+        let mut icon_vertex_consumer = IconVertexConsumer {
+            light,
+            mesh: self.buffer,
+            projection: matrix,
+            rect: UIRect {
+                pos: UIPos { x, y },
+                size: UIPos { x: w, y: h },
+            },
+        };
+        crate::render::draw_item_model(icon, Matrix4::identity(), &mut icon_vertex_consumer);
     }
 }
 fn add_element_to_taffy<'a>(

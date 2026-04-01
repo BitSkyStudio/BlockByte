@@ -13,6 +13,7 @@ use std::{
     path::Path,
     sync::{Arc, OnceLock, atomic::AtomicU64},
     time::{Duration, Instant, SystemTime},
+    u32,
 };
 
 use ahash::{AHashMap, AHashSet};
@@ -24,7 +25,7 @@ use block_byte_common::{
         AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos, Ray,
         Vec3,
     },
-    model::{DrawAnimation, ModelTexture},
+    model::{DrawAnimation, ModelGeometry, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
@@ -59,7 +60,10 @@ use winit::{
 
 use crate::{
     clipping::Frustum,
-    render::{CameraUniform, DamageVertex, GUIVertex, RenderState, Vertex},
+    render::{
+        BaseMesh, CameraUniform, ChunkMesh, ChunkVertex, DamageMesh, DamageVertex, GPUMesh,
+        GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, Vertex,
+    },
     ui::{
         HoveredElement, ScreenData, TEXT_RENDERER, TextRenderer, UIPos, UIRect, render_screen,
         text_renderer,
@@ -1390,8 +1394,8 @@ pub struct ClientGame {
     pub viewmodel_player: AnimationPlayer,
     pub swap_hand_item: Option<(ItemKey, usize)>,
     pub chunk_mesh_channels: (
-        std::sync::mpsc::Sender<(ChunkPos, Option<(Buffer, u32)>, u64)>,
-        std::sync::mpsc::Receiver<(ChunkPos, Option<(Buffer, u32)>, u64)>,
+        std::sync::mpsc::Sender<(ChunkPos, Option<GPUMesh>, u64)>,
+        std::sync::mpsc::Receiver<(ChunkPos, Option<GPUMesh>, u64)>,
     ),
     pub researched: HashSet<ResearchKey>,
     pub stamina: f32,
@@ -1480,36 +1484,6 @@ impl ClientGame {
         dt: f32,
         connection: &ClientConnection,
     ) {
-        /*let animation = if self.equip_animation > 0. {
-            Some(DrawAnimation {
-                animation: "equip",
-                time: self.equip_animation,
-                weight: 1.,
-            })
-        } else if self.build_animation > 0. {
-            Some(DrawAnimation {
-                animation: "place",
-                time: self.build_animation / 2.,
-                weight: 1.,
-            })
-        } else if let Some(hit_timer) = self.hit_timer {
-            Some(DrawAnimation {
-                animation: "hit",
-                time: hit_timer / self.active_tool().swing_time,
-                weight: 1.,
-            })
-        } else {
-            Some(DrawAnimation {
-                animation: "idle",
-                time: (((secs_since_start() / 2.) % 2.) - 1.).abs(),
-                weight: 0.3,
-            })
-            /*Some(DrawAnimation {
-                animation: "running",
-                time: (secs_since_start() * 1.5) % 1.,
-                weight: 1.,
-            })*/
-        };*/
         if self.held_item().is_none() {
             self.viewmodel_player.trigger("empty_hand");
         }
@@ -1560,7 +1534,7 @@ impl ClientGame {
                 textures: vec![],
             },
             Matrix4::identity(),
-            &mut viewmodel_mesh.vertex_consumer(),
+            &mut viewmodel_mesh.consumer(Color::WHITE),
             &animation,
             |binding| match binding {
                 "hand" => {
@@ -1629,20 +1603,7 @@ impl ClientGame {
                             build_data,
                             neighbor_chunks,
                         );
-                        let buffer = if mesh.vertices.len() == 0 {
-                            None
-                        } else {
-                            Some((
-                                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                    label: Some("Chunk Vertex Buffer"),
-                                    contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
-                                    usage: wgpu::BufferUsages::VERTEX
-                                        | wgpu::BufferUsages::COPY_DST,
-                                }),
-                                mesh.vertices.len() as u32,
-                            ))
-                        };
-                        tx.send((modified_chunk, buffer, version));
+                        tx.send((modified_chunk, GPUMesh::allocate(&mesh, &device), version));
                     });
                     i += 1;
                     if i > 10 {
@@ -1668,7 +1629,7 @@ impl ClientGame {
                 &entity.key.data().model,
                 Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
                     * Matrix4::from_angle_y(Rad(rotation)),
-                &mut entity_mesh.vertex_consumer(),
+                &mut entity_mesh.consumer(Color::WHITE),
                 &[],
                 |slot| {
                     entity
@@ -1678,13 +1639,6 @@ impl ClientGame {
                 },
             );
         }
-        /*let crack_textures: Vec<_> = (0..=3)
-        .map(|i| {
-            TextureKey::id(&format!("block_damage.{i}"))
-                .unwrap()
-                .tex_coords()
-        })
-        .collect();*/
         let player_chunk = self.player_position.to_chunk_pos();
         let view_distance = 4;
         for chunk_position in AABB::new(
@@ -1727,38 +1681,28 @@ impl ClientGame {
                             .as_ref()
                             .map(|health| health.health)
                             .unwrap_or(1.));
-                    /*let crack_texture = *crack_textures
-                    .get(
-                        ((progress * crack_textures.len() as f32) as usize)
-                            .min(crack_textures.len()),
-                    )
-                    .unwrap();*/
+                    let mut mesh_vertex_consumer = damage_mesh.consumer(progress);
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { .. } => {
                             for face in Face::all() {
-                                face.add_vertices(
-                                    TexCoords {
-                                        u1: 0.,
-                                        v1: 0.,
-                                        u2: 16.,
-                                        v2: 16.,
-                                    },
-                                    0,
-                                    |position, coords| {
-                                        let border = 0.;
-                                        let vt_pos = base_position + position * (1. + border * 2.)
-                                            - Pos {
-                                                x: border,
-                                                y: border,
-                                                z: border,
-                                            };
-                                        damage_mesh.vertices.push(DamageVertex {
-                                            position: [vt_pos.x, vt_pos.y, vt_pos.z],
-                                            tex_coords: [coords.0, coords.1],
-                                            progress,
-                                        });
-                                    },
+                                mesh_vertex_consumer.add_quad(
+                                    face.get_vertices(
+                                        TexCoords {
+                                            u1: 0.,
+                                            v1: 0.,
+                                            u2: 16.,
+                                            v2: 16.,
+                                        },
+                                        0,
+                                    )
+                                    .map(|(position, uv)| {
+                                        MeshVertex {
+                                            position: base_position + position,
+                                            normal: face.get_offset(),
+                                            uv,
+                                        }
+                                    }),
                                 );
                             }
                         }
@@ -1780,13 +1724,18 @@ impl ClientGame {
                                     Vector4::new(0., 0., 0., 1.),
                                 ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
                                 &[],
-                                |position, normal, uv, texture| {
-                                    let (_, width, height) = model_data.model.textures[texture];
-                                    damage_mesh.vertices.push(DamageVertex {
-                                        position: [position.x, position.y, position.z],
-                                        tex_coords: [uv.0 * width, uv.1 * height],
-                                        progress,
-                                    });
+                                |geometry| match geometry {
+                                    ModelGeometry::Quad(vertices, texture) => {
+                                        let (_, width, height) = model_data.model.textures[texture];
+                                        mesh_vertex_consumer.add_quad(vertices.map(|vertex| {
+                                            MeshVertex {
+                                                position: vertex.position,
+                                                normal: vertex.normal,
+                                                uv: [vertex.uv[0] * width, vertex.uv[1] * height],
+                                            }
+                                        }));
+                                    }
+                                    ModelGeometry::Triangle(vertices, texture) => todo!(),
                                 },
                                 |matrix, binding| {},
                             );
@@ -1802,6 +1751,7 @@ impl ClientGame {
                     {
                         continue;
                     }
+                    let mut mesh_vertex_consumer = entity_mesh.consumer(Color::WHITE);
                     for (plant, stage) in &plants.plants {
                         let plant = plant.data();
                         let position = base_position
@@ -1827,38 +1777,30 @@ impl ClientGame {
                                 z: second_angle.sin(),
                             } * (plant.size / 2.)
                                 + position;
+                            let up_height_vector = Pos::Y * plant.height;
                             let vertices = [
-                                Vertex {
-                                    position: [first.x, first.y, first.z],
-                                    tex_coords: [texture.u1, texture.v2],
-                                    normals: [0., 1., 0.],
-                                    color: Color::WHITE.into(),
+                                MeshVertex {
+                                    position: first,
+                                    uv: [texture.u1, texture.v2],
+                                    normal: Pos::Y,
                                 },
-                                Vertex {
-                                    position: [second.x, second.y, second.z],
-                                    tex_coords: [texture.u2, texture.v2],
-                                    normals: [0., 1., 0.],
-                                    color: Color::WHITE.into(),
+                                MeshVertex {
+                                    position: second,
+                                    uv: [texture.u2, texture.v2],
+                                    normal: Pos::Y,
                                 },
-                                Vertex {
-                                    position: [second.x, second.y + plant.height, second.z],
-                                    tex_coords: [texture.u2, texture.v1],
-                                    normals: [0., 1., 0.],
-                                    color: Color::WHITE.into(),
+                                MeshVertex {
+                                    position: second + up_height_vector,
+                                    uv: [texture.u2, texture.v1],
+                                    normal: Pos::Y,
                                 },
-                                Vertex {
-                                    position: [first.x, first.y + plant.height, first.z],
-                                    tex_coords: [texture.u1, texture.v1],
-                                    normals: [0., 1., 0.],
-                                    color: Color::WHITE.into(),
+                                MeshVertex {
+                                    position: first + up_height_vector,
+                                    uv: [texture.u1, texture.v1],
+                                    normal: Pos::Y,
                                 },
                             ];
-                            entity_mesh.vertices.push(vertices[0]);
-                            entity_mesh.vertices.push(vertices[1]);
-                            entity_mesh.vertices.push(vertices[2]);
-                            entity_mesh.vertices.push(vertices[2]);
-                            entity_mesh.vertices.push(vertices[3]);
-                            entity_mesh.vertices.push(vertices[0]);
+                            mesh_vertex_consumer.add_quad(vertices);
                         }
                     }
                 }
@@ -1939,29 +1881,21 @@ impl ClientGame {
                                             Vector4::new(-front.x, -front.y, -front.z, 0.),
                                             Vector4::new(0., 0., 0., 1.),
                                         ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
-                                        &mut |position, tex_coords, normals| {
-                                            entity_mesh.vertices.push(Vertex {
-                                                position,
-                                                tex_coords,
-                                                normals,
-                                                color: if blocked {
-                                                    Color {
-                                                        r: 255,
-                                                        g: 100,
-                                                        b: 100,
-                                                        a: 100,
-                                                    }
-                                                } else {
-                                                    Color {
-                                                        r: 255,
-                                                        g: 255,
-                                                        b: 255,
-                                                        a: 150,
-                                                    }
-                                                }
-                                                .into(),
-                                            });
-                                        },
+                                        &mut entity_mesh.consumer(if blocked {
+                                            Color {
+                                                r: 255,
+                                                g: 100,
+                                                b: 100,
+                                                a: 100,
+                                            }
+                                        } else {
+                                            Color {
+                                                r: 255,
+                                                g: 255,
+                                                b: 255,
+                                                a: 150,
+                                            }
+                                        }),
                                     );
                                 }
                             }
@@ -2022,110 +1956,18 @@ pub struct ClientChunk {
     pub position: ChunkPos,
     pub mesh_build_data: Arc<ChunkMeshBuildData>,
     pub components: ClientChunkBlockComponents,
-    pub buffer: Option<(Buffer, u32)>,
+    pub buffer: Option<GPUMesh>,
     pub modified: bool,
     pub scheduled: bool,
 }
-pub struct Mesh<T> {
-    pub vertices: Vec<T>,
-}
-impl<T> Default for Mesh<T> {
-    fn default() -> Self {
-        Mesh {
-            vertices: Vec::new(),
-        }
-    }
-}
-pub type BaseMesh = Mesh<Vertex>;
-pub type GUIMesh = Mesh<GUIVertex>;
-pub type DamageMesh = Mesh<DamageVertex>;
 
-impl BaseMesh {
-    pub fn vertex_consumer(&mut self) -> impl FnMut([f32; 3], [f32; 2], [f32; 3]) {
-        move |position, tex_coords, normals| {
-            self.vertices.push(Vertex {
-                position,
-                tex_coords,
-                normals,
-                color: Color::WHITE.into(),
-            });
-        }
-    }
-}
-
-impl GUIMesh {
-    pub fn add_quad_clip(&mut self, quad: UIRect, texture: TexCoords, color: Color, clip: UIRect) {
-        if quad.pos.x + quad.size.x < clip.pos.x
-            || quad.pos.x > clip.pos.x + clip.size.x
-            || quad.pos.y + quad.size.y < clip.pos.y
-            || quad.pos.y > clip.pos.y + clip.size.y
-        {
-            return;
-        }
-        let pos1 = UIPos {
-            x: quad.pos.x.max(clip.pos.x),
-            y: quad.pos.y.max(clip.pos.y),
-        };
-        let pos2 = UIPos {
-            x: (quad.pos.x + quad.size.x).min(clip.pos.x + clip.size.x),
-            y: (quad.pos.y + quad.size.y).min(clip.pos.y + clip.size.y),
-        };
-        let clipped_quad = UIRect {
-            pos: pos1,
-            size: UIPos {
-                x: pos2.x - pos1.x,
-                y: pos2.y - pos1.y,
-            },
-        };
-        let clipped_texture = TexCoords {
-            u1: texture.u1 + (pos1.x - quad.pos.x) / quad.size.x * (texture.u2 - texture.u1),
-            v1: texture.v1 + (pos1.y - quad.pos.y) / quad.size.y * (texture.v2 - texture.v1),
-            u2: texture.u1 + (pos2.x - quad.pos.x) / quad.size.x * (texture.u2 - texture.u1),
-            v2: texture.v1 + (pos2.y - quad.pos.y) / quad.size.y * (texture.v2 - texture.v1),
-        };
-        self.add_quad(clipped_quad, clipped_texture, color);
-    }
-    pub fn add_quad(&mut self, quad: UIRect, texture: TexCoords, color: Color) {
-        let color: [u8; 4] = color.into();
-        let position = quad.pos;
-        let size = quad.size;
-        let a = GUIVertex {
-            position: [position.x, position.y],
-            tex_coords: [texture.u1, texture.v2],
-            color,
-        };
-        let b = GUIVertex {
-            position: [position.x + size.x, position.y],
-            tex_coords: [texture.u2, texture.v2],
-            color,
-        };
-        let c = GUIVertex {
-            position: [position.x, position.y + size.y],
-            tex_coords: [texture.u1, texture.v1],
-            color,
-        };
-        let d = GUIVertex {
-            position: [position.x + size.x, position.y + size.y],
-            tex_coords: [texture.u2, texture.v1],
-            color,
-        };
-        self.vertices.push(a);
-        self.vertices.push(b);
-        self.vertices.push(d);
-        self.vertices.push(d);
-        self.vertices.push(c);
-        self.vertices.push(a);
-    }
-}
 impl ClientChunk {
     pub fn build_chunk_mesh(
         position: ChunkPos,
         chunk_data: Arc<ChunkMeshBuildData>,
         neighbor_chunks: FaceMap<Option<Arc<ChunkMeshBuildData>>>,
-    ) -> (BaseMesh, u64) {
-        let mut mesh: BaseMesh = Mesh {
-            vertices: Vec::new(),
-        };
+    ) -> (ChunkMesh, u64) {
+        let mut mesh: ChunkMesh = ChunkMesh::default();
         let chunk_blocks = chunk_data.blocks.read();
         let neighbor_chunks =
             neighbor_chunks.map(|chunk| chunk.as_ref().map(|chunk| chunk.blocks.read()));
@@ -2144,6 +1986,7 @@ impl ClientChunk {
                 for z in 0..CHUNK_SIZE as u8 {
                     let block = *chunk_blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = block.block.data();
+                    let mut mesh_consumer = mesh.consumer(block.color, 0);
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { faces } => {
@@ -2203,16 +2046,13 @@ impl ClientChunk {
                                 let texture = faces
                                     .by_face(*face)
                                     .tex_coords(rng.random::<u32>() as usize);
-                                face.add_vertices(texture, 0, |position, coords| {
-                                    let vt_pos = base_position + position;
-                                    let normal = face.get_offset();
-                                    mesh.vertices.push(Vertex {
-                                        position: [vt_pos.x, vt_pos.y, vt_pos.z],
-                                        tex_coords: [coords.0, coords.1],
-                                        normals: [normal.x, normal.y, normal.z],
-                                        color: Color::WHITE.into(),
-                                    });
-                                });
+                                mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
+                                    |(position, uv)| MeshVertex {
+                                        position: base_position + position,
+                                        normal: face.get_offset(),
+                                        uv,
+                                    },
+                                ));
                             }
                         }
                         BlockRenderData::Model(model) => {
@@ -2235,14 +2075,7 @@ impl ClientChunk {
                                     Vector4::new(-front.x, -front.y, -front.z, 0.),
                                     Vector4::new(0., 0., 0., 1.),
                                 ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
-                                &mut |position, tex_coords, normals| {
-                                    mesh.vertices.push(Vertex {
-                                        position,
-                                        tex_coords,
-                                        normals,
-                                        color: Color::WHITE.into(),
-                                    });
-                                },
+                                &mut mesh_consumer,
                                 &[],
                                 |_| None,
                             );

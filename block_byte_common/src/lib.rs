@@ -40,10 +40,13 @@ pub struct TexCoords {
     pub v2: f32,
 }
 impl TexCoords {
-    pub fn map(self, coords: (f32, f32)) -> (f32, f32) {
+    pub fn map(self, coords: [f32; 2]) -> [f32; 2] {
         let self_w = self.u2 - self.u1;
         let self_h = self.v2 - self.v1;
-        (self.u1 + (coords.0 * self_w), self.v1 + (coords.1 * self_h))
+        [
+            self.u1 + (coords[0] * self_w),
+            self.v1 + (coords[1] * self_h),
+        ]
     }
     pub fn map_sub(self, inner: TexCoords) -> TexCoords {
         let self_w = self.u2 - self.u1;

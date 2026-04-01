@@ -389,6 +389,7 @@ impl Chunk {
                             other: push_offset,
                             other_face,
                             pull,
+                            success,
                         } => {
                             let view = &machine_data.script_views[*view];
                             let other_position = block.rotation.rotate_block_pos(*push_offset)
@@ -442,6 +443,7 @@ impl Chunk {
                                                     if item.count == 0 {
                                                         first_inventory.items[slot.slot] = None;
                                                     }
+                                                    state.pc = *success;
                                                     exit = true;
                                                     break;
                                                 }
@@ -531,7 +533,11 @@ impl Chunk {
                             }
                             CallbackResult::Continue
                         }
-                        MachineInstrution::MoveItem { from_view, to_view } => {
+                        MachineInstrution::MoveItem {
+                            from_view,
+                            to_view,
+                            success,
+                        } => {
                             let from_view = &machine_data.script_views[*from_view];
                             let to_view = &machine_data.script_views[*to_view];
                             let mut inventory = machine.inventory.write();
@@ -546,11 +552,11 @@ impl Chunk {
                                         if item.count == 0 {
                                             inventory.items[slot.slot] = None;
                                         }
+                                        state.pc = *success;
                                         break;
                                     }
                                 }
                             }
-                            //todo: notify about completion
                             CallbackResult::Continue
                         }
                         MachineInstrution::Craft {
@@ -558,6 +564,7 @@ impl Chunk {
                             input_view,
                             output_view,
                             speed,
+                            success,
                         } => {
                             let input_view = &machine_data.script_views[*input_view];
                             let output_view = &machine_data.script_views[*output_view];
@@ -581,9 +588,9 @@ impl Chunk {
                                     inventory.add_item(output_view, output);
                                 }
                                 *cooldown = recipe.craft_time * speed;
+                                state.pc = *success;
                                 return CallbackResult::Suspend;
                             }
-                            //todo: return state back to script
                             CallbackResult::Continue
                         }
                     },

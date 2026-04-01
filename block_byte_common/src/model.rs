@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     TexCoords,
-    coord::{Face, FaceMap, Pos},
+    coord::{Face, FaceMap, Pos, Vec3},
     registry::TextureKey,
 };
 
@@ -197,7 +197,7 @@ impl Bone {
         &self,
         parent: Matrix4<f32>,
         animations: &[ResolvedAnimation],
-        mut vertex_consumer: &mut impl FnMut(Pos, Pos, (f32, f32), usize),
+        mut geometry_consumer: &mut impl FnMut(ModelGeometry),
         mut binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
     ) {
         let world = parent * self.animation_transform(animations);
@@ -211,36 +211,27 @@ impl Bone {
                     origin,
                     rotation,
                 } => {
-                    let o = Matrix4::from_translation(*origin);
-                    let io = Matrix4::from_translation(-*origin);
+                    let o = Matrix4::from_translation(Vector3::from(origin.into_array()));
+                    let io = Matrix4::from_translation(-Vector3::from(origin.into_array()));
                     let world = world * o * Matrix4::from(*rotation) * io;
                     for face in Face::all() {
                         let (uv, rotation, texture) = *uvs.by_face(*face);
-                        face.add_vertices(uv, rotation, |pos, uv| {
-                            let pos = Vector3::new(pos.x, pos.y, pos.z);
-                            let pos = world
-                                .transform_point(Point3::from_vec(
-                                    *from + ((*to - *from).mul_element_wise(pos)),
-                                ))
-                                .to_vec();
-                            let normal = face.get_offset();
-                            let normal =
-                                world.transform_vector(Vector3::new(normal.x, normal.y, normal.z));
-                            vertex_consumer(
-                                Pos {
-                                    x: pos.x,
-                                    y: pos.y,
-                                    z: pos.z,
-                                },
-                                Pos {
-                                    x: normal.x,
-                                    y: normal.y,
-                                    z: normal.z,
-                                },
-                                uv,
-                                texture,
-                            );
-                        });
+                        geometry_consumer(ModelGeometry::Quad(
+                            face.get_vertices(uv, rotation).map(|(pos, uv)| {
+                                let position = Pos {
+                                    x: to.x * pos.x + from.x * (1. - pos.x),
+                                    y: to.y * pos.y + from.y * (1. - pos.y),
+                                    z: to.z * pos.z + from.z * (1. - pos.z),
+                                };
+                                let normal = face.get_offset();
+                                ModelVertex {
+                                    position: position.multiply_point(world),
+                                    normal: normal.multiply_vector(world),
+                                    uv,
+                                }
+                            }),
+                            texture,
+                        ));
                     }
                 }
                 Element::Locator {
@@ -249,7 +240,9 @@ impl Bone {
                     name,
                 } => {
                     binding_consumer(
-                        world * Matrix4::from_translation(*position) * Matrix4::from(*rotation),
+                        world
+                            * Matrix4::from_translation(Vector3::from(position.into_array()))
+                            * Matrix4::from(*rotation),
                         name.as_str(),
                     );
                 }
@@ -258,13 +251,13 @@ impl Bone {
                     rotation,
                     faces,
                 } => {
-                    let o = Matrix4::from_translation(*origin);
+                    let o = Matrix4::from_translation(Vector3::from(origin.into_array()));
                     let world = world * o * Matrix4::from(*rotation);
-                    for face in faces {
+                    /*for face in faces {
                         for (vertex_pos, uv) in &face.vertices {
                             let point = Point3::from_vec(*vertex_pos);
                             let point = world.transform_point(point);
-                            vertex_consumer(
+                            geometry_consumer(
                                 Pos {
                                     x: point.x,
                                     y: point.y,
@@ -275,12 +268,12 @@ impl Bone {
                                 face.texture,
                             );
                         }
-                    }
+                    }*/
                 }
             }
         }
         for child in &self.children {
-            child.draw(world, animations, vertex_consumer, binding_consumer);
+            child.draw(world, animations, geometry_consumer, binding_consumer);
         }
     }
     fn anchor(
@@ -300,7 +293,7 @@ impl Bone {
                     if name == anchor {
                         return Some(
                             transform
-                                * Matrix4::from_translation(*position)
+                                * Matrix4::from_translation(Vector3::from(position.into_array()))
                                 * Matrix4::from(*rotation),
                         );
                     }
@@ -320,25 +313,25 @@ impl Bone {
 
 pub enum Element {
     Cube {
-        from: Vector3<f32>,
-        to: Vector3<f32>,
-        origin: Vector3<f32>,
+        from: Pos,
+        to: Pos,
+        origin: Pos,
         rotation: Euler<Deg<f32>>,
         uvs: FaceMap<(TexCoords, u8, usize)>,
     },
     Locator {
         name: String,
-        position: Vector3<f32>,
+        position: Pos,
         rotation: Euler<Deg<f32>>,
     },
     Mesh {
-        origin: Vector3<f32>,
+        origin: Pos,
         rotation: Euler<Deg<f32>>,
         faces: Vec<MeshFace>,
     },
 }
 pub struct MeshFace {
-    vertices: Vec<(Vector3<f32>, (f32, f32))>,
+    vertices: Vec<(Pos, [f32; 2])>,
     texture: usize,
 }
 pub struct DrawAnimation<'a> {
@@ -361,12 +354,21 @@ pub enum ModelTexture {
     Variable(usize),
     Texture(TextureKey),
 }
+pub struct ModelVertex {
+    pub position: Pos,
+    pub normal: Pos,
+    pub uv: [f32; 2],
+}
+pub enum ModelGeometry {
+    Quad([ModelVertex; 4], usize),
+    Triangle([ModelVertex; 3], usize),
+}
 impl Model {
     pub fn draw(
         &self,
         matrix: Matrix4<f32>,
         animations: &[DrawAnimation],
-        mut vertex_consumer: impl FnMut(Pos, Pos, (f32, f32), usize),
+        mut geometry_consumer: impl FnMut(ModelGeometry),
         mut binding_consumer: impl FnMut(Matrix4<f32>, &str),
     ) {
         let animations = animations
@@ -380,7 +382,7 @@ impl Model {
         self.root_bone.draw(
             matrix,
             &animations[..],
-            &mut vertex_consumer,
+            &mut geometry_consumer,
             &mut binding_consumer,
         );
     }
@@ -531,9 +533,9 @@ impl Model {
                             visibility: _,
                         } => {
                             bone.elements.push(Element::Cube {
-                                from: Vector3::from(*from) / BLOCKBENCH_SIZE,
-                                to: Vector3::from(*to) / BLOCKBENCH_SIZE,
-                                origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,
+                                from: Pos::from_array(*from) / BLOCKBENCH_SIZE,
+                                to: Pos::from_array(*to) / BLOCKBENCH_SIZE,
+                                origin: Pos::from_array(*origin) / BLOCKBENCH_SIZE,
                                 rotation: Euler {
                                     x: Deg(rotation[0]),
                                     y: Deg(rotation[1]),
@@ -571,7 +573,7 @@ impl Model {
                             visibility: _,
                         } => {
                             bone.elements.push(Element::Locator {
-                                position: Vector3::from(*position) / BLOCKBENCH_SIZE,
+                                position: Pos::from_array(*position) / BLOCKBENCH_SIZE,
                                 rotation: Euler {
                                     x: Deg(rotation[0]),
                                     y: Deg(rotation[1]),
@@ -589,7 +591,7 @@ impl Model {
                             visibility: _,
                         } => {
                             bone.elements.push(Element::Mesh {
-                                origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,
+                                origin: Pos::from_array(*origin) / BLOCKBENCH_SIZE,
                                 rotation: Euler {
                                     x: Deg(rotation[0]),
                                     y: Deg(rotation[1]),
@@ -605,23 +607,19 @@ impl Model {
                                             .map(|vertex| {
                                                 let uv = *face.uv.get(vertex.as_str()).unwrap();
                                                 (
-                                                    Vector3::<f32>::from(
+                                                    Pos::from_array(
                                                         *vertices.get(vertex.as_str()).unwrap(),
                                                     ) / BLOCKBENCH_SIZE,
-                                                    (
+                                                    [
                                                         uv[0] / texture.uv_width,
                                                         uv[1] / texture.uv_height,
-                                                    ),
+                                                    ],
                                                 )
                                             })
                                             .collect::<Vec<_>>();
+                                        assert_eq!(vertices.len(), 4);
                                         MeshFace {
-                                            vertices: [
-                                                0, 1, 2, 0, 2, 3, /* back*/ 2, 1, 0, 3, 2, 0,
-                                            ]
-                                            .into_iter()
-                                            .map(|i| vertices[i])
-                                            .collect(),
+                                            vertices,
                                             texture: face.texture,
                                         }
                                     })

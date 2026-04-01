@@ -8,9 +8,8 @@ var<uniform> camera: CameraUniform;
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
-    @location(2) color: u32,
-    @location(3) shade: f32,
-    @location(4) flags: u32,
+    @location(2) normal: vec3<f32>,
+    @location(3) color: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -26,10 +25,9 @@ fn vs_main(
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
     out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
-    let color_r = f32(model.color&31)/31.;
-    let color_g = f32((model.color>>5)&31)/31.;
-    let color_b = f32((model.color>>10)&31)/31.;
-    out.color = vec4<f32>(color_r * model.shade, color_g * model.shade, color_b * model.shade, 1.);
+    //let shading = dot(model.normal, normalize(vec3<f32>(1, -1, 0.5)));
+    let shade_color = 1. - abs(model.normal.x) * 0.5 - abs(model.normal.z) * 0.2;
+    out.color = model.color * vec4<f32>(shade_color, shade_color, shade_color, 1.);
     return out;
 }
 
