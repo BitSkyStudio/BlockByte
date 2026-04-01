@@ -226,7 +226,7 @@ impl Bone {
                                 let normal = face.get_offset();
                                 ModelVertex {
                                     position: position.multiply_point(world),
-                                    normal: normal.multiply_vector(world),
+                                    normal: normal.multiply_vector(world).normalize(),
                                     uv,
                                 }
                             }),

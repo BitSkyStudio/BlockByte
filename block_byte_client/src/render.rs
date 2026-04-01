@@ -1197,7 +1197,7 @@ pub fn draw_block_model(
                                 };
                             MeshVertex {
                                 position: position.multiply_point(matrix),
-                                normal: face.get_offset().multiply_vector(matrix),
+                                normal: face.get_offset().multiply_vector(matrix).normalize(),
                                 uv,
                             }
                         }),

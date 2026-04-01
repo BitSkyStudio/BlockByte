@@ -651,7 +651,7 @@ impl UIElementRenderContext<'_> {
                         self.rect.pos.y + (position.y + 1.) / 2. * self.rect.size.y,
                     ],
                     tex_coords: vertex.uv,
-                    color: Color::grayscale(((1. - (1. - light_dot) / 1.5) * 255.) as u8).into(),
+                    color: Color::grayscale(((1. - (1. - light_dot) / 2.) * 255.) as u8).into(),
                 })
             }
             fn add_index(&mut self, index: u32) {

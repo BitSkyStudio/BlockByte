@@ -1,0 +1,15 @@
+(
+    render_data: Model("slab;dirt_0;dirt_0;dirt_0"),
+    health: Some((health: 5., health_regen: 0.05, table: ())),
+    loot_table: Own((
+        entries: [
+            (
+                item: "dirt",
+                chance: 1.,
+            )
+        ]
+    )),
+    rotation: Full,
+    collision: [(0., 0., 0., 1., 1., 0.5)],
+    selection: [(0., 0., 0., 1., 1., 0.5)],
+)

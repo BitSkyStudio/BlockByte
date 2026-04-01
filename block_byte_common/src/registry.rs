@@ -546,6 +546,7 @@ pub enum BlockRotationMode {
     Horizontal,
     Full,
     FullOriented,
+    Axis,
 }
 impl BlockRotationMode {
     pub fn from_look_direction(self, direction: LookDirection, up_face: Face) -> BlockRotation {
@@ -587,6 +588,21 @@ impl BlockRotationMode {
                 up_face,
             )
             .unwrap(),
+            BlockRotationMode::Axis => {
+                let face = closest_face_to_offset(direction.make_front(), |_| true);
+                let face = match face {
+                    Face::Front | Face::Right | Face::Up => face,
+                    Face::Back | Face::Left | Face::Down => face.opposite(),
+                };
+                Orientation::from_front_up(
+                    face,
+                    match face {
+                        Face::Up => Face::Back,
+                        _ => Face::Up,
+                    },
+                )
+                .unwrap()
+            }
         };
         orientation.into_block_rotation()
     }
@@ -609,6 +625,22 @@ impl BlockRotationMode {
             }
             .into_block_rotation(),
             BlockRotationMode::FullOriented => value,
+            BlockRotationMode::Axis => {
+                let face = Orientation::from_block_rotation(value).forward;
+                let face = match face {
+                    Face::Front | Face::Right | Face::Up => face,
+                    Face::Back | Face::Left | Face::Down => face.opposite(),
+                };
+                Orientation::from_front_up(
+                    face,
+                    match face {
+                        Face::Up => Face::Back,
+                        _ => Face::Up,
+                    },
+                )
+                .unwrap()
+                .into_block_rotation()
+            }
         }
     }
 }
@@ -830,8 +862,6 @@ pub struct BlockEntry {
     pub color: BlockColor,
     #[serde(default, skip_serializing_if = "skip_if_default")]
     pub rotation: BlockRotation,
-    #[serde(default, skip_serializing_if = "skip_if_default")]
-    pub state: u16,
 }
 impl BlockEntry {
     pub fn simple(block: BlockKey) -> BlockEntry {
@@ -839,7 +869,6 @@ impl BlockEntry {
             block,
             color: Default::default(),
             rotation: Default::default(),
-            state: Default::default(),
         }
     }
     pub fn colliders(&self, position: BlockPos) -> impl Iterator<Item = AABB<f32>> {

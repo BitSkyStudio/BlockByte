@@ -406,7 +406,6 @@ fn main() {
                                                         entity.state.lock().direction,
                                                         face,
                                                     ),
-                                                state: 0,
                                             },
                                         ) {
                                             item.count -= place.use_count;

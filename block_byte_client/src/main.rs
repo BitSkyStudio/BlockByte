@@ -1827,7 +1827,6 @@ impl ClientGame {
                                 block: place_block.block,
                                 rotation,
                                 color: BlockColor::default(),
-                                state: 0,
                             };
                             for entity in self.entities.values() {
                                 let entity_hitbox =
