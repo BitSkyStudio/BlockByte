@@ -551,20 +551,25 @@ impl ApplicationHandler for App {
                 let render_state = self.render_state.as_mut().unwrap();
 
                 if self.game.screen.is_none() {
-                    let crosshair_size = 0.02;
-                    let crosshair_texture = TextureKey::id("crosshair").unwrap().tex_coords();
+                    let crosshair_texture = TextureKey::id("crosshair").unwrap();
+                    let crosshair_data = &*crosshair_texture.data().texture;
+                    let crosshair_size = 2.;
+                    let crosshair_size = UIPos {
+                        x: crosshair_data.width() as f32 / render_state.size().width as f32
+                            * crosshair_size
+                            * aspect_ratio,
+                        y: crosshair_data.height() as f32 / render_state.size().height as f32
+                            * crosshair_size,
+                    };
                     gui_mesh.add_quad(
                         UIRect {
                             pos: UIPos {
-                                x: -crosshair_size / 2.,
-                                y: -crosshair_size / 2.,
+                                x: crosshair_size.x * -0.5,
+                                y: crosshair_size.y * -0.5,
                             },
-                            size: UIPos {
-                                x: crosshair_size,
-                                y: crosshair_size,
-                            },
+                            size: crosshair_size,
                         },
-                        crosshair_texture,
+                        crosshair_texture.tex_coords(),
                         Color::WHITE,
                     );
 
@@ -994,9 +999,12 @@ impl TextureAtlas {
             );
             packer.pack_own(key, new_image);
         };
+        let skip_list = KeyGroup::<TextureData>::parse("#skip");
         for (i, texture) in TextureKey::entries().enumerate() {
-            if texture.text_id().ends_with("!") {
-                continue;
+            if let Some(skip_list) = &skip_list {
+                if skip_list.contains(texture) {
+                    continue;
+                }
             }
             let texture = texture.data();
             add_texture(TextureAtlasKey::Texture(i), &*texture.texture);

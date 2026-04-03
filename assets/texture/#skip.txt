@@ -1,0 +1,2 @@
+ore_mask
+grass_block_side_overlay
