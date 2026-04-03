@@ -50,7 +50,7 @@ var hdr_sampler: sampler;
 @fragment
 fn fs_main(vs: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(hdr_image, hdr_sampler, vs.uv);
-    let gamma_corrected = pow(hdr * vec4<f32>(4.), vec4<f32>(1.7));
+    let gamma_corrected = pow(hdr * vec4<f32>(3.5), vec4<f32>(1.7));
     let sdr = aces_tone_map(gamma_corrected.rgb);
     return vec4(sdr, hdr.a);
 }

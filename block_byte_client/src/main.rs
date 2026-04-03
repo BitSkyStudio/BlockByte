@@ -37,7 +37,7 @@ use block_byte_common::{
     world::{self, ClientChunkBlockComponents},
 };
 use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
-use image::{DynamicImage, RgbaImage};
+use image::{DynamicImage, GenericImage, RgbaImage};
 use parking_lot::{Mutex, RwLock};
 use rand::{Rng, rngs::StdRng};
 use rand_seeder::Seeder;
@@ -108,7 +108,7 @@ fn main() {
 }
 
 struct App {
-    texture_image: Option<RgbaImage>,
+    texture_image: Option<Vec<RgbaImage>>,
     render_state: Option<RenderState>,
     game: ClientGame,
     camera: ClientPlayer,
@@ -943,17 +943,18 @@ pub struct TextureAtlas {
 }
 
 impl TextureAtlas {
-    pub fn pack() -> (Self, TextRenderer, RgbaImage) {
-        #[derive(Hash, PartialEq, Eq, Clone)]
-        enum TextureAtlasEntry {
+    pub fn pack() -> (Self, TextRenderer, Vec<RgbaImage>) {
+        #[derive(Hash, PartialEq, Eq, Clone, Copy)]
+        enum TextureAtlasKey {
             Texture(usize),
             Model(usize, usize),
             Glyph(usize),
         }
+        let texture_dimensions = 2048;
         let mut packer =
             texture_packer::TexturePacker::new_skyline(texture_packer::TexturePackerConfig {
-                max_width: 2048,
-                max_height: 2048,
+                max_width: texture_dimensions,
+                max_height: texture_dimensions,
                 allow_rotation: false,
                 texture_outlines: false,
                 border_padding: 0,
@@ -962,14 +963,43 @@ impl TextureAtlas {
                 texture_extrusion: 0,
                 force_max_dimensions: true,
             });
+        fn get_nearest_texture_multiple(size: u32) -> u32 {
+            let mut current = 16;
+            loop {
+                if size <= current {
+                    return current;
+                }
+                current <<= 1;
+                if current == 0 {
+                    panic!()
+                }
+            }
+        }
+        struct TextureAtlasEntry {
+            width_multiple: f32,
+            height_multiple: f32,
+        }
+        let mut textures = HashMap::new();
+        let mut add_texture = |key: TextureAtlasKey, image: &DynamicImage| {
+            let new_width = get_nearest_texture_multiple(image.width());
+            let new_height = get_nearest_texture_multiple(image.height());
+            let mut new_image = DynamicImage::new_rgba8(new_width, new_height);
+            new_image.copy_from(image, 0, 0).unwrap();
+            textures.insert(
+                key,
+                TextureAtlasEntry {
+                    width_multiple: image.width() as f32 / new_width as f32,
+                    height_multiple: image.height() as f32 / new_height as f32,
+                },
+            );
+            packer.pack_own(key, new_image);
+        };
         for (i, texture) in TextureKey::entries().enumerate() {
             if texture.text_id().ends_with("!") {
                 continue;
             }
             let texture = texture.data();
-            packer
-                .pack_ref(TextureAtlasEntry::Texture(i), &*texture.texture)
-                .unwrap();
+            add_texture(TextureAtlasKey::Texture(i), &*texture.texture);
         }
         for (i, model) in ModelKey::entries().enumerate() {
             let model = model.data();
@@ -985,9 +1015,7 @@ impl TextureAtlas {
                         )
                         .unwrap();
 
-                        packer
-                            .pack_own(TextureAtlasEntry::Model(i, j), image)
-                            .unwrap();
+                        add_texture(TextureAtlasKey::Model(i, j), &image);
                     }
                     _ => {}
                 }
@@ -1013,31 +1041,68 @@ impl TextureAtlas {
                     g.draw(|x, y, v| {
                         font_buffer.put_pixel(x, y, image::Rgba([255, 255, 255, (255. * v) as u8]));
                     });
-                    packer
-                        .pack_own(TextureAtlasEntry::Glyph(i), font_texture)
-                        .unwrap();
+                    add_texture(TextureAtlasKey::Glyph(i), &font_texture);
                 }
             }
         }
+        let get_texture = |key: TextureAtlasKey| {
+            let entry = textures.get(&key)?;
+            let frame = packer.get_frame(&key)?;
+            Some(TexCoords {
+                u1: frame.frame.x as f32 / packer.width() as f32,
+                v1: frame.frame.y as f32 / packer.height() as f32,
+                u2: (frame.frame.x as f32 + frame.frame.w as f32 * entry.width_multiple)
+                    / packer.width() as f32,
+                v2: (frame.frame.y as f32 + frame.frame.h as f32 * entry.height_multiple)
+                    / packer.height() as f32,
+            })
+        };
         use texture_packer::exporter::ImageExporter;
         use texture_packer::texture::Texture;
         let exporter: DynamicImage = ImageExporter::export(&packer, None).unwrap();
         if false {
             exporter.save(Path::new("textureatlasdump.png")).unwrap();
         }
+        let mut texture_atlas_mips = vec![exporter.to_rgba8()];
+        for _ in 0..4 {
+            let mut last_level = texture_atlas_mips.last().unwrap();
+            let mut new_image =
+                DynamicImage::new_rgba8(last_level.width() / 2, last_level.height() / 2);
+            let mut image_buffer = new_image.as_mut_rgba8().unwrap();
+            for x in 0..image_buffer.width() {
+                for y in 0..image_buffer.height() {
+                    let mut color_sums = [0.; 3];
+                    let mut alpha_sum = 0.;
+                    for ux in 0..2 {
+                        for uy in 0..2 {
+                            let pixel = last_level.get_pixel(x * 2 + ux, y * 2 + uy);
+                            let alpha = pixel.0[3] as f32 / 255.;
+                            for i in 0..3 {
+                                color_sums[i] += pixel.0[i] as f32 / 255. * alpha;
+                            }
+                            alpha_sum += alpha;
+                        }
+                    }
+                    let mut color_sums = color_sums.map(|c| (c / alpha_sum * 255.) as u8);
+                    image_buffer.put_pixel(
+                        x,
+                        y,
+                        image::Rgba::<u8>([
+                            color_sums[0],
+                            color_sums[1],
+                            color_sums[2],
+                            (alpha_sum * 255.) as u8,
+                        ]),
+                    );
+                }
+            }
+            texture_atlas_mips.push(new_image.to_rgba8());
+        }
         (
             TextureAtlas {
                 textures: TextureKey::entries()
                     .enumerate()
-                    .map(|(i, _)| {
-                        let frame = packer.get_frame(&TextureAtlasEntry::Texture(i))?;
-                        Some(TexCoords {
-                            u1: frame.frame.x as f32 / packer.width() as f32,
-                            v1: frame.frame.y as f32 / packer.height() as f32,
-                            u2: (frame.frame.x + frame.frame.w) as f32 / packer.width() as f32,
-                            v2: (frame.frame.y + frame.frame.h) as f32 / packer.height() as f32,
-                        })
-                    })
+                    .map(|(i, _)| get_texture(TextureAtlasKey::Texture(i)))
                     .collect(),
                 models: ModelKey::entries()
                     .enumerate()
@@ -1048,41 +1113,25 @@ impl TextureAtlas {
                             .textures
                             .iter()
                             .enumerate()
-                            .filter_map(|(j, _)| {
-                                let frame = packer.get_frame(&TextureAtlasEntry::Model(i, j))?;
-                                Some(TexCoords {
-                                    u1: frame.frame.x as f32 / packer.width() as f32,
-                                    v1: frame.frame.y as f32 / packer.height() as f32,
-                                    u2: (frame.frame.x + frame.frame.w) as f32
-                                        / packer.width() as f32,
-                                    v2: (frame.frame.y + frame.frame.h) as f32
-                                        / packer.height() as f32,
-                                })
-                            })
+                            .filter_map(|(j, _)| get_texture(TextureAtlasKey::Model(i, j)))
                             .collect()
                     })
                     .collect(),
             },
             TextRenderer {
                 glyphs: (0..font.glyph_count())
-                    .map(|i| match packer.get_frame(&TextureAtlasEntry::Glyph(i)) {
-                        Some(frame) => TexCoords {
-                            u1: frame.frame.x as f32 / packer.width() as f32,
-                            v1: frame.frame.y as f32 / packer.height() as f32,
-                            u2: (frame.frame.x + frame.frame.w) as f32 / packer.width() as f32,
-                            v2: (frame.frame.y + frame.frame.h) as f32 / packer.height() as f32,
-                        },
-                        None => TexCoords {
+                    .map(|i| {
+                        get_texture(TextureAtlasKey::Glyph(i)).unwrap_or(TexCoords {
                             u1: 0.,
                             v1: 0.,
                             u2: 0.,
                             v2: 0.,
-                        },
+                        })
                     })
                     .collect(),
                 font,
             },
-            exporter.to_rgba8(),
+            texture_atlas_mips,
         )
     }
 }

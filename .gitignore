@@ -4,3 +4,4 @@ perf.*
 *.db3
 assets_generated/
 worldgen_vis/
+textureatlasdump.png

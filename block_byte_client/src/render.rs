@@ -57,7 +57,7 @@ pub struct RenderState {
 }
 
 impl RenderState {
-    pub async fn new(window: Window, texture_image: RgbaImage, skybox: RgbaImage) -> Self {
+    pub async fn new(window: Window, texture_images: Vec<RgbaImage>, skybox: RgbaImage) -> Self {
         let window = Arc::new(window);
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -105,14 +105,21 @@ impl RenderState {
         surface.configure(&device, &config);
         let texture_atlas = GPUTexture::new(
             &device,
-            texture_image.dimensions(),
+            texture_images[0].dimensions(),
+            texture_images.len() as u32,
             TextureFormat::Rgba8UnormSrgb,
         );
-        texture_atlas.write_image(&texture_image, &queue);
+        for (mip_level, texture_image) in texture_images.into_iter().enumerate() {
+            texture_atlas.write_image(&texture_image, mip_level as u32, &queue);
+        }
 
-        let skybox_texture =
-            GPUTexture::new(&device, skybox.dimensions(), TextureFormat::Rgba8UnormSrgb);
-        skybox_texture.write_image(&skybox, &queue);
+        let skybox_texture = GPUTexture::new(
+            &device,
+            skybox.dimensions(),
+            1,
+            TextureFormat::Rgba8UnormSrgb,
+        );
+        skybox_texture.write_image(&skybox, 0, &queue);
 
         let camera_uniform = GPUUniform::new(&device);
         let viewmodel_camera_uniform = GPUUniform::new(&device);
@@ -120,11 +127,13 @@ impl RenderState {
         let depth_texture = GPUTexture::new(
             &device,
             (size.width, size.height),
+            1,
             TextureFormat::Depth32Float,
         );
         let hdr_texture = GPUTexture::new(
             &device,
             (size.width, size.height),
+            1,
             TextureFormat::Rgba16Float,
         );
         /*let shadow_texture = create_depth_texture(
@@ -754,10 +763,16 @@ pub struct GPUTexture {
     pub bind_group: BindGroup,
     pub dimensions: (u32, u32),
     pub format: wgpu::TextureFormat,
+    pub mip_levels: u32,
 }
 
 impl GPUTexture {
-    pub fn new(device: &wgpu::Device, dimensions: (u32, u32), format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        dimensions: (u32, u32),
+        mip_levels: u32,
+        format: wgpu::TextureFormat,
+    ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -787,7 +802,7 @@ impl GPUTexture {
             label: Some("texture_bind_group_layout"),
         });
         let (texture, view, sampler, bind_group) =
-            GPUTexture::init_on_gpu(device, dimensions, format, &bind_group_layout);
+            GPUTexture::init_on_gpu(device, dimensions, format, &bind_group_layout, mip_levels);
         Self {
             texture,
             view,
@@ -796,6 +811,7 @@ impl GPUTexture {
             bind_group,
             dimensions,
             format,
+            mip_levels,
         }
     }
     fn init_on_gpu(
@@ -803,6 +819,7 @@ impl GPUTexture {
         dimensions: (u32, u32),
         format: wgpu::TextureFormat,
         bind_group_layout: &BindGroupLayout,
+        mip_levels: u32,
     ) -> (
         wgpu::Texture,
         wgpu::TextureView,
@@ -817,7 +834,7 @@ impl GPUTexture {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("texture"),
             size,
-            mip_level_count: 1,
+            mip_level_count: mip_levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
@@ -854,32 +871,37 @@ impl GPUTexture {
     }
     pub fn resize(&mut self, dimensions: (u32, u32), device: &Device) {
         self.dimensions = dimensions;
-        let (texture, view, sampler, bind_group) =
-            GPUTexture::init_on_gpu(device, dimensions, self.format, &self.bind_group_layout);
+        let (texture, view, sampler, bind_group) = GPUTexture::init_on_gpu(
+            device,
+            dimensions,
+            self.format,
+            &self.bind_group_layout,
+            self.mip_levels,
+        );
         self.texture = texture;
         self.view = view;
         self.sampler = sampler;
         self.bind_group = bind_group;
     }
-    pub fn write_image(&self, rgba: &RgbaImage, queue: &Queue) {
-        assert_eq!(rgba.dimensions(), self.dimensions);
+    pub fn write_image(&self, rgba: &RgbaImage, mip_level: u32, queue: &Queue) {
+        //assert_eq!(rgba.dimensions(), self.dimensions);
         let size = wgpu::Extent3d {
-            width: self.dimensions.0,
-            height: self.dimensions.1,
+            width: rgba.width(),
+            height: rgba.height(),
             depth_or_array_layers: 1,
         };
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 aspect: wgpu::TextureAspect::All,
                 texture: &self.texture,
-                mip_level: 0,
+                mip_level,
                 origin: wgpu::Origin3d::ZERO,
             },
             &rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * self.dimensions.0),
-                rows_per_image: Some(self.dimensions.1),
+                bytes_per_row: Some(4 * rgba.width()),
+                rows_per_image: Some(rgba.height()),
             },
             size,
         );
