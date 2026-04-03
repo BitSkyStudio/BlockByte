@@ -43,9 +43,31 @@ var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords) * in.color;
-    if color.w < 0.1{
+    let albedo: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords) * in.color;
+    if albedo.w < 0.1{
         discard;
     }
-    return color ;//* vec4<f32>(5.5,5.5, 5.5, 1.);
+
+    const ambient = vec3<f32>(0.02f, 0.04f, 0.08f);
+    const sunColor = vec3<f32>(0.98f, 0.73f, 0.15f);
+    const skyColor = vec3<f32>(0.47, 0.65, 1.0);
+
+    let lightColor = skyColor * 1.;
+
+    var ndotl = sunColor * 1.; // clamp(4 * dot(normal, sunDirection), 0.0f, 1.0f) * sunVisibility;
+    //ndotl += moonColor * clamp(4 * dot(normal, -sunDirection), 0.0f, 1.0f) * moonVisibility;
+    ndotl *= 1.3;
+    ndotl *= (luminance(skyColor) + 0.01f);
+    //ndotl *= lightmap.g;
+
+    let lighting = ndotl + lightColor + ambient;
+
+    var diffuse = albedo.rgb;
+    diffuse *= lighting;
+
+    return vec4(diffuse, 1.) ;//* vec4<f32>(5.5,5.5, 5.5, 1.);
+}
+
+fn luminance(color: vec3<f32>) -> f32 {
+    return dot(color, vec3(0.2125f, 0.7153f, 0.0721f));
 }

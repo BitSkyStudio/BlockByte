@@ -51,6 +51,9 @@ pub struct RenderState {
     gui_camera_uniform: GPUUniform<CameraUniform>,
     depth_texture: GPUTexture,
     hdr_texture: GPUTexture,
+    texel_size_uniform: GPUUniform<[f32; 2]>,
+    blur_texture: GPUTexture,
+    blur_render_pipeline: GPURenderPipeline,
     //shadow_texture: (wgpu::Texture, Sampler, TextureView),
     //shadow_camera_buffer: Buffer,
     //shadow_camera_bind_group: wgpu::BindGroup,
@@ -107,7 +110,7 @@ impl RenderState {
             &device,
             texture_images[0].dimensions(),
             texture_images.len() as u32,
-            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Rgba8Unorm,
         );
         for (mip_level, texture_image) in texture_images.into_iter().enumerate() {
             texture_atlas.write_image(&texture_image, mip_level as u32, &queue);
@@ -124,6 +127,8 @@ impl RenderState {
         let camera_uniform = GPUUniform::new(&device);
         let viewmodel_camera_uniform = GPUUniform::new(&device);
         let gui_camera_uniform = GPUUniform::new(&device);
+        let texel_size_uniform = GPUUniform::new(&device);
+        texel_size_uniform.write(&queue, &[1. / size.width as f32, 1. / size.height as f32]);
         let depth_texture = GPUTexture::new(
             &device,
             (size.width, size.height),
@@ -131,6 +136,12 @@ impl RenderState {
             TextureFormat::Depth32Float,
         );
         let hdr_texture = GPUTexture::new(
+            &device,
+            (size.width, size.height),
+            1,
+            TextureFormat::Rgba16Float,
+        );
+        let blur_texture = GPUTexture::new(
             &device,
             (size.width, size.height),
             1,
@@ -206,10 +217,26 @@ impl RenderState {
             None,
         );
 
+        let blur_render_pipeline = GPURenderPipeline::new::<()>(
+            &device,
+            include_str!("shaders/blur.wgsl"),
+            &[
+                &hdr_texture.bind_group_layout,
+                &texel_size_uniform.bind_group_layout,
+            ],
+            Some(BlendState::ALPHA_BLENDING),
+            false,
+            hdr_texture.format,
+            None,
+        );
+
         let hdr_render_pipeline = GPURenderPipeline::new::<()>(
             &device,
             include_str!("shaders/postprocess.wgsl"),
-            &[&hdr_texture.bind_group_layout],
+            &[
+                &hdr_texture.bind_group_layout,
+                &blur_texture.bind_group_layout,
+            ],
             Some(BlendState::ALPHA_BLENDING),
             false,
             config.format,
@@ -266,6 +293,9 @@ impl RenderState {
             damage_render_pipeline,
             skybox_render_pipeline,
             skybox_texture,
+            texel_size_uniform,
+            blur_render_pipeline,
+            blur_texture,
             /*shadow_texture,
             shadow_camera_bind_group,
             shadow_camera_buffer,
@@ -290,6 +320,10 @@ impl RenderState {
                 .resize((new_size.width, new_size.height), &self.device);
             self.hdr_texture
                 .resize((new_size.width, new_size.height), &self.device);
+            self.texel_size_uniform.write(
+                &self.queue,
+                &[1. / new_size.width as f32, 1. / new_size.height as f32],
+            );
         }
     }
 
@@ -387,7 +421,7 @@ impl RenderState {
         }
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Chunk Render Pass"),
+                label: Some("Base Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.hdr_texture.view,
                     resolve_target: None,
@@ -497,10 +531,36 @@ impl RenderState {
                 mesh.draw(&mut render_pass);
             }
         }
-
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("GUI Render Pass"),
+                label: Some("Blur Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.blur_texture.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.,
+                            g: 0.,
+                            b: 0.,
+                            a: 0.,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.blur_render_pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &self.hdr_texture.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.texel_size_uniform.bind_group, &[]);
+
+            render_pass.draw(0..3, 0..1);
+        }
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("HDR Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -516,6 +576,8 @@ impl RenderState {
             });
             render_pass.set_pipeline(&self.hdr_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.hdr_texture.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.blur_texture.bind_group, &[]);
+
             render_pass.draw(0..3, 0..1);
         }
 
@@ -799,7 +861,7 @@ impl GPUTexture {
                     count: None,
                 },
             ],
-            label: Some("texture_bind_group_layout"),
+            label: None,
         });
         let (texture, view, sampler, bind_group) =
             GPUTexture::init_on_gpu(device, dimensions, format, &bind_group_layout, mip_levels);
@@ -832,7 +894,7 @@ impl GPUTexture {
             depth_or_array_layers: 1,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("texture"),
+            label: None,
             size,
             mip_level_count: mip_levels,
             sample_count: 1,
@@ -865,7 +927,7 @@ impl GPUTexture {
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
-            label: Some("diffuse_bind_group"),
+            label: None,
         });
         (texture, view, sampler, bind_group)
     }
@@ -1067,7 +1129,7 @@ impl GPUMesh {
         let (index_buffer, index_format) = if mesh.vertices.len() <= u16::MAX as usize {
             (
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Chunk Index Buffer"),
+                    label: None,
                     contents: bytemuck::cast_slice(
                         mesh.indices
                             .iter()
@@ -1082,7 +1144,7 @@ impl GPUMesh {
         } else {
             (
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Chunk Index Buffer"),
+                    label: None,
                     contents: bytemuck::cast_slice(mesh.indices.as_slice()),
                     usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 }),
@@ -1091,7 +1153,7 @@ impl GPUMesh {
         };
         Some(GPUMesh {
             vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Chunk Vertex Buffer"),
+                label: None,
                 contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             }),
@@ -1188,7 +1250,7 @@ impl MeshVertexConsumer for ChunkMeshVertexConsumer<'_> {
         self.mesh.add_vertex(ChunkVertex {
             position: vertex.position.into_array(),
             tex_coords: vertex.uv,
-            shade: ((1. - vertex.normal.x.abs() * 0.5 - vertex.normal.z.abs() * 0.2) * 255.) as u8,
+            shade: ((1. - vertex.normal.x.abs() * 0.3 - vertex.normal.z.abs() * 0.2) * 255.) as u8,
             color: self.block_color.0,
             flags: self.flags,
         })
@@ -1314,7 +1376,7 @@ impl<T: Pod + NoUninit> GPUUniform<T> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,

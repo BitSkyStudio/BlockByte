@@ -41,5 +41,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if color.w == 0.{
         discard;
     }
-    return color;
+    return vec4<f32>(pow(color.rgb, vec3<f32>(2.2)), color.w);
 }
