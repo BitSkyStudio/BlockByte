@@ -1,4 +1,4 @@
-use block_byte_common::coord::{AABB, CHUNK_SIZE, Face, Pos, Vec3};
+use block_byte_common::coord::{AABB, CHUNK_SIZE, ChunkPos, Face, Pos, Vec3};
 use block_byte_common::model::{DrawAnimation, ModelGeometry, ModelTexture, ModelVertex};
 use block_byte_common::registry::{
     BlockColor, BlockData, BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key,
@@ -23,10 +23,12 @@ use std::time::Instant;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{
     BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferUsages, CommandEncoder,
-    Device, IndexFormat, LoadOp, Queue, RenderPass, Sampler, TextureFormat, TextureView, hal,
+    CompareFunction, Device, FilterMode, IndexFormat, LoadOp, Queue, RenderPass, Sampler,
+    TextureFormat, TextureView, hal,
 };
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::MouseButton;
+use winit::keyboard::KeyCode;
 use winit::window::Window;
 
 pub struct RenderState {
@@ -42,7 +44,6 @@ pub struct RenderState {
     damage_render_pipeline: GPURenderPipeline,
     skybox_render_pipeline: GPURenderPipeline,
     hdr_render_pipeline: GPURenderPipeline,
-    //shadow_render_pipeline: wgpu::RenderPipeline,
     skybox_mesh: GPUMesh,
     skybox_texture: GPUTexture,
     texture_atlas: GPUTexture,
@@ -54,9 +55,11 @@ pub struct RenderState {
     texel_size_uniform: GPUUniform<[f32; 2]>,
     blur_texture: GPUTexture,
     blur_render_pipeline: GPURenderPipeline,
-    //shadow_texture: (wgpu::Texture, Sampler, TextureView),
-    //shadow_camera_buffer: Buffer,
-    //shadow_camera_bind_group: wgpu::BindGroup,
+    shadow_texture: GPUTexture,
+    shadow_camera: GPUUniform<CameraUniform>,
+    shadow_render_pipeline: GPURenderPipeline,
+    shadow_chunk_render_pipeline: GPURenderPipeline,
+    shadow_base_render_pipeline: GPURenderPipeline,
 }
 
 impl RenderState {
@@ -111,6 +114,7 @@ impl RenderState {
             texture_images[0].dimensions(),
             texture_images.len() as u32,
             TextureFormat::Rgba8Unorm,
+            wgpu::FilterMode::Nearest,
         );
         for (mip_level, texture_image) in texture_images.into_iter().enumerate() {
             texture_atlas.write_image(&texture_image, mip_level as u32, &queue);
@@ -121,6 +125,7 @@ impl RenderState {
             skybox.dimensions(),
             1,
             TextureFormat::Rgba8UnormSrgb,
+            wgpu::FilterMode::Nearest,
         );
         skybox_texture.write_image(&skybox, 0, &queue);
 
@@ -128,43 +133,48 @@ impl RenderState {
         let viewmodel_camera_uniform = GPUUniform::new(&device);
         let gui_camera_uniform = GPUUniform::new(&device);
         let texel_size_uniform = GPUUniform::new(&device);
+        let shadow_camera = GPUUniform::new(&device);
         texel_size_uniform.write(&queue, &[1. / size.width as f32, 1. / size.height as f32]);
         let depth_texture = GPUTexture::new(
             &device,
             (size.width, size.height),
             1,
             TextureFormat::Depth32Float,
+            wgpu::FilterMode::Nearest,
         );
         let hdr_texture = GPUTexture::new(
             &device,
             (size.width, size.height),
             1,
             TextureFormat::Rgba16Float,
+            wgpu::FilterMode::Nearest,
         );
         let blur_texture = GPUTexture::new(
             &device,
             (size.width, size.height),
             1,
             TextureFormat::Rgba16Float,
+            wgpu::FilterMode::Nearest,
         );
-        /*let shadow_texture = create_depth_texture(
+        let shadow_texture = GPUTexture::new(
             &device,
-            PhysicalSize {
-                width: 2048,
-                height: 2048,
-            },
-            "shadow_texture",
-        );*/
+            (2048 * 2, 2048 * 2),
+            1,
+            TextureFormat::Depth32Float,
+            wgpu::FilterMode::Linear,
+        );
         let base_render_pipeline = GPURenderPipeline::new::<Vertex>(
             &device,
             include_str!("shaders/base.wgsl"),
             &[
                 &texture_atlas.bind_group_layout,
                 &camera_uniform.bind_group_layout,
+                &shadow_camera.bind_group_layout,
+                &shadow_texture.bind_group_layout,
             ],
             Some(BlendState::REPLACE),
-            true,
-            hdr_texture.format,
+            Some(wgpu::Face::Back),
+            Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
         );
 
@@ -174,10 +184,12 @@ impl RenderState {
             &[
                 &texture_atlas.bind_group_layout,
                 &camera_uniform.bind_group_layout,
+                &shadow_camera.bind_group_layout,
+                &shadow_texture.bind_group_layout,
             ],
             Some(BlendState::REPLACE),
-            true,
-            hdr_texture.format,
+            Some(wgpu::Face::Back),
+            Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
         );
 
@@ -189,8 +201,8 @@ impl RenderState {
                 &gui_camera_uniform.bind_group_layout,
             ],
             Some(BlendState::REPLACE),
-            false,
-            config.format,
+            Some(wgpu::Face::Back),
+            Some(config.format),
             None,
         );
 
@@ -199,8 +211,8 @@ impl RenderState {
             include_str!("shaders/damage.wgsl"),
             &[&camera_uniform.bind_group_layout],
             Some(BlendState::ALPHA_BLENDING),
-            true,
-            hdr_texture.format,
+            Some(wgpu::Face::Back),
+            Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
         );
 
@@ -212,8 +224,8 @@ impl RenderState {
                 &camera_uniform.bind_group_layout,
             ],
             Some(BlendState::REPLACE),
-            false,
-            config.format,
+            None,
+            Some(config.format),
             None,
         );
 
@@ -225,8 +237,8 @@ impl RenderState {
                 &texel_size_uniform.bind_group_layout,
             ],
             Some(BlendState::ALPHA_BLENDING),
-            false,
-            hdr_texture.format,
+            None,
+            Some(hdr_texture.format),
             None,
         );
 
@@ -238,9 +250,45 @@ impl RenderState {
                 &blur_texture.bind_group_layout,
             ],
             Some(BlendState::ALPHA_BLENDING),
-            false,
-            config.format,
             None,
+            Some(config.format),
+            None,
+        );
+
+        let shadow_render_pipeline = GPURenderPipeline::new::<()>(
+            &device,
+            include_str!("shaders/shadow.wgsl"),
+            &[&shadow_texture.bind_group_layout],
+            Some(BlendState::REPLACE),
+            None,
+            Some(config.format),
+            None,
+        );
+
+        let shadow_chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex>(
+            &device,
+            include_str!("shaders/chunk_shadow.wgsl"),
+            &[
+                &texture_atlas.bind_group_layout,
+                &shadow_camera.bind_group_layout,
+            ],
+            None,
+            Some(wgpu::Face::Back),
+            None,
+            Some(TextureFormat::Depth32Float),
+        );
+
+        let shadow_base_render_pipeline = GPURenderPipeline::new::<Vertex>(
+            &device,
+            include_str!("shaders/base_shadow.wgsl"),
+            &[
+                &texture_atlas.bind_group_layout,
+                &camera_uniform.bind_group_layout,
+            ],
+            None,
+            Some(wgpu::Face::Back),
+            None,
+            Some(TextureFormat::Depth32Float),
         );
 
         let mut skybox_mesh: Mesh<Vertex> = Mesh::default();
@@ -296,10 +344,11 @@ impl RenderState {
             texel_size_uniform,
             blur_render_pipeline,
             blur_texture,
-            /*shadow_texture,
-            shadow_camera_bind_group,
-            shadow_camera_buffer,
-            shadow_render_pipeline,*/
+            shadow_camera,
+            shadow_render_pipeline,
+            shadow_texture,
+            shadow_chunk_render_pipeline,
+            shadow_base_render_pipeline,
         }
     }
 
@@ -355,11 +404,7 @@ impl RenderState {
         self.gui_camera_uniform.write(&self.queue, &camera_uniform);
 
         camera_uniform.load_light(camera.position);
-        /*self.queue.write_buffer(
-            &self.shadow_camera_buffer,
-            0,
-            bytemuck::cast_slice(&[self.camera_uniform]),
-        );*/
+        self.shadow_camera.write(&self.queue, &camera_uniform);
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -371,12 +416,15 @@ impl RenderState {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-        /*if false {
+
+        let gpu_entity_mesh = GPUMesh::allocate(&entity_mesh, &self.device);
+
+        if true {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_texture.2,
+                    view: &self.shadow_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -386,18 +434,28 @@ impl RenderState {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            render_pass.set_pipeline(&self.shadow_render_pipeline);
-            render_pass.set_bind_group(0, &self.texture.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.shadow_camera_bind_group, &[]);
+            render_pass.set_pipeline(&self.shadow_chunk_render_pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.shadow_camera.bind_group, &[]);
 
-            for (_, chunk) in game.chunks.iter() {
-                if let Some((vertex_buffer, index_buffer, count)) = &chunk.buffer {
-                    render_pass.set_vertex_buffer(0, buffer.slice(..));
-                    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    render_pass.draw_indexed(0..*count, 0, 0..1);
+            for chunk_position in (AABB {
+                min: ChunkPos::all(-3),
+                max: ChunkPos::all(3),
+            })
+            .offset(camera.position.to_chunk_pos())
+            {
+                if let Some(chunk) = game.chunks.get(&chunk_position) {
+                    if let Some(gpu_mesh) = &chunk.buffer {
+                        gpu_mesh.draw(&mut render_pass);
+                    }
                 }
             }
-        }*/
+
+            render_pass.set_pipeline(&self.shadow_base_render_pipeline.render_pipeline);
+            if let Some(mesh) = &gpu_entity_mesh {
+                mesh.draw(&mut render_pass);
+            }
+        }
         if true {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Skybox Render Pass"),
@@ -450,6 +508,8 @@ impl RenderState {
             render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
+            render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
+            render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
 
             for (_, chunk) in &game.chunks {
                 if let Some(gpu_mesh) = &chunk.buffer {
@@ -464,11 +524,9 @@ impl RenderState {
                     }
                 }
             }
-            if !entity_mesh.vertices.is_empty() {
-                render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
-                if let Some(mesh) = GPUMesh::allocate(&entity_mesh, &self.device) {
-                    mesh.draw(&mut render_pass);
-                }
+            render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
+            if let Some(mesh) = &gpu_entity_mesh {
+                mesh.draw(&mut render_pass);
             }
         }
         if !damage_mesh.vertices.is_empty() {
@@ -526,6 +584,8 @@ impl RenderState {
             render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
             render_pass.set_bind_group(1, &self.viewmodel_camera_uniform.bind_group, &[]);
+            render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
+            render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
 
             if let Some(mesh) = GPUMesh::allocate(&viewmodel_mesh, &self.device) {
                 mesh.draw(&mut render_pass);
@@ -577,6 +637,27 @@ impl RenderState {
             render_pass.set_pipeline(&self.hdr_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.hdr_texture.bind_group, &[]);
             render_pass.set_bind_group(1, &self.blur_texture.bind_group, &[]);
+
+            render_pass.draw(0..3, 0..1);
+        }
+        if game.keys.is_down(KeyCode::KeyL) {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Shadow Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&self.shadow_render_pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &self.shadow_texture.bind_group, &[]);
 
             render_pass.draw(0..3, 0..1);
         }
@@ -737,22 +818,27 @@ impl CameraUniform {
         }
     }
     fn load_light(&mut self, player_pos: Pos) {
-        let eye = Point3 {
-            x: player_pos.x - 10.,
-            y: player_pos.y + 100.,
-            z: player_pos.z - 5.,
+        let dir = Vector3 {
+            x: -10.,
+            y: 20.,
+            z: -5.,
         };
+        let eye = Point3 {
+            x: player_pos.x,
+            y: player_pos.y + 0.,
+            z: player_pos.z,
+        } + dir * 2.;
+        let shadow_size = 160.;
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
-            * cgmath::ortho(-100., 100., -100., 100., 0.05, 500.)
-            * cgmath::Matrix4::look_at_rh(
-                eye,
-                cgmath::Point3 {
-                    x: player_pos.x,
-                    y: player_pos.y,
-                    z: player_pos.z,
-                },
-                Vector3::unit_y(),
-            ))
+            * cgmath::ortho(
+                -shadow_size,
+                shadow_size,
+                -shadow_size,
+                shadow_size,
+                -shadow_size,
+                shadow_size,
+            )
+            * cgmath::Matrix4::look_to_rh(eye, -dir, Vector3::unit_y()))
         .into();
     }
     fn load_camera_proj_matrix(
@@ -826,6 +912,7 @@ pub struct GPUTexture {
     pub dimensions: (u32, u32),
     pub format: wgpu::TextureFormat,
     pub mip_levels: u32,
+    pub filter_mode: wgpu::FilterMode,
 }
 
 impl GPUTexture {
@@ -834,6 +921,7 @@ impl GPUTexture {
         dimensions: (u32, u32),
         mip_levels: u32,
         format: wgpu::TextureFormat,
+        filter_mode: wgpu::FilterMode,
     ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -843,13 +931,9 @@ impl GPUTexture {
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
                         view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: match format {
-                            TextureFormat::Depth16Unorm
-                            | TextureFormat::Depth24Plus
-                            | TextureFormat::Depth24PlusStencil8
-                            | TextureFormat::Depth32Float
-                            | TextureFormat::Depth32FloatStencil8 => wgpu::TextureSampleType::Depth,
-                            _ => wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: match GPUTexture::is_format_depth(format) {
+                            true => wgpu::TextureSampleType::Depth,
+                            false => wgpu::TextureSampleType::Float { filterable: true },
                         },
                     },
                     count: None,
@@ -857,14 +941,28 @@ impl GPUTexture {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(
+                        match Self::is_format_depth(format)
+                            && filter_mode == FilterMode::Linear
+                            && false
+                        {
+                            true => wgpu::SamplerBindingType::Comparison,
+                            false => wgpu::SamplerBindingType::Filtering,
+                        },
+                    ),
                     count: None,
                 },
             ],
             label: None,
         });
-        let (texture, view, sampler, bind_group) =
-            GPUTexture::init_on_gpu(device, dimensions, format, &bind_group_layout, mip_levels);
+        let (texture, view, sampler, bind_group) = GPUTexture::init_on_gpu(
+            device,
+            dimensions,
+            format,
+            &bind_group_layout,
+            mip_levels,
+            filter_mode,
+        );
         Self {
             texture,
             view,
@@ -874,6 +972,17 @@ impl GPUTexture {
             dimensions,
             format,
             mip_levels,
+            filter_mode,
+        }
+    }
+    fn is_format_depth(format: wgpu::TextureFormat) -> bool {
+        match format {
+            TextureFormat::Depth16Unorm
+            | TextureFormat::Depth24Plus
+            | TextureFormat::Depth24PlusStencil8
+            | TextureFormat::Depth32Float
+            | TextureFormat::Depth32FloatStencil8 => true,
+            _ => false,
         }
     }
     fn init_on_gpu(
@@ -882,6 +991,7 @@ impl GPUTexture {
         format: wgpu::TextureFormat,
         bind_group_layout: &BindGroupLayout,
         mip_levels: u32,
+        filter_mode: wgpu::FilterMode,
     ) -> (
         wgpu::Texture,
         wgpu::TextureView,
@@ -910,9 +1020,17 @@ impl GPUTexture {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mag_filter: filter_mode,
+            min_filter: filter_mode,
+            mipmap_filter: filter_mode,
+            //border_color: Some(wgpu::SamplerBorderColor::TransparentBlack),
+            compare: match Self::is_format_depth(format)
+                && filter_mode == FilterMode::Linear
+                && false
+            {
+                true => Some(CompareFunction::Less),
+                false => None,
+            },
             ..Default::default()
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -939,6 +1057,7 @@ impl GPUTexture {
             self.format,
             &self.bind_group_layout,
             self.mip_levels,
+            self.filter_mode,
         );
         self.texture = texture;
         self.view = view;
@@ -1418,8 +1537,8 @@ impl GPURenderPipeline {
         shader_source: &str,
         bind_group_layouts: &[&BindGroupLayout],
         alpha_blending: Option<wgpu::BlendState>,
-        face_cull: bool,
-        target_format: wgpu::TextureFormat,
+        face_cull: Option<wgpu::Face>,
+        target_format: Option<wgpu::TextureFormat>,
         depth_format: Option<wgpu::TextureFormat>,
     ) -> GPURenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1433,6 +1552,14 @@ impl GPURenderPipeline {
                 push_constant_ranges: &[],
             });
         let vertex_description = T::vertex_description();
+        let targets = match target_format {
+            Some(target_format) => Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: alpha_blending,
+                write_mask: wgpu::ColorWrites::ALL,
+            }),
+            None => None,
+        };
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(&render_pipeline_layout),
@@ -1448,21 +1575,17 @@ impl GPURenderPipeline {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: alpha_blending,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: match target_format {
+                    Some(_) => std::slice::from_ref(&targets),
+                    None => &[],
+                },
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: match face_cull {
-                    true => Some(wgpu::Face::Back),
-                    false => None,
-                },
+                cull_mode: face_cull,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
