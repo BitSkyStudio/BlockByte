@@ -35,7 +35,7 @@ var<uniform> texel_size: vec2<f32>;
 @fragment
 fn fs_main(vs: VertexOutput) -> @location(0) vec4<f32> {
     const PI = radians(180.0);
-    let sigma = 1.;
+    let sigma = 1.5;
     let k = 2.0 * sigma * sigma;
 
     let size = i32(floor(sigma * 3.0));

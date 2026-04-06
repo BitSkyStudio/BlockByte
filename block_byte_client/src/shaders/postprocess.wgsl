@@ -59,11 +59,11 @@ var blur_sampler: sampler;
 fn fs_main(vs: VertexOutput) -> @location(0) vec4<f32> {
     let blur = textureSample(blur_image, blur_sampler, vs.uv).rgb;
     let hdr = textureSample(hdr_image, hdr_sampler, vs.uv);
-    let sharpness = 0.5;
+    let sharpness = 0.3;
     let sharp_clamp_val = vec3<f32>(0.5);
     let sharp_color = hdr.rgb + clamp((hdr.rgb - blur), -sharp_clamp_val, sharp_clamp_val) * sharpness;
 
-    let gamma_corrected = pow(sharp_color*1.35, vec3<f32>(2.9));
+    let gamma_corrected = pow(sharp_color*1.35, vec3<f32>(2.6));
     let sdr = aces_tone_map(gamma_corrected);
     return vec4(sdr, hdr.a);
 }

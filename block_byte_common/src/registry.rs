@@ -515,6 +515,9 @@ pub struct BlockData {
     pub health: Option<BlockHealthData>,
     #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
+    #[serde(default)]
+    #[cfg(feature = "client")]
+    pub render_flags: u8,
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
     pub selection: Vec<AABB<f32>>,

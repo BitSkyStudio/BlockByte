@@ -394,6 +394,7 @@ impl ApplicationHandler for App {
                     &frustum,
                     dt,
                     &self.connection,
+                    render_state.animation_time,
                 );
                 {
                     let viewmodel_light = Matrix4::from_angle_x(Rad(self.camera.direction.pitch))
@@ -623,6 +624,7 @@ impl ApplicationHandler for App {
                     viewmodel_mesh,
                     damage_mesh,
                     &frustum,
+                    dt,
                 ) {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -1540,6 +1542,7 @@ impl ClientGame {
         frustum: &Frustum,
         dt: f32,
         connection: &ClientConnection,
+        world_animation_time: f32,
     ) {
         if self.held_item().is_none() {
             self.viewmodel_player.trigger("empty_hand");
@@ -1664,7 +1667,7 @@ impl ClientGame {
                     });
                     i += 1;
                     if i > 10 {
-                        break;
+                        //break;
                     }
                 }
             }
@@ -1834,7 +1837,13 @@ impl ClientGame {
                                 z: second_angle.sin(),
                             } * (plant.size / 2.)
                                 + position;
-                            let up_height_vector = Pos::Y * plant.height;
+
+                            let up_height_vector = Pos {
+                                x: (world_animation_time * 0.8 + position.x * 0.2).sin() * 0.1,
+                                y: 1.,
+                                z: (world_animation_time * 0.8 + 10. + position.z * 0.2).sin()
+                                    * 0.1,
+                            } * plant.height;
                             let vertices = [
                                 MeshVertex {
                                     position: first,
@@ -2042,7 +2051,7 @@ impl ClientChunk {
                 for z in 0..CHUNK_SIZE as u8 {
                     let block = *chunk_blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = block.block.data();
-                    let mut mesh_consumer = mesh.consumer(block.color, 0);
+                    let mut mesh_consumer = mesh.consumer(block.color, block_data.render_flags);
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { faces } => {

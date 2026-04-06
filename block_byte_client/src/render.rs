@@ -60,6 +60,8 @@ pub struct RenderState {
     shadow_render_pipeline: GPURenderPipeline,
     shadow_chunk_render_pipeline: GPURenderPipeline,
     shadow_base_render_pipeline: GPURenderPipeline,
+    time_uniform: GPUUniform<f32>,
+    pub animation_time: f32,
 }
 
 impl RenderState {
@@ -80,12 +82,18 @@ impl RenderState {
             })
             .await
             .unwrap();
+
+        //println!("{:?}", adapter.get_info());
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
                 required_features: wgpu::Features::empty(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits {
+                    max_bind_groups: 8,
+                    ..Default::default()
+                },
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
             })
@@ -103,7 +111,7 @@ impl RenderState {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -134,6 +142,7 @@ impl RenderState {
         let gui_camera_uniform = GPUUniform::new(&device);
         let texel_size_uniform = GPUUniform::new(&device);
         let shadow_camera = GPUUniform::new(&device);
+        let time_uniform = GPUUniform::new(&device);
         texel_size_uniform.write(&queue, &[1. / size.width as f32, 1. / size.height as f32]);
         let depth_texture = GPUTexture::new(
             &device,
@@ -186,6 +195,7 @@ impl RenderState {
                 &camera_uniform.bind_group_layout,
                 &shadow_camera.bind_group_layout,
                 &shadow_texture.bind_group_layout,
+                &time_uniform.bind_group_layout,
             ],
             Some(BlendState::REPLACE),
             Some(wgpu::Face::Back),
@@ -271,6 +281,7 @@ impl RenderState {
             &[
                 &texture_atlas.bind_group_layout,
                 &shadow_camera.bind_group_layout,
+                &time_uniform.bind_group_layout,
             ],
             None,
             Some(wgpu::Face::Back),
@@ -349,6 +360,8 @@ impl RenderState {
             shadow_texture,
             shadow_chunk_render_pipeline,
             shadow_base_render_pipeline,
+            animation_time: 0.,
+            time_uniform,
         }
     }
 
@@ -386,7 +399,11 @@ impl RenderState {
         viewmodel_mesh: BaseMesh,
         damage_mesh: DamageMesh,
         frustum: &Frustum,
+        delta_time: f32,
     ) -> Result<(), wgpu::SurfaceError> {
+        self.animation_time += delta_time;
+        self.time_uniform.write(&self.queue, &self.animation_time);
+
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.load_camera_proj_matrix(
             camera,
@@ -437,6 +454,7 @@ impl RenderState {
             render_pass.set_pipeline(&self.shadow_chunk_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
             render_pass.set_bind_group(1, &self.shadow_camera.bind_group, &[]);
+            render_pass.set_bind_group(2, &self.time_uniform.bind_group, &[]);
 
             for chunk_position in (AABB {
                 min: ChunkPos::all(-3),
@@ -510,6 +528,7 @@ impl RenderState {
             render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
             render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
+            render_pass.set_bind_group(4, &self.time_uniform.bind_group, &[]);
 
             for (_, chunk) in &game.chunks {
                 if let Some(gpu_mesh) = &chunk.buffer {
@@ -827,7 +846,7 @@ impl CameraUniform {
             x: player_pos.x,
             y: player_pos.y + 0.,
             z: player_pos.z,
-        } + dir * 2.;
+        } + dir * 4.;
         let shadow_size = 160.;
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
             * cgmath::ortho(
@@ -1235,8 +1254,8 @@ pub fn item_model_icon_view(model: &ItemModel) -> Matrix4<f32> {
     }
 }
 pub struct GPUMesh {
-    pub vertex_buffer: Buffer,
-    pub index_buffer: Buffer,
+    pub buffer: Buffer,
+    pub vertex_length: u64,
     pub index_count: u32,
     pub index_format: IndexFormat,
 }
@@ -1245,45 +1264,41 @@ impl GPUMesh {
         if mesh.indices.is_empty() {
             return None;
         }
-        let (index_buffer, index_format) = if mesh.vertices.len() <= u16::MAX as usize {
-            (
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(
-                        mesh.indices
-                            .iter()
-                            .map(|value| *value as u16)
-                            .collect::<Vec<_>>()
-                            .as_slice(),
-                    ),
-                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                }),
-                IndexFormat::Uint16,
-            )
+        let mut data = Vec::new();
+        let vertex_slice: &[u8] = bytemuck::cast_slice(mesh.vertices.as_slice());
+        data.extend_from_slice(vertex_slice);
+
+        let index_format = if mesh.vertices.len() <= u16::MAX as usize {
+            data.reserve(mesh.indices.len() * 2);
+            let compressed_indices = mesh
+                .indices
+                .iter()
+                .map(|value| *value as u16)
+                .collect::<Vec<_>>(); //this is stupid
+            data.extend_from_slice(bytemuck::cast_slice(compressed_indices.as_slice()));
+
+            IndexFormat::Uint16
         } else {
-            (
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(mesh.indices.as_slice()),
-                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                }),
-                IndexFormat::Uint32,
-            )
+            data.extend_from_slice(bytemuck::cast_slice(mesh.indices.as_slice()));
+
+            IndexFormat::Uint32
         };
         Some(GPUMesh {
-            vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(mesh.vertices.as_slice()),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                contents: &data,
+                usage: wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::INDEX
+                    | wgpu::BufferUsages::COPY_DST,
             }),
-            index_buffer,
+            vertex_length: vertex_slice.len() as u64,
             index_format,
             index_count: mesh.indices.len() as u32,
         })
     }
     pub fn draw(&self, render_pass: &mut RenderPass<'_>) {
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), self.index_format);
+        render_pass.set_vertex_buffer(0, self.buffer.slice(..self.vertex_length));
+        render_pass.set_index_buffer(self.buffer.slice(self.vertex_length..), self.index_format);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 }

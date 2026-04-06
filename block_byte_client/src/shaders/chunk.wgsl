@@ -5,6 +5,9 @@ struct CameraUniform {
 @group(1) @binding(0) // 1.
 var<uniform> camera: CameraUniform;
 
+@group(4) @binding(0)
+var<uniform> time: f32;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
@@ -26,8 +29,13 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
-    out.world_position = model.position;
+    var position = model.position;
+    if (model.flags & 1) != 0u{
+        position.x += sin(time * 0.8 + model.position.x * 0.2) * 0.1;
+        position.z += sin(time * 0.8 + 10 + model.position.z * 0.2) * 0.1;
+    }
+    out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
+    out.world_position = position;
     let color_r = f32(model.color&31)/31.;
     let color_g = f32((model.color>>5)&31)/31.;
     let color_b = f32((model.color>>10)&31)/31.;
