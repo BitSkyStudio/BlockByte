@@ -659,7 +659,7 @@ impl RenderState {
 
             render_pass.draw(0..3, 0..1);
         }
-        if game.keys.is_down(KeyCode::KeyL) {
+        if game.keys.is_down(KeyCode::KeyL) && false {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

@@ -207,53 +207,54 @@ impl Chunk {
                     damage_type,
                 } => {
                     let block_data = self.blocks.read().get(block.index()).unwrap().block.data();
-                    if let Some(health) = &block_data.health {
-                        let damage = damage * health.table[damage_type].unwrap_or(1.);
-                        let mut damage_component = self.components.damage.write();
-                        let mut destroy = false;
+                    let damage = damage * block_data.health.table[damage_type].unwrap_or(1.);
+                    let mut damage_component = self.components.damage.write();
+                    let mut destroy = false;
 
-                        if damage >= health.health {
+                    if damage >= block_data.health.health {
+                        destroy = true;
+                    } else if let Some(block_damage) = damage_component.get_mut(block) {
+                        block_damage.damage += damage;
+                        if block_damage.damage >= block_data.health.health {
                             destroy = true;
-                        } else if let Some(block_damage) = damage_component.get_mut(block) {
-                            block_damage.damage += damage;
-                            if block_damage.damage >= health.health {
-                                destroy = true;
-                            }
-                        } else {
-                            damage_component.set(block, BlockDamage { damage });
                         }
-                        if destroy {
-                            drop(damage_component);
-                            let block_pos = self.position.to_block_pos() + block.xyz();
-                            let drops = server.destroy(block_pos);
-                            if health.transform_block != air_block() {
-                                //todo: maybe apply overflow damage?
-                                server.place(block_pos, BlockEntry::simple(health.transform_block));
-                            }
-                            for item in drops {
-                                server.spawn_item(
-                                    item,
-                                    block_pos.to_pos()
-                                        + Pos {
-                                            x: 0.5,
-                                            y: 0.5,
-                                            z: 0.5,
-                                        },
-                                );
-                            }
-                        } else {
-                            server.send_message_multiple(
-                                self.viewers.iter(),
-                                NetworkMessageS2C::UpdateBlockComponents {
-                                    chunk: self.position,
-                                    offset: block,
-                                    data: damage_component
-                                        .get(block)
-                                        .map(|component| Into::<ClientBlockDamage>::into(component))
-                                        .into(),
-                                },
+                    } else {
+                        damage_component.set(block, BlockDamage { damage });
+                    }
+                    if destroy {
+                        drop(damage_component);
+                        let block_pos = self.position.to_block_pos() + block.xyz();
+                        let drops = server.destroy(block_pos);
+                        if block_data.health.transform_block != air_block() {
+                            //todo: maybe apply overflow damage?
+                            server.place(
+                                block_pos,
+                                BlockEntry::simple(block_data.health.transform_block),
                             );
                         }
+                        for item in drops {
+                            server.spawn_item(
+                                item,
+                                block_pos.to_pos()
+                                    + Pos {
+                                        x: 0.5,
+                                        y: 0.5,
+                                        z: 0.5,
+                                    },
+                            );
+                        }
+                    } else {
+                        server.send_message_multiple(
+                            self.viewers.iter(),
+                            NetworkMessageS2C::UpdateBlockComponents {
+                                chunk: self.position,
+                                offset: block,
+                                data: damage_component
+                                    .get(block)
+                                    .map(|component| Into::<ClientBlockDamage>::into(component))
+                                    .into(),
+                            },
+                        );
                     }
                 }
                 BlockEvent::PlayerInteract { player } => {
@@ -631,9 +632,7 @@ impl Chunk {
                         .block
                         .data()
                         .health
-                        .as_ref()
-                        .map(|health| health.health_regen)
-                        .unwrap();
+                        .health_regen;
                 if damage.damage <= 0. {
                     damage_to_clear.push(offset);
                 }

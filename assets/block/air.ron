@@ -4,4 +4,10 @@
     collision: [],
     loot_table: Key("empty"),
     supporting: (up: false, down: false, left: false, right: false, front: false, back: false),
+    health: (health: 1., health_regen: 1., table: (
+        Blunt: 0., 
+        Pierce: 0., 
+        Slash: 0., 
+        Cut: 0.,
+    )),
 )

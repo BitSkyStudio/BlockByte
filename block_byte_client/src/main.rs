@@ -1735,12 +1735,7 @@ impl ClientGame {
                     let blocks = chunk.mesh_build_data.blocks.read();
                     let block = blocks.get(offset.index()).unwrap();
                     let block_data = block.block.data();
-                    let progress = (damage.damage
-                        / block_data
-                            .health
-                            .as_ref()
-                            .map(|health| health.health)
-                            .unwrap_or(1.));
+                    let progress = damage.damage / block_data.health.health;
                     let mut mesh_vertex_consumer = damage_mesh.consumer(progress);
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
@@ -1979,20 +1974,9 @@ impl ClientGame {
             let blocks = chunk.mesh_build_data.blocks.read();
             for (offset, health) in chunk.components.damage.iter_mut() {
                 let data = blocks.get(offset.index()).unwrap().block.data();
-                if let Some(health_data) = &data.health {
-                    health.damage -= dt
-                        * blocks
-                            .get(offset.index())
-                            .unwrap()
-                            .block
-                            .data()
-                            .health
-                            .as_ref()
-                            .map(|health| health.health_regen)
-                            .unwrap_or(1.);
-                    if health.damage <= 0. {
-                        damage_to_clear.push(offset);
-                    }
+                health.damage -= dt * data.health.health_regen;
+                if health.damage <= 0. {
+                    damage_to_clear.push(offset);
                 }
             }
             for block in damage_to_clear {

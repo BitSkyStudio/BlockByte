@@ -9,7 +9,7 @@
             up: "grass_block",
         ),
     ),
-    health: Some((health: 5., health_regen: 0.05, table: ())),
+    health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Key("empty"),
     interact_action: OpenInventory(screen:"barrel", view:[(slot:0),(slot:1),(slot:2),(slot:3),(slot:4),(slot:5),(slot:6),(slot:7),(slot:8),(slot:9)]),
     machine: Some((
