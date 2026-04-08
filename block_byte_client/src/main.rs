@@ -103,6 +103,7 @@ fn main() {
                 max_stamina: 100.,
             },
             mspt: 0.,
+            delta_time_average: 0.,
         })
         .unwrap();
 }
@@ -117,6 +118,7 @@ struct App {
     last_update: Instant,
     teleport_id: u32,
     mspt: f32,
+    delta_time_average: f32,
 }
 impl App {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
@@ -409,6 +411,10 @@ impl ApplicationHandler for App {
                         vertex.normals = [new_normal.x, new_normal.y, new_normal.z];
                     }
                 }
+                {
+                    let weight = 0.05;
+                    self.delta_time_average = weight * dt + (1. - weight) * self.delta_time_average;
+                }
                 let aspect_ratio =
                     render_state.size().width as f32 / render_state.size().height as f32;
                 text_renderer().draw(
@@ -421,7 +427,7 @@ impl ApplicationHandler for App {
                         self.game.player_position.x,
                         self.game.player_position.y,
                         self.game.player_position.z,
-                        1. / dt,
+                        1. / self.delta_time_average,
                         self.mspt,
                         match self.camera.raycast(&self.game, true) {
                             RayCastResult::Block(position, face) =>
@@ -1667,7 +1673,7 @@ impl ClientGame {
                     });
                     i += 1;
                     if i > 10 {
-                        //break;
+                        break;
                     }
                 }
             }

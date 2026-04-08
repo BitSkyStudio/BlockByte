@@ -1252,6 +1252,7 @@ impl Server {
                     script_state: Mutex::new(ScriptState::new(&machine_data.script)),
                     logic_state: Mutex::new(Default::default()),
                     blocked: AtomicBool::new(false),
+                    inventory_observers: Mutex::new(Vec::new()),
                 },
             );
         }
@@ -1549,7 +1550,7 @@ impl User {
         });
     }
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
-        let distance = 12;
+        let distance = 8;
         let world_height = 12;
         AABB {
             min: ChunkPos {

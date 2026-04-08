@@ -56,22 +56,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    var shadow_space = shadow_camera.view_proj * vec4(in.world_position, 1.);
-    //shadow_space.w -= 0.0001;
-    let shadow_undistorted = vec4(DistortPosition(shadow_space.xy), shadow_space.zw);
-    let shadow_projection = shadow_undistorted.xyz;// / shadow_undistorted.w;
-    let shadow_uv = shadow_projection.xy * 0.5 * vec2(1., -1.) + vec2<f32>(0.5);
-    let shadow_value = textureSample(shadow_texture, shadow_sampler, shadow_uv);
-    //return vec4(shadow_uv, 0., 1.);
-
-    let shadow_color = select(0.7, 1., shadow_value + 0.0005 > shadow_projection.z);
+    let shadow_color = sample_shadow(in.world_position);
 
     return vec4(color.rgb * shadow_color,1.);//* vec4<f32>(5.5,5.5, 5.5, 1.);
-}
-
-fn DistortPosition(position: vec2<f32>) -> vec2<f32>{
-    //let CenterDistance = length(position);
-    //let DistortionFactor = mix(1.0f, CenterDistance, 0.5f);
-    //return position / DistortionFactor;
-    return position / (length(position) + 0.1);
 }

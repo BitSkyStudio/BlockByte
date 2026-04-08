@@ -3,17 +3,18 @@ struct CameraUniform {
     view_proj: mat4x4<f32>,
 };
 @group(1) @binding(0) // 1.
-var<uniform> camera: CameraUniform;
+var<uniform> shadow_camera: CameraUniform;
 
 @group(2) @binding(0)
 var<uniform> time: f32;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) tex_coords: vec2<f32>,
-    @location(2) color: u32,
-    @location(3) shade: f32,
-    @location(4) flags: u32,
+    @location(1) normal: vec3<f32>,
+    @location(2) tex_coords: vec2<f32>,
+    @location(3) color: u32,
+    @location(4) shade: f32,
+    @location(5) flags: u32,
 }
 
 struct VertexOutput {
@@ -32,13 +33,9 @@ fn vs_main(
         position.x += sin(time * 0.8 + model.position.x * 0.2) * 0.1;
         position.z += sin(time * 0.8 + 10 + model.position.z * 0.2) * 0.1;
     }
-    let projected = camera.view_proj * vec4<f32>(position, 1.0);
-    out.clip_position = vec4(DistortPosition(projected.xy), projected.z, 1.);
+    let projected = shadow_camera.view_proj * vec4<f32>(position, 1.0);
+    out.clip_position = vec4(shadow_distort_position(projected.xy), projected.z, 1.);
     return out;
-}
-
-fn DistortPosition(position: vec2<f32>) -> vec2<f32>{
-    return position / (length(position) + 0.1);
 }
 
 @group(0) @binding(0)

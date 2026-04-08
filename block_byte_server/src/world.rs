@@ -362,6 +362,22 @@ impl Chunk {
                         }
                     }
                 }
+                BlockEvent::Wakeup { inventory_updated } => {
+                    let mut machines = self.components.machine.write();
+                    if let Some(machine) = machines.get_mut(block) {
+                        machine.blocked.store(false, Ordering::Relaxed);
+                        if inventory_updated {
+                            for to_wakeup in machine.inventory_observers.get_mut().drain(..) {
+                                server.schedule_block_event(
+                                    to_wakeup,
+                                    BlockEvent::Wakeup {
+                                        inventory_updated: false,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
         for (offset, machine) in self.components.machine.read().iter() {
@@ -708,6 +724,9 @@ pub enum BlockEvent {
     },
     NeighborDestroyed {
         world_face: Face,
+    },
+    Wakeup {
+        inventory_updated: bool,
     },
 }
 
@@ -1118,11 +1137,11 @@ impl Into<ClientBlockPlants> for &BlockPlants {
 #[derive(Serialize, Deserialize)]
 pub struct BlockMachine {
     pub inventory: RwLock<Inventory>,
-    #[serde(default)]
     pub sleep_cooldown: Mutex<f32>,
     pub script_state: Mutex<ScriptState>,
     pub logic_state: Mutex<FaceMap<Option<ScriptValue>>>,
     pub blocked: AtomicBool,
+    pub inventory_observers: Mutex<Vec<BlockPos>>,
 }
 pub struct ChunkColumnGeneration {
     pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
