@@ -25,8 +25,8 @@ fn vs_main(
     out.world_position = model.position;
     out.normal = model.normal;
     out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
-    let shade_color = 1. - abs(model.normal.x) * 0.3 - abs(model.normal.z) * 0.2 + min(model.normal.y, 0.) * 0.4;
-    out.color = model.color * vec4(vec3(shade_color), 1.) * 1.3;
+    let shade_color = normal_shading(model.normal);
+    out.color = model.color * vec4(vec3(shade_color * 1.3), 1.);
     return out;
 }
 

@@ -360,6 +360,18 @@ impl ApplicationHandler for App {
                 // this event rather than in AboutToWait, since rendering in here allows
                 // the program to gracefully handle redraws requested by the OS.
 
+                self.game.hud.properties.0.insert(
+                    "stamina_action".to_string(),
+                    match self.game.hit_timer {
+                        Some(hit_timer) => {
+                            let tool_data = self.game.active_tool();
+                            let progress = hit_timer / tool_data.swing_time;
+                            tool_data.stamina * (1. - progress)
+                        }
+                        None => 0.,
+                    },
+                );
+
                 self.game
                     .hud
                     .properties

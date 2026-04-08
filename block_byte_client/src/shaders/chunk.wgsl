@@ -16,7 +16,7 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
-    @location(1) color: vec4<f32>,
+    @location(1) color: vec3<f32>,
     @location(2) world_position: vec3<f32>,
     @location(3) normal: vec3<f32>,
 }
@@ -35,10 +35,11 @@ fn vs_main(
     }
     out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
     out.world_position = position;
+    let normal_shading = normal_shading(model.normal);
     let color_r = f32(model.color&31)/31.;
     let color_g = f32((model.color>>5)&31)/31.;
     let color_b = f32((model.color>>10)&31)/31.;
-    out.color = vec4<f32>(color_r * model.shade, color_g * model.shade, color_b * model.shade, 1.);
+    out.color = vec3<f32>(color_r, color_g, color_b);
     return out;
 }
 
@@ -58,7 +59,7 @@ var shadow_sampler: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let albedo: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords) * in.color;
+    let albedo: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords) * vec4(in.color, 1.);
     if albedo.w < 0.1{
         discard;
     }
@@ -82,6 +83,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var diffuse = albedo.rgb;
     diffuse *= lighting;
     diffuse *= shadow_color;
+    diffuse *= normal_shading(in.normal);
 
     return vec4(diffuse, 1.) ;//* vec4<f32>(5.5,5.5, 5.5, 1.);
 }

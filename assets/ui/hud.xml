@@ -6,6 +6,7 @@
             </box>
             <box style="background: wood.oak_bark;width: 50%;height: 20;align-self: flex-start;margin: 5;">
                 <box style="background: rock.limestone;width: stamina%;"/>
+                <box style="background: grass_block;width: stamina_action%;"/>
             </box>
         </box>
         <box style="justify-content: center;gap-column: 10;">

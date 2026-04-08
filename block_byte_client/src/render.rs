@@ -1367,9 +1367,7 @@ impl MeshVertexConsumer for ChunkMeshVertexConsumer<'_> {
         self.mesh.add_vertex(ChunkVertex {
             position: vertex.position.into_array(),
             tex_coords: vertex.uv,
-            shade: ((1. - vertex.normal.x.abs() * 0.3 - vertex.normal.z.abs() * 0.2
-                + vertex.normal.y.min(0.) * 0.15)
-                * 255.) as u8,
+            shade: 255,
             color: self.block_color.0,
             flags: self.flags,
             normals: vertex.normal.into_array(),
