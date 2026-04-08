@@ -7,7 +7,9 @@ use block_byte_common::registry::{
 use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
 use bytemuck::{NoUninit, Pod};
-use cgmath::{Deg, EuclideanSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3};
+use cgmath::{
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3,
+};
 use image::RgbaImage;
 use rand::rngs::StdRng;
 use rand_seeder::Seeder;
@@ -805,11 +807,15 @@ impl VertexDescription for DamageVertex {
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    direction: [f32; 3],
+    _pad: f32,
 }
 impl CameraUniform {
     fn new() -> Self {
         Self {
             view_proj: cgmath::Matrix4::identity().into(),
+            direction: [0.; 3],
+            _pad: 0.,
         }
     }
     fn load_light(&mut self, player_pos: Pos) {
@@ -818,6 +824,7 @@ impl CameraUniform {
             y: 20.,
             z: -5.,
         };
+        self.direction = dir.normalize().into();
         let eye = Point3 {
             x: player_pos.x,
             y: player_pos.y + 0.,
@@ -1360,7 +1367,9 @@ impl MeshVertexConsumer for ChunkMeshVertexConsumer<'_> {
         self.mesh.add_vertex(ChunkVertex {
             position: vertex.position.into_array(),
             tex_coords: vertex.uv,
-            shade: ((1. - vertex.normal.x.abs() * 0.3 - vertex.normal.z.abs() * 0.2) * 255.) as u8,
+            shade: ((1. - vertex.normal.x.abs() * 0.3 - vertex.normal.z.abs() * 0.2
+                + vertex.normal.y.min(0.) * 0.15)
+                * 255.) as u8,
             color: self.block_color.0,
             flags: self.flags,
             normals: vertex.normal.into_array(),

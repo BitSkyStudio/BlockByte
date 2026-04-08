@@ -1,8 +1,4 @@
-// Vertex shader
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-};
-@group(1) @binding(0) // 1.
+@group(1) @binding(0)
 var<uniform> shadow_camera: CameraUniform;
 
 @group(2) @binding(0)
@@ -45,7 +41,7 @@ var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let albedo: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let albedo: vec4<f32> = textureSampleLevel(t_diffuse, s_diffuse, in.tex_coords, 0);
     if albedo.w < 0.1{
         discard;
     }

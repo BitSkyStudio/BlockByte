@@ -1141,7 +1141,7 @@ pub struct BlockMachine {
     pub script_state: Mutex<ScriptState>,
     pub logic_state: Mutex<FaceMap<Option<ScriptValue>>>,
     pub blocked: AtomicBool,
-    pub inventory_observers: Mutex<Vec<BlockPos>>,
+    pub inventory_observers: Mutex<SmallVec<[BlockPos; 1]>>,
 }
 pub struct ChunkColumnGeneration {
     pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
@@ -1206,6 +1206,7 @@ impl WorldGenerator {
                 splines::Key::new(120., 0.8, Interpolation::Linear),
                 splines::Key::new(200., 0., Interpolation::Linear),
             ]);
+            //todo: this is probably broken between runs
             let unique_biomes = vec![forest];
             use rand::SeedableRng;
             let mut rng = StdRng::from_seed(Seeder::from((self.seed as u32, chunk)).make_seed());

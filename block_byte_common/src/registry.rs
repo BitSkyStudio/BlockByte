@@ -535,8 +535,6 @@ pub struct BlockData {
     pub hanging: Option<Face>,
     #[serde(default = "default_supporting_map")]
     pub supporting: FaceMap<bool>,
-    #[serde(default)]
-    pub paintable: bool,
 }
 fn default_supporting_map() -> FaceMap<bool> {
     FaceMap::init(|_| true)

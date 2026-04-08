@@ -1,7 +1,3 @@
-// Vertex shader
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-};
 @group(1) @binding(0) // 1.
 var<uniform> camera: CameraUniform;
 
@@ -17,6 +13,7 @@ struct VertexOutput {
     @location(0) tex_coords: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) world_position: vec3<f32>,
+    @location(3) normal: vec3<f32>,
 }
 
 @vertex
@@ -26,22 +23,20 @@ fn vs_main(
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
     out.world_position = model.position;
+    out.normal = model.normal;
     out.clip_position = camera.view_proj * vec4<f32>(model.position, 1.0);
-    //let shading = dot(model.normal, normalize(vec3<f32>(1, -1, 0.5)));
-    let shade_color = 1. - abs(model.normal.x) * 0.5 - abs(model.normal.z) * 0.2;
-    out.color = model.color * vec4<f32>(shade_color, shade_color, shade_color, 1.) * 1.3;
+    let shade_color = 1. - abs(model.normal.x) * 0.3 - abs(model.normal.z) * 0.2 + min(model.normal.y, 0.) * 0.4;
+    out.color = model.color * vec4(vec3(shade_color), 1.) * 1.3;
     return out;
 }
 
-
-// Fragment shader
 
 @group(0) @binding(0)
 var t_diffuse: texture_2d<f32>;
 @group(0)@binding(1)
 var s_diffuse: sampler;
 
-@group(2) @binding(0) // 1.
+@group(2) @binding(0)
 var<uniform> shadow_camera: CameraUniform;
 
 @group(3) @binding(0)
@@ -56,7 +51,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    let shadow_color = sample_shadow(in.world_position);
+    let shadow_color = sample_shadow(in.world_position, in.normal);
 
     return vec4(color.rgb * shadow_color,1.);//* vec4<f32>(5.5,5.5, 5.5, 1.);
 }

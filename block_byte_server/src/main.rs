@@ -1252,7 +1252,7 @@ impl Server {
                     script_state: Mutex::new(ScriptState::new(&machine_data.script)),
                     logic_state: Mutex::new(Default::default()),
                     blocked: AtomicBool::new(false),
-                    inventory_observers: Mutex::new(Vec::new()),
+                    inventory_observers: Mutex::new(SmallVec::new()),
                 },
             );
         }
