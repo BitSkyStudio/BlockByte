@@ -64,10 +64,7 @@ use crate::{
         BaseMesh, CameraUniform, ChunkMesh, ChunkVertex, DamageMesh, DamageVertex, GPUMesh,
         GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, Vertex,
     },
-    ui::{
-        HoveredElement, ScreenData, TEXT_RENDERER, TextRenderer, UIPos, UIRect, render_screen,
-        text_renderer,
-    },
+    ui::{HoveredElement, ScreenData, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
 };
 
 static START_TIMER: OnceLock<Instant> = OnceLock::new();
@@ -81,9 +78,8 @@ fn secs_since_start() -> f32 {
 fn main() {
     load_registries(&[&Path::new("assets"), &Path::new("assets_generated")]);
     use block_byte_common::registry::RegistryProvider;
-    let (atlas, text_renderer, image) = TextureAtlas::pack();
-    TEXTURE_ATLAS.set(atlas);
-    TEXT_RENDERER.set(text_renderer);
+    let texture_atlas = TextureAtlas::pack();
+    TEXTURE_ATLAS.set(texture_atlas);
 
     let connection = ClientConnection::connect("127.0.0.1:5000".parse().unwrap());
 
@@ -92,7 +88,6 @@ fn main() {
         .run_app(&mut App {
             camera: ClientPlayer::default(),
             render_state: None,
-            texture_image: Some(image),
             game: ClientGame::default(),
             connection,
             teleport_id: 0,
@@ -109,7 +104,6 @@ fn main() {
 }
 
 struct App {
-    texture_image: Option<Vec<RgbaImage>>,
     render_state: Option<RenderState>,
     game: ClientGame,
     camera: ClientPlayer,
@@ -141,7 +135,6 @@ impl ApplicationHandler for App {
         window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         self.render_state = Some(pollster::block_on(RenderState::new(
             window,
-            self.texture_image.take().unwrap(),
             image::load_from_memory(std::fs::read("assets/skybox.png").unwrap().as_slice())
                 .unwrap()
                 .to_rgba8(),
@@ -965,10 +958,13 @@ impl<T: Hash + Eq + Copy> InputContainer<T> {
 pub struct TextureAtlas {
     textures: Vec<Option<TexCoords>>,
     models: Vec<Vec<TexCoords>>,
+    text_renderer: TextRenderer,
+    texture_mips: Vec<RgbaImage>,
+    texture_material: RgbaImage,
 }
 
 impl TextureAtlas {
-    pub fn pack() -> (Self, TextRenderer, Vec<RgbaImage>) {
+    pub fn pack() -> Self {
         #[derive(Hash, PartialEq, Eq, Clone, Copy)]
         enum TextureAtlasKey {
             Texture(usize),
@@ -1126,27 +1122,46 @@ impl TextureAtlas {
             }
             texture_atlas_mips.push(new_image.to_rgba8());
         }
-        (
-            TextureAtlas {
-                textures: TextureKey::entries()
-                    .enumerate()
-                    .map(|(i, _)| get_texture(TextureAtlasKey::Texture(i)))
-                    .collect(),
-                models: ModelKey::entries()
-                    .enumerate()
-                    .map(|(i, model)| {
-                        let model = model.data();
-                        model
-                            .model
-                            .textures
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(j, _)| get_texture(TextureAtlasKey::Model(i, j)))
-                            .collect()
-                    })
-                    .collect(),
-            },
-            TextRenderer {
+        let mut material_texture = RgbaImage::new(texture_dimensions, texture_dimensions);
+        for texture in TextureKey::entries() {
+            let texture_data = texture.data();
+            if let Some(tex_coords) = get_texture(TextureAtlasKey::Texture(texture.numeric_id())) {
+                let [color_mask, emissive] = [
+                    texture_data.color_mask.as_ref(),
+                    texture_data.emissive.as_ref(),
+                ]
+                .map(|t| t.map(|t| t.grayscale().into_luma8()));
+                let start_x = (tex_coords.u1 * texture_dimensions as f32) as u32;
+                let start_y = (tex_coords.v1 * texture_dimensions as f32) as u32;
+                for x in 0..texture_data.texture.width() {
+                    for y in 0..texture_data.texture.height() {
+                        let [color_mask, emissive] = [color_mask.as_ref(), emissive.as_ref()]
+                            .map(|t| t.map(|t| t.get_pixel(x, y).0[0]).unwrap_or(0));
+                        material_texture.get_pixel_mut(start_x + x, start_y + y).0 =
+                            [color_mask, emissive, 0, 0];
+                    }
+                }
+            }
+        }
+
+        TextureAtlas {
+            textures: TextureKey::entries()
+                .map(|texture| get_texture(TextureAtlasKey::Texture(texture.numeric_id())))
+                .collect(),
+            models: ModelKey::entries()
+                .enumerate()
+                .map(|(i, model)| {
+                    let model = model.data();
+                    model
+                        .model
+                        .textures
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(j, _)| get_texture(TextureAtlasKey::Model(i, j)))
+                        .collect()
+                })
+                .collect(),
+            text_renderer: TextRenderer {
                 glyphs: (0..font.glyph_count())
                     .map(|i| {
                         get_texture(TextureAtlasKey::Glyph(i)).unwrap_or(TexCoords {
@@ -1159,8 +1174,9 @@ impl TextureAtlas {
                     .collect(),
                 font,
             },
-            texture_atlas_mips,
-        )
+            texture_material: material_texture,
+            texture_mips: texture_atlas_mips,
+        }
     }
 }
 impl std::ops::Index<TextureKey> for TextureAtlas {
@@ -1770,8 +1786,20 @@ impl ClientGame {
                                         0,
                                     )
                                     .map(|(position, uv)| {
+                                        let mut position = base_position + position;
+                                        if block_data.render_flags & 1 != 0 {
+                                            position.x += (world_animation_time * 0.8
+                                                + position.x * 0.2)
+                                                .sin()
+                                                * 0.1;
+                                            position.z += (world_animation_time * 0.8
+                                                + 10.
+                                                + position.z * 0.2)
+                                                .sin()
+                                                * 0.1;
+                                        }
                                         MeshVertex {
-                                            position: base_position + position,
+                                            position,
                                             normal: face.get_offset(),
                                             uv,
                                         }
@@ -1801,8 +1829,20 @@ impl ClientGame {
                                     ModelGeometry::Quad(vertices, texture) => {
                                         let (_, width, height) = model_data.model.textures[texture];
                                         mesh_vertex_consumer.add_quad(vertices.map(|vertex| {
+                                            let mut position = vertex.position;
+                                            if block_data.render_flags & 1 != 0 {
+                                                position.x += (world_animation_time * 0.8
+                                                    + position.x * 0.2)
+                                                    .sin()
+                                                    * 0.1;
+                                                position.z += (world_animation_time * 0.8
+                                                    + 10.
+                                                    + position.z * 0.2)
+                                                    .sin()
+                                                    * 0.1;
+                                            }
                                             MeshVertex {
-                                                position: vertex.position,
+                                                position,
                                                 normal: vertex.normal,
                                                 uv: [vertex.uv[0] * width, vertex.uv[1] * height],
                                             }

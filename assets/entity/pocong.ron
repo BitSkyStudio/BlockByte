@@ -6,5 +6,5 @@
     model: "pocong",
     health: 100.,
     damage_table: (),
-    ai_tasks: [Wander],
+    ai: (),
 )

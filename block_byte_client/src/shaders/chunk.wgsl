@@ -49,6 +49,11 @@ var t_diffuse: texture_2d<f32>;
 @group(0)@binding(1)
 var s_diffuse: sampler;
 
+@group(5) @binding(0)
+var material_texture: texture_2d<f32>;
+@group(5) @binding(1)
+var material_sampler: sampler;
+
 @group(2) @binding(0)
 var<uniform> shadow_camera: CameraUniform;
 
@@ -59,10 +64,12 @@ var shadow_sampler: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let albedo: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords) * vec4(in.color, 1.);
-    if albedo.w < 0.1{
+    let material = textureSample(material_texture, material_sampler, in.tex_coords);
+    let sampled_color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    if sampled_color.w < 0.1{
         discard;
     }
+    let albedo = sampled_color.rgb * (1. - material.r) + in.color * material.r;
 
     let shadow_color = sample_shadow(in.world_position, in.normal);
 
@@ -78,14 +85,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     ndotl *= (luminance(skyColor) + 0.01f);
     //ndotl *= lightmap.g;
 
-    let lighting = ndotl + lightColor + ambient;
+    let lighting = (ndotl + lightColor + ambient) * shadow_color * normal_shading(in.normal);
 
-    var diffuse = albedo.rgb;
-    diffuse *= lighting;
-    diffuse *= shadow_color;
-    diffuse *= normal_shading(in.normal);
-
-    return vec4(diffuse, 1.) ;//* vec4<f32>(5.5,5.5, 5.5, 1.);
+    return vec4(albedo * (lighting * (1. - material.g) + 1.5 * material.g), 1.);
 }
 
 fn luminance(color: vec3<f32>) -> f32 {

@@ -62,11 +62,12 @@ pub struct RenderState {
     shadow_chunk_render_pipeline: GPURenderPipeline,
     shadow_base_render_pipeline: GPURenderPipeline,
     time_uniform: GPUUniform<f32>,
+    material_texture: GPUTexture,
     pub animation_time: f32,
 }
 
 impl RenderState {
-    pub async fn new(window: Window, texture_images: Vec<RgbaImage>, skybox: RgbaImage) -> Self {
+    pub async fn new(window: Window, skybox: RgbaImage) -> Self {
         let window = Arc::new(window);
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -118,6 +119,7 @@ impl RenderState {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        let texture_images = &TEXTURE_ATLAS.get().unwrap().texture_mips;
         let texture_atlas = GPUTexture::new(
             &device,
             texture_images[0].dimensions(),
@@ -128,6 +130,14 @@ impl RenderState {
         for (mip_level, texture_image) in texture_images.into_iter().enumerate() {
             texture_atlas.write_image(&texture_image, mip_level as u32, &queue);
         }
+        let material_texture = GPUTexture::new(
+            &device,
+            texture_images[0].dimensions(),
+            1,
+            TextureFormat::Rgba8Unorm,
+            wgpu::FilterMode::Nearest,
+        );
+        material_texture.write_image(&TEXTURE_ATLAS.get().unwrap().texture_material, 0, &queue);
 
         let skybox_texture = GPUTexture::new(
             &device,
@@ -206,6 +216,7 @@ impl RenderState {
                 &shadow_camera.bind_group_layout,
                 &shadow_texture.bind_group_layout,
                 &time_uniform.bind_group_layout,
+                &material_texture.bind_group_layout,
             ],
             Some(BlendState::REPLACE),
             Some(wgpu::Face::Back),
@@ -359,6 +370,7 @@ impl RenderState {
             shadow_chunk_render_pipeline,
             shadow_base_render_pipeline,
             animation_time: 0.,
+            material_texture,
             time_uniform,
         }
     }
@@ -521,12 +533,20 @@ impl RenderState {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
+
+            render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
             render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
             render_pass.set_bind_group(4, &self.time_uniform.bind_group, &[]);
+            if let Some(mesh) = &gpu_entity_mesh {
+                mesh.draw(&mut render_pass);
+            }
+
+            render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
+
+            render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
 
             for (_, chunk) in &game.chunks {
                 if let Some(gpu_mesh) = &chunk.buffer {
@@ -540,10 +560,6 @@ impl RenderState {
                         gpu_mesh.draw(&mut render_pass);
                     }
                 }
-            }
-            render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
-            if let Some(mesh) = &gpu_entity_mesh {
-                mesh.draw(&mut render_pass);
             }
         }
         if !damage_mesh.vertices.is_empty() {

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
 use anyhow::anyhow;
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use image_overlay::overlay_dyn_img;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
@@ -123,6 +123,9 @@ macro_rules! create_registries{
         )*
         pub trait RegistryConfigLoadable: Sized{
             fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self>;
+            fn should_skip(path: &Path) -> bool{
+                false
+            }
         }
         pub fn load_registries(asset_paths: &[&Path]) {
             let mut load_registry = LoadRegistryStorage {
@@ -142,6 +145,9 @@ macro_rules! create_registries{
                                     match stripped_path.extension().and_then(|ext| ext.to_str()).unwrap_or(""){
                                         "py" => continue,
                                         _ => {}
+                                    }
+                                    if <$type>::should_skip(entry.path()){
+                                        continue;
                                     }
                                     let id = stripped_path
                                         .with_extension("")
@@ -326,6 +332,12 @@ where
 pub enum KeyGroup<T> {
     Single(Key<T>),
     Group(usize),
+    Empty,
+}
+impl<T> Default for KeyGroup<T> {
+    fn default() -> Self {
+        KeyGroup::Empty
+    }
 }
 impl<T: 'static> KeyGroup<T>
 where
@@ -352,6 +364,7 @@ where
                 let (_, group) = &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[group];
                 group.contains(&key)
             }
+            KeyGroup::Empty => false,
         }
     }
     pub fn list(&self) -> &[Key<T>] {
@@ -361,6 +374,7 @@ where
                 let (group, _) = &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[*group];
                 &group[..]
             }
+            KeyGroup::Empty => &[],
         }
     }
 }
@@ -370,6 +384,7 @@ impl<T> Clone for KeyGroup<T> {
         match self {
             Self::Single(v) => Self::Single(*v),
             Self::Group(v) => Self::Group(*v),
+            Self::Empty => Self::Empty,
         }
     }
 }
@@ -378,6 +393,7 @@ impl<T> PartialEq for KeyGroup<T> {
         match (self, other) {
             (Self::Single(l0), Self::Single(r0)) => l0 == r0,
             (Self::Group(l0), Self::Group(r0)) => l0 == r0,
+            (Self::Empty, Self::Empty) => true,
             _ => false,
         }
     }
@@ -389,6 +405,7 @@ impl<T> Hash for KeyGroup<T> {
         match self {
             KeyGroup::Single(key) => key.hash(state),
             KeyGroup::Group(i) => i.hash(state),
+            KeyGroup::Empty => {}
         }
     }
 }
@@ -563,25 +580,17 @@ impl BlockRotationMode {
                 .max_by(|face1, face2| face_fitness(**face1).total_cmp(&face_fitness(**face2)))
                 .unwrap()
         }
-        let orientation = match self {
-            BlockRotationMode::None => Orientation::IDENTITY,
+        match self {
+            BlockRotationMode::None => BlockRotation::default(),
             BlockRotationMode::Horizontal => {
                 let face = closest_face_to_offset(direction.make_front(), |face| {
                     face.axis_direction().0 != Axis::Y
                 });
-                Orientation::from_front_up(face, Face::Up).unwrap()
+                BlockRotation::looking_to(face)
             }
             BlockRotationMode::Full => {
                 let face = closest_face_to_offset(direction.make_front(), |_| true);
-                Orientation::from_front_up(
-                    face,
-                    match face {
-                        Face::Up => Face::Back,
-                        Face::Down => Face::Front,
-                        _ => Face::Up,
-                    },
-                )
-                .unwrap()
+                BlockRotation::looking_to(face)
             }
             BlockRotationMode::FullOriented => Orientation::from_front_up(
                 closest_face_to_offset(direction.make_front(), |face| {
@@ -589,24 +598,17 @@ impl BlockRotationMode {
                 }),
                 up_face,
             )
-            .unwrap(),
+            .unwrap()
+            .into_block_rotation(),
             BlockRotationMode::Axis => {
                 let face = closest_face_to_offset(direction.make_front(), |_| true);
                 let face = match face {
-                    Face::Front | Face::Right | Face::Up => face,
-                    Face::Back | Face::Left | Face::Down => face.opposite(),
+                    Face::Back | Face::Right | Face::Up => face,
+                    Face::Front | Face::Left | Face::Down => face.opposite(),
                 };
-                Orientation::from_front_up(
-                    face,
-                    match face {
-                        Face::Up => Face::Back,
-                        _ => Face::Up,
-                    },
-                )
-                .unwrap()
+                BlockRotation::looking_to(face)
             }
-        };
-        orientation.into_block_rotation()
+        }
     }
     pub fn get_nearest_valid(self, value: BlockRotation) -> BlockRotation {
         match self {
@@ -899,6 +901,18 @@ impl Default for BlockRotation {
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub struct BlockRotation(pub u8);
 impl BlockRotation {
+    pub fn looking_to(face: Face) -> BlockRotation {
+        Orientation::from_front_up(
+            face,
+            match face {
+                Face::Up => Face::Back,
+                Face::Down => Face::Front,
+                _ => Face::Up,
+            },
+        )
+        .unwrap()
+        .into_block_rotation()
+    }
     pub fn rotate_aabb(self, aabb: AABB<f32>) -> AABB<f32> {
         let aabb = aabb.offset(Vec3::all(-0.5));
         let orientation = Orientation::from_block_rotation(self);
@@ -957,33 +971,80 @@ impl Default for BlockColor {
         Self(32767)
     }
 }
-
-//todo: config client
-static IMAGE_CACHE: OnceLock<Mutex<HashMap<TextureKey, Arc<DynamicImage>>>> = OnceLock::new();
-fn image_cache() -> MutexGuard<'static, HashMap<TextureKey, Arc<DynamicImage>>> {
+static IMAGE_CACHE: OnceLock<Mutex<HashMap<TextureKey, TextureData>>> = OnceLock::new();
+fn image_cache() -> MutexGuard<'static, HashMap<TextureKey, TextureData>> {
     IMAGE_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap()
 }
+#[derive(Clone)]
 pub struct TextureData {
     pub texture: Arc<DynamicImage>,
+    pub color_mask: Option<Arc<DynamicImage>>,
+    pub emissive: Option<Arc<DynamicImage>>,
 }
 pub type TextureKey = Key<TextureData>;
 impl RegistryConfigLoadable for TextureData {
     fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<TextureData> {
-        let texture = match config.extension().unwrap().to_str().unwrap() {
-            "png" => Arc::new(image::open(config)?),
-            "ron" => {
-                let texture =
-                    ron::from_str::<ComposedTexture>(std::fs::read_to_string(config)?.as_str())?;
-                texture.resolve(config.parent().unwrap())
+        if let Some(cached) = image_cache().get(&key) {
+            return Ok(cached.clone());
+        }
+        fn load_image(path: &Path, load_texture_type: LoadTextureType) -> Arc<DynamicImage> {
+            match path.extension().unwrap().to_str().unwrap() {
+                "png" => Arc::new(image::open(path).unwrap()),
+                "ron" => {
+                    let texture = ron::from_str::<ComposedTexture>(
+                        std::fs::read_to_string(path).unwrap().as_str(),
+                    )
+                    .unwrap();
+                    texture.resolve(load_texture_type)
+                }
+                _ => panic!(),
             }
-            _ => panic!(),
+        }
+        let texture = load_image(config, LoadTextureType::Texture);
+        let mut material = HashMap::new();
+        for texture_type in [LoadTextureType::ColorMask, LoadTextureType::Emissive] {
+            let mut path_search = config.to_path_buf();
+            path_search.set_extension(match texture_type {
+                LoadTextureType::Texture => unreachable!(),
+                LoadTextureType::ColorMask => "color_mask",
+                LoadTextureType::Emissive => "emissive",
+            });
+            path_search.add_extension("png");
+            let loaded_texture = if path_search.exists() {
+                load_image(&path_search, texture_type)
+            } else {
+                path_search.set_extension("ron");
+                if path_search.exists() {
+                    load_image(&path_search, texture_type)
+                } else {
+                    continue;
+                }
+            };
+            assert_eq!(loaded_texture.width(), texture.width());
+            assert_eq!(loaded_texture.height(), texture.height());
+            material.insert(texture_type, loaded_texture);
+        }
+        let texture_data = TextureData {
+            texture,
+            color_mask: material.remove(&LoadTextureType::ColorMask),
+            emissive: material.remove(&LoadTextureType::Emissive),
         };
-        image_cache().insert(key, texture.clone());
-        Ok(TextureData { texture })
+        image_cache().insert(key, texture_data.clone());
+        Ok(texture_data)
     }
+    fn should_skip(path: &Path) -> bool {
+        let file_name = path.file_stem().unwrap().to_str().unwrap();
+        file_name.ends_with(".emissive") || file_name.ends_with(".color_mask")
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum LoadTextureType {
+    Texture,
+    ColorMask,
+    Emissive,
 }
 #[derive(Deserialize)]
 enum ComposedTexture {
@@ -996,26 +1057,35 @@ enum ComposedTexture {
         base: Box<ComposedTexture>,
         color: Color,
     },
+    Fill {
+        width: u32,
+        height: u32,
+        color: Color,
+    },
 }
 impl ComposedTexture {
-    pub fn resolve(&self, texture_path: &Path) -> Arc<DynamicImage> {
+    pub fn resolve(&self, load_texture_type: LoadTextureType) -> Arc<DynamicImage> {
         match self {
             ComposedTexture::Image(key) => {
-                if let Some(image) = image_cache().get(key) {
-                    return Arc::clone(image);
+                let texture = TextureData::registry_load_from_config(key.path(), *key).unwrap();
+                match load_texture_type {
+                    LoadTextureType::Texture => texture.texture,
+                    LoadTextureType::ColorMask => texture.color_mask.unwrap(),
+                    LoadTextureType::Emissive => texture.emissive.unwrap(),
                 }
-                TextureData::registry_load_from_config(key.path(), *key)
-                    .unwrap()
-                    .texture
             }
             ComposedTexture::Overlay { base, overlay } => {
-                let mut base = Arc::unwrap_or_clone(base.resolve(texture_path));
-                let overlay = overlay.resolve(texture_path);
+                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type));
+                let overlay = overlay.resolve(load_texture_type);
+
+                assert_eq!(base.width(), overlay.width());
+                assert_eq!(base.height(), overlay.height());
+
                 overlay_dyn_img(&mut base, &overlay, 0, 0, image_overlay::BlendMode::Normal);
                 Arc::new(base)
             }
             ComposedTexture::Color { base, color } => {
-                let mut base = Arc::unwrap_or_clone(base.resolve(texture_path));
+                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type));
                 let mut base = base.to_rgba8();
                 for pixel in base.pixels_mut() {
                     for (i, v) in Into::<[u8; 4]>::into(*color).into_iter().enumerate() {
@@ -1024,6 +1094,18 @@ impl ComposedTexture {
                     }
                 }
                 Arc::new(base.into())
+            }
+            ComposedTexture::Fill {
+                width,
+                height,
+                color,
+            } => {
+                let mut image = DynamicImage::new_rgba8(*width, *height);
+                let rgba = image::Rgba((*color).into());
+                for mut pixel in image.as_mut_rgba8().unwrap().pixels_mut() {
+                    *pixel = rgba;
+                }
+                Arc::new(image)
             }
         }
     }
@@ -1043,16 +1125,14 @@ pub struct EntityData {
     #[serde(default)]
     pub damage_table: DamageTable,
     #[serde(default)]
-    pub ai_tasks: Vec<MobAiTask>,
+    pub ai: Option<MobAI>,
 }
 #[derive(Deserialize)]
-pub enum MobAiTask {
-    Attack {
-        targets: KeyGroup<EntityData>,
-        damage: f32,
-        damage_type: DamageType,
-    },
-    Wander,
+pub struct MobAI {
+    #[serde(default)]
+    pub attacks: KeyGroup<EntityData>,
+    #[serde(default)]
+    pub fears: KeyGroup<EntityData>,
 }
 #[derive(Deserialize)]
 pub enum EntityInteractAction {

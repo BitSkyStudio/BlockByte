@@ -770,12 +770,12 @@ pub struct InternalEntityState {
     pub last_hand_item: Option<ItemStack>,
     pub health: f32,
     pub research: HashSet<ResearchKey>,
-    pub ai: Option<MobAI>,
+    pub brain: Option<MobBrain>,
     pub direction: LookDirection,
 }
 #[derive(Serialize, Deserialize)]
-pub struct MobAI {}
-impl MobAI {
+pub struct MobBrain {}
+impl MobBrain {
     pub fn new() -> Self {
         Self {}
     }
@@ -798,9 +798,9 @@ impl Entity {
                 last_hand_item: None,
                 health: entity_data.health,
                 research: HashSet::new(),
-                ai: match entity_data.ai_tasks.is_empty() {
-                    true => None,
-                    false => Some(MobAI::new()),
+                brain: match &entity_data.ai {
+                    Some(_) => Some(MobBrain::new()),
+                    None => None,
                 },
                 direction: LookDirection { pitch: 0., yaw: 0. },
             }),
@@ -864,26 +864,18 @@ impl Entity {
         if self.controller.is_none() {
             let hitbox = self.key.data().hitbox();
             let mut move_vector = Pos::ZERO;
-            match self.key.data().ai_tasks.get(0) {
-                Some(task) => match task {
-                    block_byte_common::registry::MobAiTask::Attack {
-                        targets,
-                        damage,
-                        damage_type,
-                    } => todo!(),
-                    block_byte_common::registry::MobAiTask::Wander => {
-                        if state.character_controller.on_ground {
-                            state.character_controller.velocity.y += 15.;
-                        }
-                        let front = state.direction.make_front();
-                        move_vector.x = front.x * 1.;
-                        move_vector.z = front.z * 1.;
-                        if rand::random_bool(1. / 40. / 5.) {
-                            state.direction.yaw =
-                                rand::random_range((0.)..(std::f32::consts::PI * 2.))
-                        }
+            match &self.key.data().ai {
+                Some(_) => {
+                    if state.character_controller.on_ground {
+                        state.character_controller.velocity.y += 15.;
                     }
-                },
+                    let front = state.direction.make_front();
+                    move_vector.x = front.x * 1.;
+                    move_vector.z = front.z * 1.;
+                    if rand::random_bool(1. / 40. / 5.) {
+                        state.direction.yaw = rand::random_range((0.)..(std::f32::consts::PI * 2.))
+                    }
+                }
                 None => {}
             }
             let mut new_position = self.position;

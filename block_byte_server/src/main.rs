@@ -51,9 +51,9 @@ use crate::{
     },
 };
 
+mod debug;
 mod inventory;
 mod world;
-mod worldgen_vis;
 
 fn main() {
     load_registries(&[&Path::new("assets"), &Path::new("assets_generated")]);
@@ -61,9 +61,34 @@ fn main() {
     .num_threads(8)
     .build_global()
     .unwrap();*/
+    let mut memorydb = false;
     if let Some(arg) = args().nth(1) {
-        if arg == "worldgen_vis" {
-            worldgen_vis::visualise();
+        let mut start = false;
+        match arg.as_str() {
+            "worldgen_vis" => {
+                debug::visualise();
+            }
+            "tree" => {
+                let base = "wood.oak";
+                let load_block =
+                    |btype: &str| BlockKey::id(format!("{}.{}", base, btype).as_str()).unwrap();
+                let structure = debug::generate_tree(
+                    load_block("log"),
+                    load_block("slab"),
+                    load_block("branch"),
+                    load_block("leaves"),
+                );
+                println!("{}", ron::to_string(&structure).unwrap());
+            }
+            "memorydb" => {
+                start = true;
+                memorydb = true;
+            }
+            _ => {
+                start = true;
+            }
+        }
+        if !start {
             return;
         }
     }
@@ -83,7 +108,11 @@ fn main() {
         NetcodeServerTransport::new(network_server_config, network_socket).unwrap();
 
     let database_path = Path::new("save.db3");
-    let database = rusqlite::Connection::open(database_path).unwrap();
+    let database = if memorydb {
+        rusqlite::Connection::open_in_memory().unwrap()
+    } else {
+        rusqlite::Connection::open(database_path).unwrap()
+    };
     {
         database.execute(
             "CREATE TABLE `chunks` (

@@ -20,7 +20,7 @@ use winit::{
 };
 
 use crate::{
-    ClientGame, ClientPlayer, GUIMesh, TexCoordsExt, TexCoordsIndexExt,
+    ClientGame, ClientPlayer, GUIMesh, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt,
     render::{CameraUniform, GUIVertex, MeshVertexConsumer, item_model_icon_view},
     translate,
 };
@@ -930,9 +930,8 @@ impl TextRenderer {
         }
     }
 }
-pub static TEXT_RENDERER: OnceLock<TextRenderer> = OnceLock::new();
 pub fn text_renderer() -> &'static TextRenderer {
-    TEXT_RENDERER.get().unwrap()
+    &TEXTURE_ATLAS.get().unwrap().text_renderer
 }
 #[derive(Copy, Clone)]
 pub struct UIPos {
