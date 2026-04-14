@@ -694,6 +694,10 @@ pub struct BlockMachineData {
     pub script: CompiledScript<MachineInstrution>,
     #[serde(default)]
     pub script_views: Vec<InventoryView>,
+    #[serde(default)]
+    pub model: Option<ModelInstance>,
+    #[serde(default)]
+    pub model_animations: Vec<String>,
 }
 pub enum MachineInstrution {
     Next,
@@ -990,9 +994,14 @@ impl RegistryConfigLoadable for TextureData {
         if let Some(cached) = image_cache().get(&key) {
             return Ok(cached.clone());
         }
-        fn load_image(path: &Path, load_texture_type: LoadTextureType) -> Arc<DynamicImage> {
+        fn load_image(
+            path: &Path,
+            load_texture_type: LoadTextureType,
+        ) -> anyhow::Result<Arc<DynamicImage>> {
             match path.extension().unwrap().to_str().unwrap() {
-                "png" => Arc::new(image::open(path).unwrap()),
+                "png" => Ok(Arc::new(
+                    image::open(path).map_err(|error| anyhow!("{:?}", error))?,
+                )),
                 "ron" => {
                     let texture = ron::from_str::<ComposedTexture>(
                         std::fs::read_to_string(path).unwrap().as_str(),
@@ -1003,7 +1012,7 @@ impl RegistryConfigLoadable for TextureData {
                 _ => panic!(),
             }
         }
-        let texture = load_image(config, LoadTextureType::Texture);
+        let texture = load_image(config, LoadTextureType::Texture)?;
         let mut material = HashMap::new();
         for texture_type in [LoadTextureType::ColorMask, LoadTextureType::Emissive] {
             let mut path_search = config.to_path_buf();
@@ -1014,17 +1023,27 @@ impl RegistryConfigLoadable for TextureData {
             });
             path_search.add_extension("png");
             let loaded_texture = if path_search.exists() {
-                load_image(&path_search, texture_type)
+                load_image(&path_search, texture_type)?
             } else {
                 path_search.set_extension("ron");
                 if path_search.exists() {
-                    load_image(&path_search, texture_type)
+                    load_image(&path_search, texture_type)?
                 } else {
                     continue;
                 }
             };
-            assert_eq!(loaded_texture.width(), texture.width());
-            assert_eq!(loaded_texture.height(), texture.height());
+            if loaded_texture.width() != texture.width()
+                || loaded_texture.height() != texture.height()
+            {
+                return Err(anyhow!(
+                    "{:?}'s size {}x{} doesn't match base's size {}x{}",
+                    texture_type,
+                    loaded_texture.width(),
+                    loaded_texture.height(),
+                    texture.width(),
+                    texture.height()
+                ));
+            }
             material.insert(texture_type, loaded_texture);
         }
         let texture_data = TextureData {
@@ -1040,7 +1059,7 @@ impl RegistryConfigLoadable for TextureData {
         file_name.ends_with(".emissive") || file_name.ends_with(".color_mask")
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum LoadTextureType {
     Texture,
     ColorMask,
@@ -1064,10 +1083,11 @@ enum ComposedTexture {
     },
 }
 impl ComposedTexture {
-    pub fn resolve(&self, load_texture_type: LoadTextureType) -> Arc<DynamicImage> {
-        match self {
+    pub fn resolve(&self, load_texture_type: LoadTextureType) -> anyhow::Result<Arc<DynamicImage>> {
+        Ok(match self {
             ComposedTexture::Image(key) => {
-                let texture = TextureData::registry_load_from_config(key.path(), *key).unwrap();
+                let texture = TextureData::registry_load_from_config(key.path(), *key)
+                    .map_err(|_| anyhow!("error loading texture {}", key.text_id()))?;
                 match load_texture_type {
                     LoadTextureType::Texture => texture.texture,
                     LoadTextureType::ColorMask => texture.color_mask.unwrap(),
@@ -1075,17 +1095,24 @@ impl ComposedTexture {
                 }
             }
             ComposedTexture::Overlay { base, overlay } => {
-                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type));
-                let overlay = overlay.resolve(load_texture_type);
+                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type)?);
+                let overlay = overlay.resolve(load_texture_type)?;
 
-                assert_eq!(base.width(), overlay.width());
-                assert_eq!(base.height(), overlay.height());
+                if base.width() != overlay.width() || base.height() != overlay.height() {
+                    return Err(anyhow!(
+                        "base's size {}x{} doesn't match overlay's size {}x{}",
+                        base.width(),
+                        base.height(),
+                        overlay.width(),
+                        overlay.height()
+                    ));
+                }
 
                 overlay_dyn_img(&mut base, &overlay, 0, 0, image_overlay::BlendMode::Normal);
                 Arc::new(base)
             }
             ComposedTexture::Color { base, color } => {
-                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type));
+                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type)?);
                 let mut base = base.to_rgba8();
                 for pixel in base.pixels_mut() {
                     for (i, v) in Into::<[u8; 4]>::into(*color).into_iter().enumerate() {
@@ -1107,7 +1134,7 @@ impl ComposedTexture {
                 }
                 Arc::new(image)
             }
-        }
+        })
     }
 }
 #[derive(Deserialize)]

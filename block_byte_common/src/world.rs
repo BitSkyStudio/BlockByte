@@ -221,7 +221,7 @@ macro_rules! create_client_chunk_block_components{
     }
 }
 
-create_client_chunk_block_components!(ClientBlockDamage, damage; ClientBlockPlants, plant);
+create_client_chunk_block_components!(ClientBlockDamage, damage; ClientBlockPlants, plant; ClientBlockMachine, machine);
 
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockDamage {
@@ -230,4 +230,9 @@ pub struct ClientBlockDamage {
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockPlants {
     pub plants: SmallVec<[(PlantKey, u8); 1]>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct ClientBlockMachine {
+    pub animation: u16,
+    pub animation_start_time: u64,
 }

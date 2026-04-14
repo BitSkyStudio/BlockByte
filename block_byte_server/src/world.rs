@@ -10,7 +10,8 @@ use std::{
 };
 
 use block_byte_common::{
-    CharacterController, Color, DamageType, InventoryView, LookDirection, MoveMode,
+    CharacterController, Color, DamageType, InventoryView, LookDirection, MoveMode, SERVER_DT,
+    SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos},
     net::NetworkMessageS2C,
     registry::{
@@ -20,8 +21,8 @@ use block_byte_common::{
     },
     scripts::{self, CallbackResult, ExternalScriptByteCode, ScriptState, ScriptValue},
     world::{
-        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
-        ClientChunkBlockComponents,
+        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockMachine,
+        ClientBlockPlants, ClientChunkBlockComponents,
     },
 };
 use noise::{BasicMulti, NoiseFn, Perlin};
@@ -385,7 +386,7 @@ impl Chunk {
             let block_data = block.block.data();
             let machine_data = block_data.machine.as_ref().unwrap();
             let mut cooldown = machine.sleep_cooldown.lock();
-            if *cooldown <= 0. {
+            if *cooldown == 0 {
                 if machine.blocked.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -394,7 +395,7 @@ impl Chunk {
                     |state, instruction| match instruction {
                         MachineInstrution::Next => CallbackResult::Suspend,
                         MachineInstrution::Sleep { time } => {
-                            *cooldown = *time;
+                            *cooldown = (*time * SERVER_TPS as f32).round() as u32;
                             CallbackResult::Suspend
                         }
                         MachineInstrution::Suspend => {
@@ -604,7 +605,8 @@ impl Chunk {
                                 for output in generate_loot_table(recipe.outputs.data()) {
                                     inventory.add_item(output_view, output);
                                 }
-                                *cooldown = recipe.craft_time * speed;
+                                *cooldown =
+                                    (recipe.craft_time * speed * SERVER_TPS as f32).round() as u32;
                                 state.pc = *success;
                                 return CallbackResult::Suspend;
                             }
@@ -619,7 +621,7 @@ impl Chunk {
                     }
                 }
             } else {
-                *cooldown -= server.delta_time();
+                *cooldown -= 1;
             }
         }
         /*let chunk_id =
@@ -641,7 +643,7 @@ impl Chunk {
             let mut damage_to_clear = Vec::new();
             for (offset, damage) in damage.iter_mut() {
                 damage.damage -= 1.
-                    * server.delta_time()
+                    * SERVER_DT
                     * blocks
                         .get(offset.index())
                         .unwrap()
@@ -881,7 +883,7 @@ impl Entity {
             let mut new_position = self.position;
             state.character_controller.tick(
                 &mut new_position,
-                1. / server.tps as f32,
+                SERVER_DT,
                 |block| server.get_block(block),
                 move_vector,
                 MoveMode::Normal,
@@ -1092,7 +1094,7 @@ macro_rules! create_chunk_block_components_client_mapping {
 }
 
 create_chunk_block_components!(BlockDamage, damage; BlockPlants, plant; BlockMachine, machine);
-create_chunk_block_components_client_mapping!(damage, plant);
+create_chunk_block_components_client_mapping!(damage, plant, machine);
 
 #[derive(Serialize, Deserialize)]
 pub struct BlockDamage {
@@ -1129,12 +1131,24 @@ impl Into<ClientBlockPlants> for &BlockPlants {
 #[derive(Serialize, Deserialize)]
 pub struct BlockMachine {
     pub inventory: RwLock<Inventory>,
-    pub sleep_cooldown: Mutex<f32>,
+    pub sleep_cooldown: Mutex<u32>,
     pub script_state: Mutex<ScriptState>,
     pub logic_state: Mutex<FaceMap<Option<ScriptValue>>>,
     pub blocked: AtomicBool,
     pub inventory_observers: Mutex<SmallVec<[BlockPos; 1]>>,
+    pub current_animation: Mutex<u16>,
+    pub animation_start_time: Mutex<u64>,
 }
+
+impl Into<ClientBlockMachine> for &BlockMachine {
+    fn into(self) -> ClientBlockMachine {
+        ClientBlockMachine {
+            animation: *self.current_animation.lock(),
+            animation_start_time: *self.animation_start_time.lock(),
+        }
+    }
+}
+
 pub struct ChunkColumnGeneration {
     pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
     pub height: [[u16; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],

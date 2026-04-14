@@ -11,7 +11,10 @@ use std::{
     net::{SocketAddr, UdpSocket},
     ops::ControlFlow,
     path::Path,
-    sync::{Arc, OnceLock, atomic::AtomicU64},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU32, AtomicU64},
+    },
     time::{Duration, Instant, SystemTime},
     u32,
 };
@@ -20,7 +23,7 @@ use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
     CharacterController, ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities,
-    TexCoords,
+    SERVER_DT, TexCoords,
     coord::{
         AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos, Ray,
         Vec3,
@@ -62,7 +65,8 @@ use crate::{
     clipping::Frustum,
     render::{
         BaseMesh, CameraUniform, ChunkMesh, ChunkVertex, DamageMesh, DamageVertex, GPUMesh,
-        GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, Vertex,
+        GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, Vertex, draw_model,
+        get_block_matrix,
     },
     ui::{HoveredElement, ScreenData, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
 };
@@ -81,9 +85,14 @@ fn main() {
     let texture_atlas = TextureAtlas::pack();
     TEXTURE_ATLAS.set(texture_atlas);
 
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build_global();
+
     let connection = ClientConnection::connect("127.0.0.1:5000".parse().unwrap());
 
     let event_loop = EventLoop::new().unwrap();
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     event_loop
         .run_app(&mut App {
             camera: ClientPlayer::default(),
@@ -428,11 +437,12 @@ impl ApplicationHandler for App {
                         y: 0.9,
                     },
                     &format!(
-                        "{:.2} {:.2} {:.2} fps: {:.0}, mspt: {:.2} {}",
+                        "{:.2} {:.2} {:.2} fps: {:.0}, queue: {}, mspt: {:.2} {}",
                         self.game.player_position.x,
                         self.game.player_position.y,
                         self.game.player_position.z,
                         1. / self.delta_time_average,
+                        self.game.chunk_mesh_queue_size,
                         self.mspt,
                         match self.camera.raycast(&self.game, true) {
                             RayCastResult::Block(position, face) =>
@@ -626,6 +636,7 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                let ps = profiler::profiler_scope("render");
                 match render_state.render(
                     &self.camera,
                     &self.game,
@@ -646,6 +657,7 @@ impl ApplicationHandler for App {
                         event_loop.exit();
                     }
                 }
+                ps.end();
 
                 self.render_state
                     .as_ref()
@@ -762,13 +774,10 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
-                            NetworkMessageS2C::GameTick {
-                                ticks_passed,
-                                dt,
-                                mspt,
-                            } => {
-                                self.game.tick_server(dt);
+                            NetworkMessageS2C::GameTick { ticks_passed, mspt } => {
+                                self.game.server_ticks_passed = ticks_passed;
                                 self.mspt = mspt;
+                                self.game.tick_server();
                             }
                             NetworkMessageS2C::AddEntity {
                                 uuid,
@@ -902,6 +911,17 @@ impl ApplicationHandler for App {
 
                 self.game.buttons.frame_clear(dt);
                 self.game.keys.frame_clear(dt);
+
+                let profiler_data = profiler::profiler_consume();
+                if self.last_update.elapsed().as_millis() > 19 {
+                    println!(
+                        "slow frame: {}",
+                        self.last_update.elapsed().as_secs_f32() * 1000.
+                    );
+                    for (name, duration) in profiler_data {
+                        println!("\t{} - {}", name, duration.as_micros());
+                    }
+                }
             }
             _ => (),
         }
@@ -1385,7 +1405,7 @@ impl ClientPlayer {
         if self.running {
             game.stamina -= delta_time * 15.;
             if game.stamina <= 0. {
-                game.stamina = 0.;
+                game.stamina = -1.;
                 self.running = false;
             }
         }
@@ -1487,12 +1507,14 @@ pub struct ClientGame {
     pub viewmodel_player: AnimationPlayer,
     pub swap_hand_item: Option<(ItemKey, usize)>,
     pub chunk_mesh_channels: (
-        std::sync::mpsc::Sender<(ChunkPos, Option<GPUMesh>, u64)>,
-        std::sync::mpsc::Receiver<(ChunkPos, Option<GPUMesh>, u64)>,
+        std::sync::mpsc::Sender<(ChunkPos, ChunkMesh, u64)>,
+        std::sync::mpsc::Receiver<(ChunkPos, ChunkMesh, u64)>,
     ),
     pub researched: HashSet<ResearchKey>,
     pub stamina: f32,
     pub place_message: Option<NetworkMessageC2S>,
+    pub chunk_mesh_queue_size: usize,
+    pub server_ticks_passed: u64,
 }
 impl Default for ClientGame {
     fn default() -> Self {
@@ -1521,6 +1543,8 @@ impl Default for ClientGame {
             researched: HashSet::new(),
             stamina: 0.,
             place_message: None,
+            chunk_mesh_queue_size: 0,
+            server_ticks_passed: 0,
         }
     }
 }
@@ -1648,10 +1672,20 @@ impl ClientGame {
                 _ => None,
             },
         );
+        let ps = profiler::profiler_scope("chunk download");
+        let mut data_uploaded = 0;
         while let Ok((position, buffer, version)) = self.chunk_mesh_channels.1.try_recv() {
+            self.chunk_mesh_queue_size -= 1;
             if let Some(chunk) = self.chunks.get_mut(&position) {
                 chunk.scheduled = false;
-                chunk.buffer = buffer;
+                chunk.buffer = GPUMesh::allocate(&buffer, &device);
+                if let Some(buffer) = chunk.buffer.as_ref() {
+                    //println!("chunk {}", buffer.buffer.size());
+                    data_uploaded += buffer.buffer.size();
+                }
+                if data_uploaded > 256 * 1024 {
+                    break;
+                }
                 if version
                     < chunk
                         .mesh_build_data
@@ -1673,7 +1707,12 @@ impl ClientGame {
                 }
             }
         }
+        if data_uploaded > 0 {
+            //println!("uploaded: {}", data_uploaded,);
+        }
+        ps.end();
         let mut i = 0;
+        let ps = profiler::profiler_scope("upload chunks");
         while let Some(modified_chunk) = self.modified_chunks.pop() {
             let modified_chunk = modified_chunk.chunk;
             if let Some(chunk) = self.chunks.get_mut(&modified_chunk) {
@@ -1690,27 +1729,28 @@ impl ClientGame {
                                 .clone(),
                         )
                     });
-                    let device = device.clone();
                     rayon::spawn(move || {
                         let (mesh, version) = ClientChunk::build_chunk_mesh(
                             modified_chunk,
                             build_data,
                             neighbor_chunks,
                         );
-                        tx.send((modified_chunk, GPUMesh::allocate(&mesh, &device), version));
+                        tx.send((modified_chunk, mesh, version));
                     });
+                    self.chunk_mesh_queue_size += 1;
                     i += 1;
-                    if i > 10 {
-                        break;
+                    if i > 5 {
+                        //break;
                     }
                 }
             }
         }
+        ps.end();
         for (id, entity) in &self.entities {
             if Some(*id) == self.player_entity {
                 continue;
             }
-            let lerp_time = (entity.update_timestamp.elapsed().as_secs_f32() / (1. / 40.)).min(1.);
+            let lerp_time = (entity.update_timestamp.elapsed().as_secs_f32() / SERVER_DT).min(1.);
             let position = entity
                 .previous_position
                 .lerp(entity.position, lerp_time + 1.);
@@ -1733,6 +1773,8 @@ impl ClientGame {
                 },
             );
         }
+
+        let ps = profiler::profiler_scope("draw block component");
         let player_chunk = self.player_position.to_chunk_pos();
         let view_distance = 4;
         for chunk_position in AABB::new(
@@ -1758,7 +1800,8 @@ impl ClientGame {
             }
             if let Some(chunk) = self.chunks.get(&chunk_position) {
                 for (offset, damage) in chunk.components.damage.iter() {
-                    let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
+                    let base_block_position = (chunk_position.to_block_pos() + offset.xyz());
+                    let base_position = base_block_position.to_pos();
                     if base_position.distance_squared(self.player_position)
                         > (view_distance * view_distance) as f32
                             * CHUNK_SIZE as f32
@@ -1808,22 +1851,9 @@ impl ClientGame {
                             }
                         }
                         BlockRenderData::Model(model) => {
-                            let orientation = Orientation::from_block_rotation(block.rotation);
-                            let right = orientation.right.get_offset();
-                            let up = orientation.up.get_offset();
-                            let front = orientation.forward.get_offset();
                             let model_data = &model.model.data();
                             model_data.model.draw(
-                                Matrix4::from_translation(Vector3::new(
-                                    base_position.x + 0.5,
-                                    base_position.y + 0.5,
-                                    base_position.z + 0.5,
-                                )) * Matrix4::from_cols(
-                                    Vector4::new(right.x, right.y, right.z, 0.),
-                                    Vector4::new(up.x, up.y, up.z, 0.),
-                                    Vector4::new(-front.x, -front.y, -front.z, 0.),
-                                    Vector4::new(0., 0., 0., 1.),
-                                ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
+                                get_block_matrix(base_block_position, block.rotation),
                                 &[],
                                 |geometry| match geometry {
                                     ModelGeometry::Quad(vertices, texture) => {
@@ -1923,8 +1953,45 @@ impl ClientGame {
                         }
                     }
                 }
+                for (offset, machine) in chunk.components.machine.iter() {
+                    let blocks = chunk.mesh_build_data.blocks.read();
+                    let block = blocks.get(offset.index()).unwrap();
+                    let block_data = block.block.data();
+                    if let Some(machine_data) = block_data.machine.as_ref() {
+                        if let Some(machine_model) = machine_data.model.as_ref() {
+                            let animation_time =
+                                (self.server_ticks_passed - machine.animation_start_time) as f32
+                                    * SERVER_DT;
+                            let animation = match machine_data.model_animations.is_empty() {
+                                true => None,
+                                false => Some(DrawAnimation {
+                                    animation: machine_data.model_animations
+                                        [machine.animation as usize]
+                                        .as_str(),
+                                    time: animation_time,
+                                    weight: 1.,
+                                }),
+                            };
+
+                            draw_model(
+                                machine_model,
+                                get_block_matrix(
+                                    chunk.position.to_block_pos() + offset.xyz(),
+                                    block.rotation,
+                                ),
+                                &mut entity_mesh.consumer(Color::WHITE),
+                                match animation.as_ref() {
+                                    Some(animation) => std::slice::from_ref(animation),
+                                    None => &[],
+                                },
+                                |_| None,
+                            );
+                        }
+                    }
+                }
             }
         }
+        ps.end();
 
         if let Some(held_item) = self.held_item() {
             if self.keys.is_down(KeyCode::AltLeft) {
@@ -2025,7 +2092,8 @@ impl ClientGame {
             }
         }
     }
-    pub fn tick_server(&mut self, dt: f32) {
+    pub fn tick_server(&mut self) {
+        let dt = SERVER_DT;
         self.stamina += dt * 10.;
         for (_, chunk) in &mut self.chunks {
             let mut damage_to_clear = Vec::new();
@@ -2102,23 +2170,30 @@ impl ClientChunk {
                                 y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32,
                                 z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32,
                             };
-                            let mut rng = StdRng::from_seed(
-                                Seeder::from((
-                                    base_position.x as i32,
-                                    base_position.y as i32,
-                                    base_position.z as i32,
-                                ))
-                                .make_seed(),
-                            );
-                            use rand::SeedableRng;
+                            let guarantee_inside = x > 0
+                                && x < CHUNK_SIZE as u8 - 1
+                                && y > 0
+                                && y < CHUNK_SIZE as u8 - 1
+                                && z > 0
+                                && z < CHUNK_SIZE as u8 - 1;
                             for face in Face::all() {
                                 let neighbor_position = BlockPos {
                                     x: x as i32,
                                     y: y as i32,
                                     z: z as i32,
                                 } + face.get_block_offset();
-                                let (neighbor_chunk, neighbor_offset) =
-                                    neighbor_position.to_chunk_pos_offset();
+                                let (neighbor_chunk, neighbor_offset) = if guarantee_inside {
+                                    (
+                                        ChunkPos::all(0),
+                                        ChunkOffset::new(
+                                            neighbor_position.x as u8,
+                                            neighbor_position.y as u8,
+                                            neighbor_position.z as u8,
+                                        ),
+                                    )
+                                } else {
+                                    neighbor_position.to_chunk_pos_offset()
+                                };
                                 /*let neighbor_chunk = match Face::all()
                                     .iter()
                                     .find(|f| f.get_chunk_offset() == neighbor_chunk)
@@ -2152,7 +2227,9 @@ impl ClientChunk {
                                 }
                                 let texture = faces
                                     .by_face(*face)
-                                    .tex_coords(rng.random::<u32>() as usize);
+                                    .tex_coords(f32::to_bits(
+                                        base_position.x * base_position.y * base_position.z,
+                                    ) as usize);
                                 mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
                                     |(position, uv)| MeshVertex {
                                         position: base_position + position,
@@ -2163,25 +2240,17 @@ impl ClientChunk {
                             }
                         }
                         BlockRenderData::Model(model) => {
-                            let position = Pos {
-                                x: (position.x as f32 * CHUNK_SIZE as f32) + x as f32 + 0.5,
-                                y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32 + 0.5,
-                                z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32 + 0.5,
-                            };
-                            let orientation = Orientation::from_block_rotation(block.rotation);
-                            let right = orientation.right.get_offset();
-                            let up = orientation.up.get_offset();
-                            let front = orientation.forward.get_offset();
                             render::draw_model(
                                 model,
-                                Matrix4::from_translation(Vector3::new(
-                                    position.x, position.y, position.z,
-                                )) * Matrix4::from_cols(
-                                    Vector4::new(right.x, right.y, right.z, 0.),
-                                    Vector4::new(up.x, up.y, up.z, 0.),
-                                    Vector4::new(-front.x, -front.y, -front.z, 0.),
-                                    Vector4::new(0., 0., 0., 1.),
-                                ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
+                                get_block_matrix(
+                                    position.to_block_pos()
+                                        + BlockPos {
+                                            x: x as i32,
+                                            y: y as i32,
+                                            z: z as i32,
+                                        },
+                                    block.rotation,
+                                ),
                                 &mut mesh_consumer,
                                 &[],
                                 |_| None,
@@ -2636,5 +2705,42 @@ impl ClientConnection {
     }
     pub fn state(&self) -> ClientConnectionState {
         *self.state.lock()
+    }
+}
+mod profiler {
+    use std::{
+        cell::RefCell,
+        time::{Duration, Instant},
+    };
+
+    thread_local! {
+        pub static PROFILER: RefCell<Profiler> = const {RefCell::new(Profiler{entries: Vec::new()})};
+    }
+    struct Profiler {
+        entries: Vec<(String, Duration)>,
+    }
+    pub struct ProfilerScope {
+        name: String,
+        time: Instant,
+    }
+    pub fn profiler_scope(name: impl ToString) -> ProfilerScope {
+        ProfilerScope {
+            name: name.to_string(),
+            time: Instant::now(),
+        }
+    }
+    pub fn profiler_consume() -> Vec<(String, Duration)> {
+        let mut to_return = Vec::new();
+        PROFILER.with_borrow_mut(|profiler| {
+            std::mem::swap(&mut to_return, &mut profiler.entries);
+        });
+        to_return
+    }
+    impl ProfilerScope {
+        pub fn end(self) {
+            PROFILER.with_borrow_mut(|profiler| {
+                profiler.entries.push((self.name, self.time.elapsed()));
+            });
+        }
     }
 }

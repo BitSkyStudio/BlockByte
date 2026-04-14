@@ -1,8 +1,10 @@
-use block_byte_common::coord::{AABB, CHUNK_SIZE, ChunkPos, Face, Pos, Vec3};
+use block_byte_common::coord::{
+    AABB, BlockPos, CHUNK_SIZE, ChunkPos, Face, Orientation, Pos, Vec3,
+};
 use block_byte_common::model::{DrawAnimation, ModelGeometry, ModelTexture, ModelVertex};
 use block_byte_common::registry::{
-    BlockColor, BlockData, BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key,
-    ModelData, ModelInstance, ModelKey, TextureData, TextureKey,
+    BlockColor, BlockData, BlockKey, BlockRenderData, BlockRotation, EntityData, ItemKey,
+    ItemModel, Key, ModelData, ModelInstance, ModelKey, TextureData, TextureKey,
 };
 use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
@@ -113,7 +115,7 @@ impl RenderState {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoNoVsync,
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -433,7 +435,10 @@ impl RenderState {
         camera_uniform.load_light(camera.position);
         self.shadow_camera.write(&self.queue, &camera_uniform);
 
+        let ps = profiler::profiler_scope("render texture");
         let output = self.surface.get_current_texture()?;
+        ps.end();
+
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -444,8 +449,11 @@ impl RenderState {
                 label: Some("Render Encoder"),
             });
 
+        let ps = profiler::profiler_scope("render mesh alloc");
         let gpu_entity_mesh = GPUMesh::allocate(&entity_mesh, &self.device);
+        ps.end();
 
+        let ps = profiler::profiler_scope("render shadow");
         if true {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
@@ -484,6 +492,7 @@ impl RenderState {
                 mesh.draw(&mut render_pass);
             }
         }
+        ps.end();
         if true {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Skybox Render Pass"),
@@ -505,6 +514,7 @@ impl RenderState {
             render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
             self.skybox_mesh.draw(&mut render_pass);
         }
+        let ps = profiler::profiler_scope("render base");
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Base Render Pass"),
@@ -624,6 +634,7 @@ impl RenderState {
                 mesh.draw(&mut render_pass);
             }
         }
+        ps.end();
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blur Render Pass"),
@@ -698,16 +709,10 @@ impl RenderState {
                 gpu_mesh.draw(&mut render_pass);
             }
         }
-
-        self.queue.submit(iter::once(encoder.finish()));
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
+        let ps = profiler::profiler_scope("render queue");
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
+        ps.end();
 
         Ok(())
     }
@@ -717,7 +722,8 @@ impl RenderState {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ChunkVertex {
     pub position: [f32; 3],
-    pub normals: [f32; 3],
+    pub normals: [i8; 4],
+    //pub tex_coords: [u16; 2],
     pub tex_coords: [f32; 2],
     pub color: u16,
     pub shade: u8,
@@ -735,7 +741,7 @@ impl VertexDescription for () {
 }
 
 impl ChunkVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint16, 4 => Unorm8, 5 => Uint8];
+    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Snorm8x4, 2 => Float32x2, 3 => Uint16, 4 => Unorm8, 5 => Uint8];
 }
 impl VertexDescription for ChunkVertex {
     fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
@@ -919,7 +925,7 @@ use texture_packer::importer::ImageImporter;
 
 use crate::clipping::Frustum;
 use crate::ui::{ScreenData, UIPos, UIRect, render_screen, text_renderer};
-use crate::{ClientGame, ClientPlayer, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
+use crate::{ClientGame, ClientPlayer, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt, profiler};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,
@@ -1252,6 +1258,24 @@ pub fn item_model_icon_view(model: &ItemModel) -> Matrix4<f32> {
         ItemModel::Model(model_instance) => model_icon_view(model_instance),
     }
 }
+pub fn get_block_matrix(block_pos: BlockPos, rotation: BlockRotation) -> Matrix4<f32> {
+    let position = block_pos.to_pos();
+    let orientation = Orientation::from_block_rotation(rotation);
+    let right = orientation.right.get_offset();
+    let up = orientation.up.get_offset();
+    let front = orientation.forward.get_offset();
+    use cgmath::Vector4;
+    Matrix4::from_translation(Vector3::new(
+        position.x + 0.5,
+        position.y + 0.5,
+        position.z + 0.5,
+    )) * Matrix4::from_cols(
+        Vector4::new(right.x, right.y, right.z, 0.),
+        Vector4::new(up.x, up.y, up.z, 0.),
+        Vector4::new(-front.x, -front.y, -front.z, 0.),
+        Vector4::new(0., 0., 0., 1.),
+    ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.))
+}
 pub struct GPUMesh {
     pub buffer: Buffer,
     pub vertex_length: u64,
@@ -1263,34 +1287,57 @@ impl GPUMesh {
         if mesh.indices.is_empty() {
             return None;
         }
-        let mut data = Vec::new();
-        let vertex_slice: &[u8] = bytemuck::cast_slice(mesh.vertices.as_slice());
-        data.extend_from_slice(vertex_slice);
-
         let index_format = if mesh.vertices.len() <= u16::MAX as usize {
-            data.reserve(mesh.indices.len() * 2);
-            let compressed_indices = mesh
-                .indices
-                .iter()
-                .map(|value| *value as u16)
-                .collect::<Vec<_>>(); //this is stupid
-            data.extend_from_slice(bytemuck::cast_slice(compressed_indices.as_slice()));
-
             IndexFormat::Uint16
         } else {
-            data.extend_from_slice(bytemuck::cast_slice(mesh.indices.as_slice()));
-
             IndexFormat::Uint32
         };
+        let vertex_buffer_size = mesh.vertices.len() * std::mem::size_of::<T>();
         Some(GPUMesh {
-            buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: &data,
-                usage: wgpu::BufferUsages::VERTEX
-                    | wgpu::BufferUsages::INDEX
-                    | wgpu::BufferUsages::COPY_DST,
-            }),
-            vertex_length: vertex_slice.len() as u64,
+            buffer: {
+                let index_buffer_size = mesh.indices.len()
+                    * match index_format {
+                        IndexFormat::Uint16 => 2,
+                        IndexFormat::Uint32 => 4,
+                    };
+                let unpadded_size = (vertex_buffer_size + index_buffer_size) as u64;
+                let align_mask = wgpu::COPY_BUFFER_ALIGNMENT - 1;
+                let padded_size =
+                    ((unpadded_size + align_mask) & !align_mask).max(wgpu::COPY_BUFFER_ALIGNMENT);
+                let descriptor = wgpu::BufferDescriptor {
+                    label: None,
+                    mapped_at_creation: true,
+                    size: padded_size,
+                    usage: wgpu::BufferUsages::VERTEX
+                        | wgpu::BufferUsages::INDEX
+                        | wgpu::BufferUsages::COPY_DST,
+                };
+                let buffer = device.create_buffer(&descriptor);
+
+                {
+                    let mut mapped = buffer.slice(..).get_mapped_range_mut();
+                    mapped[..vertex_buffer_size]
+                        .copy_from_slice(bytemuck::cast_slice(mesh.vertices.as_slice()));
+                    let mapped_indices = &mut mapped[vertex_buffer_size..padded_size as usize];
+                    match index_format {
+                        IndexFormat::Uint16 => {
+                            let mut mapped_indices_u16: &mut [u16] =
+                                bytemuck::cast_slice_mut(mapped_indices);
+                            for i in 0..mesh.indices.len() {
+                                mapped_indices_u16[i] = mesh.indices[i] as u16;
+                            }
+                        }
+                        IndexFormat::Uint32 => {
+                            mapped_indices
+                                .copy_from_slice(bytemuck::cast_slice(mesh.indices.as_slice()));
+                        }
+                    }
+                }
+                buffer.unmap();
+
+                buffer
+            },
+            vertex_length: vertex_buffer_size as u64,
             index_format,
             index_count: mesh.indices.len() as u32,
         })
@@ -1382,11 +1429,17 @@ impl MeshVertexConsumer for ChunkMeshVertexConsumer<'_> {
     fn add_vertex(&mut self, vertex: MeshVertex) -> u32 {
         self.mesh.add_vertex(ChunkVertex {
             position: vertex.position.into_array(),
+            //tex_coords: vertex.uv.map(|v| (v * u16::MAX as f32) as u16),
             tex_coords: vertex.uv,
             shade: 255,
             color: self.block_color.0,
             flags: self.flags,
-            normals: vertex.normal.into_array(),
+            normals: [
+                (vertex.normal.x * i8::MAX as f32) as i8,
+                (vertex.normal.y * i8::MAX as f32) as i8,
+                (vertex.normal.z * i8::MAX as f32) as i8,
+                0,
+            ],
         })
     }
     fn add_index(&mut self, index: u32) {

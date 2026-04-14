@@ -67,7 +67,6 @@ pub enum NetworkMessageC2S {
 pub enum NetworkMessageS2C {
     GameTick {
         ticks_passed: u64,
-        dt: f32,
         mspt: f32,
     },
     LoadChunk {

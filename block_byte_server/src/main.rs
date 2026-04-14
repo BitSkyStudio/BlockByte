@@ -12,6 +12,7 @@ use std::{
 
 use block_byte_common::{
     ClientItem, Color, DEFAULT_VIEWSLOT, InventoryView, LookDirection, MoveMode, PlayerAbilities,
+    SERVER_DT, SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -61,6 +62,9 @@ fn main() {
     .num_threads(8)
     .build_global()
     .unwrap();*/
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build_global();
     let mut memorydb = false;
     if let Some(arg) = args().nth(1) {
         let mut start = false;
@@ -150,7 +154,6 @@ fn main() {
     let world_generator = WorldGenerator::new(1);
     let mut server = Server {
         ticks_passed: 0,
-        tps: 40,
         chunks: HashMap::new(),
         users: SlotMap::with_key(),
         message_queue: Default::default(),
@@ -163,7 +166,7 @@ fn main() {
     loop {
         let tick_start_time = Instant::now();
         {
-            let delta_time = Duration::from_millis(1000 / server.tps as u64); //probably make it smarter
+            let delta_time = Duration::from_secs_f32(SERVER_DT); //probably make it smarter
             network_server.update(delta_time);
             network_transport
                 .update(delta_time, &mut network_server)
@@ -1035,7 +1038,6 @@ fn main() {
             0,
             MessageQueue::encode_message(NetworkMessageS2C::GameTick {
                 ticks_passed: server.ticks_passed,
-                dt: server.delta_time(),
                 mspt: tick_start_time.elapsed().as_secs_f32() * 1000.,
             }),
         );
@@ -1072,7 +1074,7 @@ fn main() {
 
         network_transport.send_packets(&mut network_server);
 
-        let sleep_time = (server.ticks_passed as i64 * (1000 / server.tps as i64))
+        let sleep_time = (server.ticks_passed as i64 * 1000 / SERVER_TPS as i64)
             - Instant::now().duration_since(start_time).as_millis() as i64;
         if sleep_time > 0 {
             std::thread::sleep(Duration::from_millis(sleep_time as u64));
@@ -1105,7 +1107,6 @@ impl MessageQueue {
 }
 pub struct Server {
     pub ticks_passed: u64,
-    pub tps: u64,
     pub chunks: HashMap<ChunkPos, Chunk>,
     pub users: SlotMap<UserIndex, User>,
     pub message_queue: MessageQueue,
@@ -1113,9 +1114,6 @@ pub struct Server {
     entity_add_queue: Mutex<Vec<Entity>>,
 }
 impl Server {
-    pub fn delta_time(&self) -> f32 {
-        1. / self.tps as f32
-    }
     pub fn hitbox_block_collides(&self, hitbox: AABB<f32>) -> bool {
         for block in hitbox.to_block() {
             match self.get_block(block) {
@@ -1277,11 +1275,13 @@ impl Server {
                 offset,
                 BlockMachine {
                     inventory: RwLock::new(inventory),
-                    sleep_cooldown: Mutex::new(0.),
+                    sleep_cooldown: Mutex::new(0),
                     script_state: Mutex::new(ScriptState::new(&machine_data.script)),
                     logic_state: Mutex::new(Default::default()),
                     blocked: AtomicBool::new(false),
                     inventory_observers: Mutex::new(SmallVec::new()),
+                    current_animation: Mutex::new(0),
+                    animation_start_time: Mutex::new(self.ticks_passed),
                 },
             );
         }
