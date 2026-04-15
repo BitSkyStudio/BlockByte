@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 block_byte_common = { path = "../block_byte_common", features = ["client"] }
-wgpu = "27.0.1"
+wgpu = "29.0.1"
 pollster = "0.3"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = [

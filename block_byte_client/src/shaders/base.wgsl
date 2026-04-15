@@ -53,5 +53,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let shadow_color = sample_shadow(in.world_position, in.normal);
 
-    return vec4(color.rgb * shadow_color,1.);//* vec4<f32>(5.5,5.5, 5.5, 1.);
+    return vec4(color.rgb * shadow_color,color.a);//* vec4<f32>(5.5,5.5, 5.5, 1.);
 }

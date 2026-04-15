@@ -39,6 +39,7 @@ use block_byte_common::{
     ui::PropertyMap,
     world::{self, ClientChunkBlockComponents},
 };
+use bytemuck::Pod;
 use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
 use image::{DynamicImage, GenericImage, RgbaImage};
 use parking_lot::{Mutex, RwLock};
@@ -51,7 +52,10 @@ use rayon::{
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use uuid::Uuid;
-use wgpu::{Buffer, Device, util::DeviceExt};
+use wgpu::{
+    Buffer, CommandEncoder, Device, Queue,
+    util::{DeviceExt, StagingBelt},
+};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -65,8 +69,8 @@ use crate::{
     clipping::Frustum,
     render::{
         BaseMesh, CameraUniform, ChunkMesh, ChunkVertex, DamageMesh, DamageVertex, GPUMesh,
-        GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, Vertex, draw_model,
-        get_block_matrix,
+        GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, SurfaceError,
+        Vertex, draw_model, get_block_matrix,
     },
     ui::{HoveredElement, ScreenData, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
 };
@@ -86,7 +90,7 @@ fn main() {
     TEXTURE_ATLAS.set(texture_atlas);
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
+        .num_threads(8)
         .build_global();
 
     let connection = ClientConnection::connect("127.0.0.1:5000".parse().unwrap());
@@ -402,6 +406,7 @@ impl ApplicationHandler for App {
                 let mut damage_mesh = Mesh::default();
                 self.game.tick_client(
                     &render_state.device,
+                    &render_state.queue,
                     &self.camera,
                     &mut entity_mesh,
                     &mut gui_mesh,
@@ -437,12 +442,19 @@ impl ApplicationHandler for App {
                         y: 0.9,
                     },
                     &format!(
-                        "{:.2} {:.2} {:.2} fps: {:.0}, queue: {}, mspt: {:.2} {}",
+                        "{:.2} {:.2} {:.2} fps: {:.0}, queue: {}, pool: {}, mspt: {:.2} {}",
                         self.game.player_position.x,
                         self.game.player_position.y,
                         self.game.player_position.z,
                         1. / self.delta_time_average,
                         self.game.chunk_mesh_queue_size,
+                        self.game
+                            .chunk_buffer_pool
+                            .buffers
+                            .iter()
+                            .map(|p| p.len().to_string())
+                            .collect::<Vec<_>>()
+                            .join(","),
                         self.mspt,
                         match self.camera.raycast(&self.game, true) {
                             RayCastResult::Block(position, face) =>
@@ -639,7 +651,7 @@ impl ApplicationHandler for App {
                 let ps = profiler::profiler_scope("render");
                 match render_state.render(
                     &self.camera,
-                    &self.game,
+                    &mut self.game,
                     aspect_ratio,
                     entity_mesh,
                     gui_mesh,
@@ -649,11 +661,9 @@ impl ApplicationHandler for App {
                     dt,
                 ) {
                     Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        render_state.resize(render_state.size())
-                    }
-                    Err(err) => {
-                        println!("error: {:?}", err);
+                    Err(SurfaceError::Recreate) => render_state.resize(render_state.size()),
+                    Err(SurfaceError::Crash) => {
+                        println!("error");
                         event_loop.exit();
                     }
                 }
@@ -728,7 +738,7 @@ impl ApplicationHandler for App {
                                             blocks: RwLock::new(blocks),
                                             version: AtomicU64::new(0),
                                         }),
-                                        buffer: None,
+                                        gpu_mesh: GPUMesh::empty(),
                                         position,
                                         components,
                                         modified: false,
@@ -741,7 +751,9 @@ impl ApplicationHandler for App {
                                 }
                             }
                             NetworkMessageS2C::UnloadChunk { position } => {
-                                self.game.chunks.remove(&position);
+                                if let Some(chunk) = self.game.chunks.remove(&position) {
+                                    self.game.chunk_buffer_pool.reclaim(chunk.gpu_mesh);
+                                }
                             }
                             NetworkMessageS2C::SetBlock { position, block } => {
                                 let (chunk, offset) = position.to_chunk_pos_offset();
@@ -913,7 +925,7 @@ impl ApplicationHandler for App {
                 self.game.keys.frame_clear(dt);
 
                 let profiler_data = profiler::profiler_consume();
-                if self.last_update.elapsed().as_millis() > 19 {
+                if self.last_update.elapsed().as_millis() > 18 && false {
                     println!(
                         "slow frame: {}",
                         self.last_update.elapsed().as_secs_f32() * 1000.
@@ -1515,6 +1527,84 @@ pub struct ClientGame {
     pub place_message: Option<NetworkMessageC2S>,
     pub chunk_mesh_queue_size: usize,
     pub server_ticks_passed: u64,
+    pub chunk_buffer_pool: ChunkBufferPool,
+}
+#[derive(Default)]
+struct ChunkBufferPool {
+    pub buffers: Vec<Vec<GPUMesh>>,
+}
+impl ChunkBufferPool {
+    const MIN_BUFFER_SIZE: usize = 64 * 1024;
+    pub fn reclaim(&mut self, mesh: GPUMesh) {
+        if let Some(buffer) = &mesh.buffer {
+            let bucket = Self::get_data_index(buffer.size() as usize).0;
+            self.get_bucket(bucket).push(mesh);
+        }
+    }
+    pub fn allocate_or_reuse<T: Pod>(
+        &mut self,
+        mesh: &Mesh<T>,
+        mut gpu_buffer: GPUMesh,
+        staging_belt: &mut StagingBelt,
+        command_encoder: &mut CommandEncoder,
+        device: &Device,
+    ) -> GPUMesh {
+        let (vertex_size, index_size, _) = mesh.get_data_size();
+        let total_size = vertex_size + index_size;
+        if let Some(buffer) = &gpu_buffer.buffer {
+            if total_size <= buffer.size() as usize {
+                gpu_buffer.upload(mesh, device, staging_belt, command_encoder);
+                return gpu_buffer;
+            }
+        }
+        self.reclaim(gpu_buffer);
+        self.allocate(mesh, staging_belt, device, command_encoder)
+    }
+    pub fn allocate<T: Pod>(
+        &mut self,
+        mesh: &Mesh<T>,
+        staging_belt: &mut StagingBelt,
+        device: &Device,
+        command_encoder: &mut CommandEncoder,
+    ) -> GPUMesh {
+        if mesh.is_empty() {
+            return GPUMesh::empty();
+        }
+        let (vertex_size, index_size, _) = mesh.get_data_size();
+        let total_size = vertex_size + index_size;
+        let (bucket, size) = Self::get_data_index(total_size);
+        let mut bucket = self.get_bucket(bucket);
+        if let Some(mut buffer) = bucket.pop() {
+            buffer.upload(mesh, device, staging_belt, command_encoder);
+            buffer
+        } else {
+            /*println!(
+                "had to allocate new buffer of size {}, for {}",
+                size, total_size
+            );*/
+            GPUMesh::allocate(mesh, size, device)
+        }
+    }
+    fn get_bucket(&mut self, id: usize) -> &mut Vec<GPUMesh> {
+        if id >= self.buffers.len() {
+            self.buffers.resize_with(id + 1, || Vec::new());
+        }
+        &mut self.buffers[id]
+    }
+    fn get_data_index(buffer_size: usize) -> (usize, usize) {
+        let mut current_size = Self::MIN_BUFFER_SIZE;
+        let mut i = 0;
+        loop {
+            if buffer_size <= current_size {
+                return (i, current_size);
+            }
+            i += 1;
+            current_size *= 4;
+            if i > 20 {
+                panic!("failsafe");
+            }
+        }
+    }
 }
 impl Default for ClientGame {
     fn default() -> Self {
@@ -1545,6 +1635,7 @@ impl Default for ClientGame {
             place_message: None,
             chunk_mesh_queue_size: 0,
             server_ticks_passed: 0,
+            chunk_buffer_pool: ChunkBufferPool::default(),
         }
     }
 }
@@ -1591,7 +1682,8 @@ impl ClientGame {
     }
     pub fn tick_client(
         &mut self,
-        device: &Arc<Device>,
+        device: &Device,
+        queue: &Queue,
         camera: &ClientPlayer,
         entity_mesh: &mut BaseMesh,
         gui_mesh: &mut GUIMesh,
@@ -1672,45 +1764,7 @@ impl ClientGame {
                 _ => None,
             },
         );
-        let ps = profiler::profiler_scope("chunk download");
-        let mut data_uploaded = 0;
-        while let Ok((position, buffer, version)) = self.chunk_mesh_channels.1.try_recv() {
-            self.chunk_mesh_queue_size -= 1;
-            if let Some(chunk) = self.chunks.get_mut(&position) {
-                chunk.scheduled = false;
-                chunk.buffer = GPUMesh::allocate(&buffer, &device);
-                if let Some(buffer) = chunk.buffer.as_ref() {
-                    //println!("chunk {}", buffer.buffer.size());
-                    data_uploaded += buffer.buffer.size();
-                }
-                if data_uploaded > 256 * 1024 {
-                    break;
-                }
-                if version
-                    < chunk
-                        .mesh_build_data
-                        .version
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    if !chunk.modified {
-                        chunk.modified = true;
 
-                        self.modified_chunks.push(ModifiedChunkEntry {
-                            distance: self
-                                .player_position
-                                .to_chunk_pos()
-                                .distance_squared(chunk.position)
-                                as usize,
-                            chunk: chunk.position,
-                        });
-                    }
-                }
-            }
-        }
-        if data_uploaded > 0 {
-            //println!("uploaded: {}", data_uploaded,);
-        }
-        ps.end();
         let mut i = 0;
         let ps = profiler::profiler_scope("upload chunks");
         while let Some(modified_chunk) = self.modified_chunks.pop() {
@@ -2071,7 +2125,7 @@ impl ClientGame {
                                                 r: 255,
                                                 g: 100,
                                                 b: 100,
-                                                a: 100,
+                                                a: 150,
                                             }
                                         } else {
                                             Color {
@@ -2131,7 +2185,7 @@ pub struct ClientChunk {
     pub position: ChunkPos,
     pub mesh_build_data: Arc<ChunkMeshBuildData>,
     pub components: ClientChunkBlockComponents,
-    pub buffer: Option<GPUMesh>,
+    pub gpu_mesh: GPUMesh,
     pub modified: bool,
     pub scheduled: bool,
 }
