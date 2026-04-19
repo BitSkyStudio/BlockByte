@@ -1250,7 +1250,7 @@ pub struct BiomeDecorator {
     pub prefab: PrefabKey,
     pub count: u32,
     pub chance: f32,
-    #[serde(default = "default_u8::<1>")]
+    #[serde(default)]
     pub exclusion_zone: u8,
 }
 pub type BiomeKey = Key<BiomeData>;

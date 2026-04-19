@@ -244,6 +244,8 @@ impl CharacterController {
         move_mode: MoveMode,
         hitbox: AABB<f32>,
         acceleration: f32,
+        step_height: f32,
+        holding_ledge: bool,
     ) {
         match move_mode {
             MoveMode::Normal => {
@@ -267,7 +269,25 @@ impl CharacterController {
         let total_move = self.velocity * delta_time;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
-                if !Self::collides_at(
+                if Self::collides_at(
+                    *position
+                        + Pos {
+                            x: 0.,
+                            y: total_move.y,
+                            z: 0.,
+                        },
+                    &block_query,
+                    hitbox,
+                )
+                .is_none()
+                {
+                    position.y += total_move.y;
+                    self.on_ground = false;
+                } else {
+                    self.on_ground = self.velocity.y < 0.;
+                    self.velocity.y = 0.;
+                }
+                if let Some(highest_point) = Self::collides_at(
                     *position
                         + Pos {
                             x: total_move.x,
@@ -277,27 +297,40 @@ impl CharacterController {
                     &block_query,
                     hitbox,
                 ) {
-                    position.x += total_move.x;
-                } else {
-                    self.velocity.x = 0.;
-                }
-                if !Self::collides_at(
-                    *position
-                        + Pos {
-                            x: 0.,
-                            y: total_move.y,
+                    let step_difference = highest_point - position.y;
+                    if step_difference <= step_height + 0.01 && self.on_ground {
+                        let snap = Pos {
+                            x: total_move.x,
+                            y: step_difference + 0.02,
                             z: 0.,
-                        },
-                    &block_query,
-                    hitbox,
-                ) {
-                    position.y += total_move.y;
-                    self.on_ground = false;
+                        };
+                        if Self::collides_at(*position + snap, &block_query, hitbox).is_none() {
+                            *position += snap;
+                        } else {
+                            self.velocity.x = 0.;
+                        }
+                    } else {
+                        self.velocity.x = 0.;
+                    }
                 } else {
-                    self.on_ground = self.velocity.y < 0.;
-                    self.velocity.y = 0.;
+                    if !self.on_ground
+                        || !holding_ledge
+                        || Self::collides_at(
+                            *position
+                                + Pos {
+                                    x: total_move.x,
+                                    y: -0.01,
+                                    z: 0.,
+                                },
+                            &block_query,
+                            hitbox,
+                        )
+                        .is_some()
+                    {
+                        position.x += total_move.x;
+                    }
                 }
-                if !Self::collides_at(
+                if let Some(highest_point) = Self::collides_at(
                     *position
                         + Pos {
                             x: 0.,
@@ -307,9 +340,38 @@ impl CharacterController {
                     &block_query,
                     hitbox,
                 ) {
-                    position.z += total_move.z;
+                    let step_difference = highest_point - position.y;
+                    if step_difference <= step_height + 0.01 && self.on_ground {
+                        let snap = Pos {
+                            x: 0.,
+                            y: step_difference + 0.02,
+                            z: total_move.z,
+                        };
+                        if Self::collides_at(*position + snap, &block_query, hitbox).is_none() {
+                            *position += snap;
+                        } else {
+                            self.velocity.z = 0.;
+                        }
+                    } else {
+                        self.velocity.z = 0.;
+                    }
                 } else {
-                    self.velocity.z = 0.;
+                    if !self.on_ground
+                        || !holding_ledge
+                        || Self::collides_at(
+                            *position
+                                + Pos {
+                                    x: 0.,
+                                    y: -0.01,
+                                    z: total_move.z,
+                                },
+                            &block_query,
+                            hitbox,
+                        )
+                        .is_some()
+                    {
+                        position.z += total_move.z;
+                    }
                 }
             }
             MoveMode::NoClip => {
@@ -321,27 +383,36 @@ impl CharacterController {
         position: Pos,
         block_query: &impl Fn(BlockPos) -> Option<BlockEntry>,
         hitbox: AABB<f32>,
-    ) -> bool {
+    ) -> Option<f32> {
         let player_collider = hitbox.offset(position);
         let player_block_collider = player_collider.to_block();
+        let mut max_height = None;
         for block in player_block_collider {
             match block_query(block) {
                 Some(block_entry) => {
                     let block_collider = &block_entry.block.data().collision;
                     for block_collider in block_collider {
-                        if player_collider.intersects(
-                            block_entry
-                                .rotation
-                                .rotate_aabb(*block_collider)
-                                .offset(block.to_pos()),
-                        ) {
-                            return true;
+                        let block_collider = block_entry
+                            .rotation
+                            .rotate_aabb(*block_collider)
+                            .offset(block.to_pos());
+                        if player_collider.intersects(block_collider) {
+                            match max_height {
+                                Some(current_height) => {
+                                    if current_height < block_collider.max.y {
+                                        max_height = Some(block_collider.max.y);
+                                    }
+                                }
+                                None => {
+                                    max_height = Some(block_collider.max.y);
+                                }
+                            }
                         }
                     }
                 }
-                None => return false,
+                None => return Some(0.),
             }
         }
-        false
+        max_height
     }
 }

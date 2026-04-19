@@ -889,6 +889,8 @@ impl Entity {
                 MoveMode::Normal,
                 hitbox,
                 40.,
+                0.5,
+                false,
             );
             if new_position != self.position && state.teleport.is_none() {
                 state.teleport = Some(new_position);
@@ -1165,7 +1167,7 @@ impl ChunkColumnGeneration {
             let decoration_z = (decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32);
             let distance = (decoration_x - x).pow(2) + (decoration_z - z).pow(2);
             let decoration_data = decoration.key.data();
-            if distance < (decoration.exclusion_zone as i32 + exclusion_radius as i32).pow(2) {
+            if distance <= (decoration.exclusion_zone as i32 + exclusion_radius as i32).pow(2) {
                 return true;
             }
         }

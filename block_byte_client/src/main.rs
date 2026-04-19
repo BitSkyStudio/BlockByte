@@ -1422,9 +1422,10 @@ impl ClientPlayer {
             }
         }
         move_vector *= if self.running { 1.35 } else { 1. };
+        let crouching = game.keys.is_down(KeyCode::ShiftLeft);
         match abilities.move_mode {
             MoveMode::Normal => {
-                if game.keys.is_down(KeyCode::ShiftLeft) {
+                if crouching {
                     move_vector /= 2.;
                 }
                 if game.keys.is_down(KeyCode::Space) && self.controller.on_ground {
@@ -1446,6 +1447,8 @@ impl ClientPlayer {
                     max: Pos::ZERO,
                 }),
             40. * abilities.speed,
+            0.5,
+            crouching,
         );
     }
     fn eye_height_diff(&self) -> f32 {

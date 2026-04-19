@@ -231,8 +231,8 @@ fn main() {
                 user,
                 NetworkMessageS2C::PlayerAbilities {
                     abilities: PlayerAbilities {
-                        move_mode: MoveMode::Fly,
-                        speed: 10.,
+                        move_mode: MoveMode::Normal,
+                        speed: 1.,
                         max_stamina: 100.,
                     },
                 },
