@@ -84,7 +84,7 @@ impl RenderState {
         let window = Arc::new(window);
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: wgpu::Backends::PRIMARY,
             backend_options: BackendOptions::default(),
             display: None,
             flags: InstanceFlags::default(),
@@ -94,7 +94,7 @@ impl RenderState {
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: wgpu::PowerPreference::LowPower,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -213,7 +213,7 @@ impl RenderState {
                 Some(&shadow_camera.bind_group_layout),
                 Some(&shadow_texture.bind_group_layout),
             ],
-            Some(BlendState::REPLACE),
+            Some(BlendState::ALPHA_BLENDING),
             Some(wgpu::Face::Back),
             Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
@@ -358,7 +358,7 @@ impl RenderState {
             }
         }
         Self {
-            staging_belt: StagingBelt::new(device.clone(), 8 * 1024 * 1024),
+            staging_belt: StagingBelt::new(device.clone(), 4 * 1024 * 1024),
             skybox_mesh: GPUMesh::allocate(&skybox_mesh, 0, &device),
             window,
             surface,
@@ -454,29 +454,10 @@ impl RenderState {
         camera_uniform.load_light(camera.position);
         self.shadow_camera.write(&self.queue, &camera_uniform);
 
-        let ps = profiler::profiler_scope("render texture");
-        let output = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
-                return Err(SurfaceError::Recreate);
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                return Err(SurfaceError::Crash);
-            }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Validation
-            | wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
-        };
-        ps.end();
-
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+                label: Some("Upload Encoder"),
             });
 
         let ps = profiler::profiler_scope("render mesh alloc");
@@ -505,6 +486,7 @@ impl RenderState {
             &mut encoder,
         );
         let ps2 = profiler::profiler_scope("chunk download");
+        let mut frame_load_limit = 0;
         while let Ok((position, buffer, version)) = game.chunk_mesh_channels.1.try_recv() {
             game.chunk_mesh_queue_size -= 1;
             if let Some(chunk) = game.chunks.get_mut(&position) {
@@ -518,6 +500,9 @@ impl RenderState {
                     &mut encoder,
                     &self.device,
                 );
+                if let Some(render_data) = &chunk.gpu_mesh.render_data {
+                    frame_load_limit += render_data.vertex_length;
+                }
                 if version
                     < chunk
                         .mesh_build_data
@@ -537,12 +522,41 @@ impl RenderState {
                         });
                     }
                 }
+                if frame_load_limit > (5. * 1024. * 1024.) as u64 && false {
+                    break;
+                }
             }
         }
         ps2.end();
-        //self.queue.submit([]);
         self.staging_belt.finish();
+        self.queue.submit(iter::once(encoder.finish()));
         ps.end();
+        self.staging_belt.recall();
+
+        let ps = profiler::profiler_scope("render texture");
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
+                return Err(SurfaceError::Recreate);
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                return Err(SurfaceError::Crash);
+            }
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Validation
+            | wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
+        };
+        ps.end();
+
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         let ps = profiler::profiler_scope("render shadow");
         if true {
@@ -635,18 +649,14 @@ impl RenderState {
                 multiview_mask: None,
             });
 
-            render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
             render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
             render_pass.set_bind_group(4, &self.time_uniform.bind_group, &[]);
-            self.entity_gpu_mesh.draw(&mut render_pass);
-
-            render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
-
             render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
 
+            render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
             for (_, chunk) in &game.chunks {
                 if frustum.intersects_aabb(
                     &AABB {
@@ -658,6 +668,9 @@ impl RenderState {
                     chunk.gpu_mesh.draw(&mut render_pass);
                 }
             }
+
+            render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
+            self.entity_gpu_mesh.draw(&mut render_pass);
         }
         if !damage_mesh.vertices.is_empty() {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -799,8 +812,6 @@ impl RenderState {
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
         ps.end();
-
-        self.staging_belt.recall();
 
         Ok(())
     }

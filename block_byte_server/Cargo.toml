@@ -30,3 +30,4 @@ image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
 ] }
+pathfinding = "4.15.0"

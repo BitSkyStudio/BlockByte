@@ -6,8 +6,8 @@ use std::{
 use block_byte_common::{
     coord::{BlockPos, Face},
     registry::{
-        BiomeKey, BlockColor, BlockEntry, BlockKey, BlockRotation, BlockStructureData,
-        BlockStructurePart,
+        BiomeKey, BlockColor, BlockEntry, BlockKey, BlockRotation, PrefabData,
+        PrefabPart,
     },
 };
 use image::GenericImage;
@@ -82,7 +82,7 @@ pub fn generate_tree(
     slab_block: BlockKey,
     branch_block: BlockKey,
     leave_block: BlockKey,
-) -> BlockStructureData {
+) -> PrefabData {
     #[derive(Clone, Copy, Debug)]
     enum TreeBlockType {
         Log,
@@ -218,7 +218,7 @@ pub fn generate_tree(
             }
         }
     }
-    let part = BlockStructurePart {
+    let part = PrefabPart {
         chance: 1.,
         blocks: blocks
             .into_iter()
@@ -247,5 +247,5 @@ pub fn generate_tree(
             })
             .collect(),
     };
-    BlockStructureData { parts: vec![part] }
+    PrefabData { parts: vec![part] }
 }

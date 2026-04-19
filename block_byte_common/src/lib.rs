@@ -243,6 +243,7 @@ impl CharacterController {
         move_vector: Pos,
         move_mode: MoveMode,
         hitbox: AABB<f32>,
+        acceleration: f32,
     ) {
         match move_mode {
             MoveMode::Normal => {
@@ -251,7 +252,7 @@ impl CharacterController {
             MoveMode::Fly | MoveMode::NoClip => {}
         }
         let ground_multiplier = if self.on_ground { 1. } else { 0.5 };
-        let acceleration = ground_multiplier * 40.;
+        let acceleration = ground_multiplier * acceleration;
         let mut error = (move_vector - self.velocity);
         match move_mode {
             MoveMode::Normal => {

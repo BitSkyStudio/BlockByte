@@ -266,7 +266,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; BlockStructureData, structure; ResearchData, research);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; PrefabData, prefab; ResearchData, research);
 
 impl<T: 'static> Key<T>
 where
@@ -1247,9 +1247,11 @@ pub struct PlantSpawner {
 }
 #[derive(Deserialize)]
 pub struct BiomeDecorator {
-    pub structure: StructureKey,
+    pub prefab: PrefabKey,
     pub count: u32,
     pub chance: f32,
+    #[serde(default = "default_u8::<1>")]
+    pub exclusion_zone: u8,
 }
 pub type BiomeKey = Key<BiomeData>;
 
@@ -1366,15 +1368,15 @@ pub struct RecipeData {
 }
 pub type RecipeKey = Key<RecipeData>;
 #[derive(Serialize, Deserialize)]
-pub struct BlockStructurePart {
+pub struct PrefabPart {
     pub blocks: HashMap<BlockPos, BlockEntry>,
     pub chance: f32,
 }
 #[derive(Serialize, Deserialize)]
-pub struct BlockStructureData {
-    pub parts: Vec<BlockStructurePart>,
+pub struct PrefabData {
+    pub parts: Vec<PrefabPart>,
 }
-pub type StructureKey = Key<BlockStructureData>;
+pub type PrefabKey = Key<PrefabData>;
 #[derive(Deserialize)]
 pub struct ResearchData {
     pub icon: ItemModel,

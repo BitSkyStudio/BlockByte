@@ -16,9 +16,8 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockColor, BlockData, BlockEntry, BlockKey, BlockRotation, BlockStructureData,
-        BlockStructurePart, EntityKey, ItemAction, ItemKey, KeyGroup, ToolData, air_block,
-        load_registries,
+        self, BlockColor, BlockData, BlockEntry, BlockKey, BlockRotation, EntityKey, ItemAction,
+        ItemKey, KeyGroup, PrefabData, PrefabPart, ToolData, air_block, load_registries,
     },
     scripts::ScriptState,
     ui::{PropertyMap, UIScreenKey},
@@ -126,16 +125,6 @@ fn main() {
         )",
             (),
         );
-        /*database
-        .execute(
-            "CREATE TABLE `structure_placement` (
-            `chunk_x` INTEGER, `chunk_y` INTEGER, `chunk_z` INTEGER,
-            `x` INTEGER, `y` INTEGER, `z` INTEGER,
-            `structure_id` STRING, 'seed' INTEGER
-        )",
-            (),
-        )
-        .unwrap();*/
     }
     let database = Mutex::new(database);
 
@@ -151,7 +140,13 @@ fn main() {
         rx
     };
 
-    let world_generator = WorldGenerator::new(1);
+    let world_generator_config = ron::from_str(
+        std::fs::read_to_string("assets/world_generator.ron")
+            .unwrap()
+            .as_str(),
+    )
+    .unwrap();
+    let world_generator = WorldGenerator::new(world_generator_config, 1);
     let mut server = Server {
         ticks_passed: 0,
         chunks: HashMap::new(),
@@ -236,8 +231,8 @@ fn main() {
                 user,
                 NetworkMessageS2C::PlayerAbilities {
                     abilities: PlayerAbilities {
-                        move_mode: MoveMode::Normal,
-                        speed: 1.,
+                        move_mode: MoveMode::Fly,
+                        speed: 10.,
                         max_stamina: 100.,
                     },
                 },
@@ -853,8 +848,8 @@ fn main() {
                     println!(
                         "{}",
                         ron::ser::to_string_pretty(
-                            &BlockStructureData {
-                                parts: vec![BlockStructurePart { blocks, chance: 1. }]
+                            &PrefabData {
+                                parts: vec![PrefabPart { blocks, chance: 1. }]
                             },
                             PrettyConfig::new()
                         )

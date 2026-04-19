@@ -14,22 +14,22 @@
         (
             count: 15,
             chance: 0.8,
-            structure: "tree"
+            prefab: "tree"
         ),
         (
             count: 1,
             chance: 0.2,
-            structure: "rock"
+            prefab: "rock"
         ),
         (
             count: 15,
             chance: 0.8,
-            structure: "small_rock"
+            prefab: "small_rock"
         ),
         (
             count: 15,
             chance: 0.8,
-            structure: "small_stick"
+            prefab: "small_stick"
         )
     ]
 )

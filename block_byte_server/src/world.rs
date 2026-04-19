@@ -17,7 +17,7 @@ use block_byte_common::{
     registry::{
         BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
         BlockMachineFace, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, KeyGroup,
-        MachineInstrution, PlantKey, ResearchKey, StructureKey, air_block,
+        MachineInstrution, PlantKey, PrefabKey, ResearchKey, air_block,
     },
     scripts::{self, CallbackResult, ExternalScriptByteCode, ScriptState, ScriptValue},
     world::{
@@ -65,7 +65,7 @@ impl Chunk {
             .set_lacunarity(2.0)
             .set_persistence(0.5);*/
 
-        let column_data = generator.get_column_generation(position);
+        let column_data = generator.get_column_generation(position.x, position.z);
 
         let mut blocks = BlockPalette::filled(
             BlockEntry::simple(air_block()),
@@ -134,7 +134,7 @@ impl Chunk {
                 }
             }
         }
-        let replacable_tag = KeyGroup::parse("#structure_replacable").unwrap();
+        let replacable_tag = KeyGroup::parse("#prefab_replacable").unwrap();
         for neighbor_chunk in (AABB {
             min: ChunkPos { x: -1, y: 0, z: -1 },
             max: ChunkPos { x: 1, y: 0, z: 1 },
@@ -142,25 +142,25 @@ impl Chunk {
         .offset(position)
         {
             let block_offset = neighbor_chunk.to_block_pos();
-            let column = generator.get_column_generation(neighbor_chunk);
-            for placed_structure in &column.structures {
-                let height = column.height[placed_structure.x as usize][placed_structure.z as usize]
-                    as i32
+            let column = generator.get_column_generation(neighbor_chunk.x, neighbor_chunk.z);
+            for placed_decoration in column.get_legal_decorations(generator) {
+                let height = column.height[placed_decoration.x as usize]
+                    [placed_decoration.z as usize] as i32
                     + 1;
                 let block_position = BlockPos {
-                    x: block_offset.x + placed_structure.x as i32,
+                    x: block_offset.x + placed_decoration.x as i32,
                     y: height,
-                    z: block_offset.z + placed_structure.z as i32,
+                    z: block_offset.z + placed_decoration.z as i32,
                 };
                 //todo: do bounding box calculations to cull
                 if
                 /*height >= block_offset.y && height < block_offset.y + CHUNK_SIZE as i32*/
                 true {
-                    let structure = placed_structure.structure.data();
+                    let prefab = placed_decoration.key.data();
                     let rotation = [Face::Front, Face::Back, Face::Left, Face::Right]
-                        [placed_structure.rotation as usize];
+                        [placed_decoration.rotation as usize];
                     let rotation = Orientation::from_front_up(rotation, Face::Up).unwrap();
-                    for part in &structure.parts {
+                    for part in &prefab.parts {
                         //todo
                         /*if !rng.random_bool(part.chance as f64) {
                             continue;
@@ -888,6 +888,7 @@ impl Entity {
                 move_vector,
                 MoveMode::Normal,
                 hitbox,
+                40.,
             );
             if new_position != self.position && state.teleport.is_none() {
                 state.teleport = Some(new_position);
@@ -1148,32 +1149,71 @@ impl Into<ClientBlockMachine> for &BlockMachine {
         }
     }
 }
-
+pub struct RegionGeneration {}
 pub struct ChunkColumnGeneration {
+    pub x: i16,
+    pub z: i16,
     pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
     pub height: [[u16; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
     pub unique_biomes: Vec<BiomeKey>,
-    pub structures: Vec<ChunkColumnStructure>,
+    pub decorations: Vec<ChunkColumnDecoration>,
 }
-struct ChunkColumnStructure {
-    structure: StructureKey,
+impl ChunkColumnGeneration {
+    pub fn is_blocked(&self, x: i32, z: i32, exclusion_radius: u8) -> bool {
+        for decoration in &self.decorations {
+            let decoration_x = (decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32);
+            let decoration_z = (decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32);
+            let distance = (decoration_x - x).pow(2) + (decoration_z - z).pow(2);
+            let decoration_data = decoration.key.data();
+            if distance < (decoration.exclusion_zone as i32 + exclusion_radius as i32).pow(2) {
+                return true;
+            }
+        }
+        false
+    }
+    const NEIGHBOR_CHUNK_BLOCKERS: [(i8, i8); 4] = [(0, -1), (-1, -1), (-1, 0), (-1, 1)];
+    pub fn get_legal_decorations<'a>(
+        &'a self,
+        world_generator: &WorldGenerator,
+    ) -> impl Iterator<Item = &'a ChunkColumnDecoration> {
+        let blocking_neighbors = Self::NEIGHBOR_CHUNK_BLOCKERS.map(|(x, z)| {
+            world_generator.get_column_generation(self.x + x as i16, self.z + z as i16)
+        });
+        self.decorations.iter().filter(move |decoration| {
+            !blocking_neighbors.iter().any(|neighbor| {
+                neighbor.is_blocked(
+                    decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32,
+                    decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32,
+                    decoration.exclusion_zone,
+                )
+            })
+        })
+    }
+}
+struct ChunkColumnDecoration {
+    key: PrefabKey,
     x: u8,
     z: u8,
+    exclusion_zone: u8,
     rotation: u8,
 }
+#[derive(Deserialize)]
+pub struct WorldGeneratorConfig {}
 pub struct WorldGenerator {
     pub seed: u64,
+    pub config: WorldGeneratorConfig,
     pub biome_height_cache: moka::sync::Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
 }
 impl WorldGenerator {
-    pub fn new(seed: u64) -> WorldGenerator {
+    pub fn new(config: WorldGeneratorConfig, seed: u64) -> WorldGenerator {
         WorldGenerator {
             seed,
+            config,
             biome_height_cache: moka::sync::Cache::new(1024),
         }
     }
-    pub fn get_column_generation(&self, chunk: ChunkPos) -> Arc<ChunkColumnGeneration> {
-        self.biome_height_cache.get_with((chunk.x, chunk.z), || {
+    pub fn get_column_generation(&self, chunk_x: i16, chunk_z: i16) -> Arc<ChunkColumnGeneration> {
+        self.biome_height_cache.get_with((chunk_x, chunk_z), || {
             let height_noise = Perlin::new(self.seed as u32);
             let density_noise = Perlin::new(self.seed as u32 ^ 583279234);
             let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
@@ -1191,8 +1231,8 @@ impl WorldGenerator {
             ]);
             for z in 0..CHUNK_SIZE {
                 for x in 0..CHUNK_SIZE {
-                    let block_x = x as i32 + chunk.x as i32 * CHUNK_SIZE as i32;
-                    let block_z = z as i32 + chunk.z as i32 * CHUNK_SIZE as i32;
+                    let block_x = x as i32 + chunk_x as i32 * CHUNK_SIZE as i32;
+                    let block_z = z as i32 + chunk_z as i32 * CHUNK_SIZE as i32;
 
                     let mountain_height = height_noise
                         .get([block_x as f64 / 500., block_z as f64 / 500.])
@@ -1215,35 +1255,50 @@ impl WorldGenerator {
             //todo: this is probably broken between runs
             let unique_biomes = vec![forest];
             use rand::SeedableRng;
-            let mut rng = StdRng::from_seed(Seeder::from((self.seed as u32, chunk)).make_seed());
-            let mut structures = Vec::new();
-            for biome in &unique_biomes {
+            let mut rng =
+                StdRng::from_seed(Seeder::from((self.seed as u32, chunk_x, chunk_z)).make_seed());
+            let mut chunk_column_generation = ChunkColumnGeneration {
+                x: chunk_x,
+                z: chunk_z,
+                biomes: biome_map,
+                height: height_map,
+                unique_biomes,
+                decorations: Vec::new(),
+            };
+            for biome in &chunk_column_generation.unique_biomes {
                 for decorator in &biome.data().decorators {
                     for i in 0..decorator.count {
                         if !rng.random_bool(decorator.chance as f64) {
                             continue;
                         }
-                        let rotation = rng.random_range(0..4) as u8;
-                        let offset_x = rng.random_range(0..CHUNK_SIZE) as u8;
-                        let offset_z = rng.random_range(0..CHUNK_SIZE) as u8;
-                        if biome_map[offset_x as usize][offset_z as usize] != *biome {
-                            continue;
+                        for _ in 0..10 {
+                            let rotation = rng.random_range(0..4) as u8;
+                            let offset_x = rng.random_range(0..CHUNK_SIZE) as u8;
+                            let offset_z = rng.random_range(0..CHUNK_SIZE) as u8;
+                            if biome_map[offset_x as usize][offset_z as usize] != *biome {
+                                continue;
+                            }
+                            if !chunk_column_generation.is_blocked(
+                                offset_x as i32 + chunk_x as i32 * CHUNK_SIZE as i32,
+                                offset_z as i32 + chunk_z as i32 * CHUNK_SIZE as i32,
+                                decorator.exclusion_zone,
+                            ) {
+                                chunk_column_generation
+                                    .decorations
+                                    .push(ChunkColumnDecoration {
+                                        key: decorator.prefab,
+                                        x: offset_x,
+                                        z: offset_z,
+                                        exclusion_zone: decorator.exclusion_zone,
+                                        rotation,
+                                    });
+                                break;
+                            }
                         }
-                        structures.push(ChunkColumnStructure {
-                            structure: decorator.structure,
-                            x: offset_x,
-                            z: offset_z,
-                            rotation,
-                        });
                     }
                 }
             }
-            Arc::new(ChunkColumnGeneration {
-                biomes: biome_map,
-                height: height_map,
-                unique_biomes,
-                structures,
-            })
+            Arc::new(chunk_column_generation)
         })
     }
 }

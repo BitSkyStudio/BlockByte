@@ -1445,6 +1445,7 @@ impl ClientPlayer {
                     min: Pos::ZERO,
                     max: Pos::ZERO,
                 }),
+            40. * abilities.speed,
         );
     }
     fn eye_height_diff(&self) -> f32 {
