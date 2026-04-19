@@ -53,7 +53,6 @@ pub struct RenderState {
     skybox_texture: GPUTexture,
     texture_atlas: GPUTexture,
     camera_uniform: GPUUniform<CameraUniform>,
-    viewmodel_camera_uniform: GPUUniform<CameraUniform>,
     gui_camera_uniform: GPUUniform<CameraUniform>,
     depth_texture: GPUTexture,
     hdr_texture: GPUTexture,
@@ -165,7 +164,6 @@ impl RenderState {
         skybox_texture.write_image(&skybox, 0, &queue);
 
         let camera_uniform = GPUUniform::new(&device);
-        let viewmodel_camera_uniform = GPUUniform::new(&device);
         let gui_camera_uniform = GPUUniform::new(&device);
         let texel_size_uniform = GPUUniform::new(&device);
         let shadow_camera = GPUUniform::new(&device);
@@ -372,7 +370,6 @@ impl RenderState {
             texture_atlas,
             camera_uniform,
             gui_camera_uniform,
-            viewmodel_camera_uniform,
             depth_texture,
             hdr_texture,
             device: Arc::new(device),
@@ -443,10 +440,6 @@ impl RenderState {
             game.get_player_data(),
         );
         self.camera_uniform.write(&self.queue, &camera_uniform);
-
-        camera_uniform.load_view_proj_matrix(aspect_ratio, 70., Pos::ZERO, -Pos::Z);
-        self.viewmodel_camera_uniform
-            .write(&self.queue, &camera_uniform);
 
         camera_uniform.load_gui_matrix(self.size.height as f32 / self.size.width as f32);
         self.gui_camera_uniform.write(&self.queue, &camera_uniform);
@@ -726,7 +719,7 @@ impl RenderState {
             });
             render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.viewmodel_camera_uniform.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
             render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
 

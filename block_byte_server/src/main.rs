@@ -849,7 +849,8 @@ fn main() {
                         "{}",
                         ron::ser::to_string_pretty(
                             &PrefabData {
-                                parts: vec![PrefabPart { blocks, chance: 1. }]
+                                parts: vec![PrefabPart { blocks, chance: 1. }],
+                                bb: OnceLock::new(),
                             },
                             PrettyConfig::new()
                         )

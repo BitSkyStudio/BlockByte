@@ -920,28 +920,10 @@ impl BlockRotation {
     pub fn rotate_aabb(self, aabb: AABB<f32>) -> AABB<f32> {
         let aabb = aabb.offset(Vec3::all(-0.5));
         let orientation = Orientation::from_block_rotation(self);
-        AABB::bound(
-            [
-                orientation.rotate_pos(aabb.min),
-                orientation.rotate_pos(Vec3 {
-                    x: aabb.max.x,
-                    y: aabb.min.y,
-                    z: aabb.min.z,
-                }),
-                orientation.rotate_pos(Vec3 {
-                    x: aabb.min.x,
-                    y: aabb.max.y,
-                    z: aabb.min.z,
-                }),
-                orientation.rotate_pos(Vec3 {
-                    x: aabb.min.x,
-                    y: aabb.min.y,
-                    z: aabb.max.z,
-                }),
-            ]
-            .into_iter(),
+        AABB::new(
+            orientation.rotate_pos(aabb.min),
+            orientation.rotate_pos(aabb.max),
         )
-        .unwrap()
         .offset(Vec3::all(0.5))
     }
     pub fn rotate_face(self, face: Face) -> Face {
@@ -1375,6 +1357,21 @@ pub struct PrefabPart {
 #[derive(Serialize, Deserialize)]
 pub struct PrefabData {
     pub parts: Vec<PrefabPart>,
+    #[serde(skip_deserializing, skip_serializing, default)]
+    pub bb: OnceLock<AABB<i32>>,
+}
+impl PrefabData {
+    pub fn bounding_box(&self) -> AABB<i32> {
+        *self.bb.get_or_init(|| {
+            AABB::bound(
+                self.parts
+                    .iter()
+                    .map(|part| part.blocks.keys().cloned())
+                    .flatten(),
+            )
+            .unwrap()
+        })
+    }
 }
 pub type PrefabKey = Key<PrefabData>;
 #[derive(Deserialize)]

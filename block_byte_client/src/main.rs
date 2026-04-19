@@ -418,19 +418,6 @@ impl ApplicationHandler for App {
                     render_state.animation_time,
                 );
                 {
-                    let viewmodel_light = Matrix4::from_angle_x(Rad(self.camera.direction.pitch))
-                        * Matrix4::from_angle_y(Rad(self.camera.direction.yaw));
-                    for vertex in &mut viewmodel_mesh.vertices {
-                        let normal = cgmath::Vector3::new(
-                            vertex.normals[0],
-                            vertex.normals[1],
-                            vertex.normals[2],
-                        );
-                        let new_normal = viewmodel_light.transform_vector(normal);
-                        vertex.normals = [new_normal.x, new_normal.y, new_normal.z];
-                    }
-                }
-                {
                     let weight = 0.05;
                     self.delta_time_average = weight * dt + (1. - weight) * self.delta_time_average;
                 }
@@ -1747,7 +1734,10 @@ impl ClientGame {
                 model: ModelKey::id("viewmodel").unwrap(),
                 textures: vec![],
             },
-            Matrix4::identity(),
+            Matrix4::from_translation(Vector3::from(
+                camera.get_eye(self.get_player_data()).into_array(),
+            )) * Matrix4::from_angle_y(Rad(-camera.direction.yaw))
+                * Matrix4::from_angle_x(Rad(camera.direction.pitch)),
             &mut viewmodel_mesh.consumer(Color::WHITE),
             &animation,
             |binding| match binding {

@@ -1,14 +1,12 @@
 use std::{
     collections::{HashMap, VecDeque},
     path::Path,
+    sync::OnceLock,
 };
 
 use block_byte_common::{
     coord::{BlockPos, Face},
-    registry::{
-        BiomeKey, BlockColor, BlockEntry, BlockKey, BlockRotation, PrefabData,
-        PrefabPart,
-    },
+    registry::{BiomeKey, BlockColor, BlockEntry, BlockKey, BlockRotation, PrefabData, PrefabPart},
 };
 use image::GenericImage;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
@@ -247,5 +245,8 @@ pub fn generate_tree(
             })
             .collect(),
     };
-    PrefabData { parts: vec![part] }
+    PrefabData {
+        parts: vec![part],
+        bb: OnceLock::new(),
+    }
 }
