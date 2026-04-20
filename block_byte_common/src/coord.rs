@@ -392,6 +392,16 @@ impl<T: Copy + PartialOrd> AABB<T> {
             && self.min.z <= other.max.z
             && self.max.z >= other.min.z
     }
+    pub fn vertically_flatten(self) -> AABB<T> {
+        AABB {
+            min: self.min,
+            max: Vec3 {
+                x: self.max.x,
+                y: self.min.y,
+                z: self.max.z,
+            },
+        }
+    }
 }
 impl<T: Copy + Add<T, Output = T>> AABB<T> {
     pub fn offset(self, offset: Vec3<T>) -> Self {
@@ -518,6 +528,14 @@ impl AABB<f32> {
         AABB {
             min: self.min.to_block_pos(),
             max: self.max.to_block_pos(),
+        }
+    }
+}
+impl AABB<i32> {
+    pub fn to_chunk(self) -> AABB<i16> {
+        AABB {
+            min: self.min.to_chunk_pos(),
+            max: self.max.to_chunk_pos(),
         }
     }
 }

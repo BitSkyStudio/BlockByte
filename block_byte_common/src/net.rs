@@ -19,6 +19,7 @@ pub enum NetworkMessageC2S {
         position: Pos,
         direction: LookDirection,
         teleport_id: u32,
+        crouching: bool,
     },
     AttackBlock {
         position: BlockPos,
@@ -92,11 +93,13 @@ pub enum NetworkMessageS2C {
         position: Pos,
         direction: LookDirection,
         hand_item: Option<ClientItem>,
+        crouching: bool,
     },
     MoveEntity {
         uuid: Uuid,
         position: Pos,
         direction: LookDirection,
+        crouching: bool,
     },
     RemoveEntity {
         uuid: Uuid,

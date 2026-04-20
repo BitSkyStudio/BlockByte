@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     mem::MaybeUninit,
+    num::{NonZero, NonZeroU32},
     ops::Deref,
     path::Path,
     sync::{
@@ -28,7 +29,7 @@ use block_byte_common::{
 use noise::{BasicMulti, NoiseFn, Perlin};
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
 use parking_lot::{Mutex, RwLock};
-use rand::{Rng, rngs::StdRng};
+use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use rand_seeder::Seeder;
 use serde::{Deserialize, Serialize};
 use slotmap::new_key_type;
@@ -774,6 +775,7 @@ pub struct InternalEntityState {
     pub research: HashSet<ResearchKey>,
     pub brain: Option<MobBrain>,
     pub direction: LookDirection,
+    pub crouching: bool,
 }
 #[derive(Serialize, Deserialize)]
 pub struct MobBrain {}
@@ -805,6 +807,7 @@ impl Entity {
                     None => None,
                 },
                 direction: LookDirection { pitch: 0., yaw: 0. },
+                crouching: false,
             }),
         }
     }
@@ -864,7 +867,7 @@ impl Entity {
             }
         }
         if self.controller.is_none() {
-            let hitbox = self.key.data().hitbox();
+            let hitbox = self.key.data().hitbox(state.crouching);
             let mut move_vector = Pos::ZERO;
             match &self.key.data().ai {
                 Some(_) => {
@@ -1030,19 +1033,21 @@ impl Entity {
             }
         }
     }
-    pub fn get_hitbox(&self) -> AABB<f32> {
+    pub fn get_hitbox(&self, state: &InternalEntityState) -> AABB<f32> {
         let entity_data = self.key.data();
-        entity_data.hitbox().offset(self.position)
+        entity_data.hitbox(state.crouching).offset(self.position)
     }
 }
 impl Entity {
     pub fn create_add_message(&self) -> NetworkMessageS2C {
         let hand_slot = self.state.lock().hand_slot;
+        let state = self.state.lock();
         NetworkMessageS2C::AddEntity {
             uuid: self.uuid,
             key: self.key,
             position: self.position,
-            direction: self.state.lock().direction,
+            direction: state.direction,
+            crouching: state.crouching,
             hand_item: self
                 .inventory
                 .read()
@@ -1054,10 +1059,12 @@ impl Entity {
         }
     }
     pub fn create_move_message(&self) -> NetworkMessageS2C {
+        let state = self.state.lock();
         NetworkMessageS2C::MoveEntity {
             uuid: self.uuid,
             position: self.position,
-            direction: self.state.lock().direction,
+            direction: state.direction,
+            crouching: state.crouching,
         }
     }
     pub fn create_remove_message(&self) -> NetworkMessageS2C {
@@ -1151,7 +1158,101 @@ impl Into<ClientBlockMachine> for &BlockMachine {
         }
     }
 }
-pub struct RegionGeneration {}
+pub struct RegionGeneration {
+    pub x: i16,
+    pub z: i16,
+    pub structures: Vec<RegionStructure>,
+    pub structure_grid: [[Option<NonZeroU32>; Self::GRID_SIZE]; Self::GRID_SIZE], //could probably be u16
+    pub structure_grid_prefabs: Vec<StructureGridPrefab>,
+    pub roads: [[u8; Self::REGION_CHUNK_SIZE]; Self::REGION_CHUNK_SIZE],
+}
+impl RegionGeneration {
+    pub fn generate_structure_list(
+        x: i16,
+        z: i16,
+        world_generator: &WorldGenerator,
+    ) -> Vec<RegionStructure> {
+        let mut structures: Vec<RegionStructure> = Vec::new();
+        let mut rng =
+            StdRng::from_seed(Seeder::from((world_generator.seed as u32, x, z)).make_seed());
+        for _ in 0..world_generator.config.region_structure_spawn_attempts {
+            let index = rng.next_u32() as usize % world_generator.config.structures.len();
+            let x = x as i32 * Self::REGION_CHUNK_SIZE as i32
+                + (rng.next_u32() % Self::REGION_CHUNK_SIZE as u32) as i32;
+            let z = z as i32 * Self::REGION_CHUNK_SIZE as i32
+                + (rng.next_u32() % Self::REGION_CHUNK_SIZE as u32) as i32;
+            let seed = rng.next_u64();
+            let structure_data = &world_generator.config.structures[index];
+            if structures.iter().any(|structure| {
+                let distance = (structure.x - x).pow(2) + (structure.z - z).pow(2);
+                distance < (structure.exclusion_zone + structure_data.exclusion_zone).pow(2) as i32
+            }) {
+                continue;
+            }
+            structures.push(RegionStructure {
+                x,
+                z,
+                exclusion_zone: structure_data.exclusion_zone,
+                index,
+                seed,
+            });
+        }
+        structures
+    }
+    pub fn add_structure_prefab(
+        &mut self,
+        position: BlockPos,
+        rotation: BlockRotation,
+        prefab: PrefabKey,
+    ) {
+        let grid_corner_x =
+            self.x * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
+        let grid_corner_z =
+            self.z * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
+
+        let aabb = prefab.data().bounding_box();
+        let aabb = rotation.rotate_block_aabb(aabb);
+        let aabb = aabb.offset(position);
+        for chunk in aabb.to_chunk().vertically_flatten() {
+            let offset_x = chunk.x - grid_corner_x;
+            let offset_z = chunk.z - grid_corner_z;
+            if offset_x >= 0
+                && offset_z >= 0
+                && offset_x < Self::GRID_SIZE as i16
+                && offset_z < Self::GRID_SIZE as i16
+            {
+                self.structure_grid_prefabs.push(StructureGridPrefab {
+                    position,
+                    rotation,
+                    prefab,
+                    next: self.structure_grid[offset_x as usize][offset_z as usize],
+                });
+                self.structure_grid[offset_x as usize][offset_z as usize] =
+                    NonZero::new(self.structure_grid_prefabs.len() as u32);
+            } else {
+                println!("structure generation outside bounds");
+            }
+        }
+    }
+}
+struct StructureGridPrefab {
+    pub position: BlockPos,
+    pub rotation: BlockRotation,
+    pub prefab: PrefabKey,
+    pub next: Option<NonZeroU32>,
+}
+impl RegionGeneration {
+    pub const REGION_CHUNK_SIZE: usize = 64;
+    pub const BORDER_CHUNK_SIZE: usize = 8;
+    const GRID_SIZE: usize = Self::REGION_CHUNK_SIZE + Self::BORDER_CHUNK_SIZE * 2;
+}
+pub struct RegionStructure {
+    pub x: i32,
+    pub z: i32,
+    pub exclusion_zone: u16,
+    pub index: usize,
+    pub seed: u64,
+}
 pub struct ChunkColumnGeneration {
     pub x: i16,
     pub z: i16,
@@ -1200,22 +1301,72 @@ struct ChunkColumnDecoration {
     rotation: u8,
 }
 #[derive(Deserialize)]
-pub struct WorldGeneratorConfig {}
+pub struct WorldGeneratorConfigStructure {
+    pub exclusion_zone: u16,
+    pub rooms: HashMap<String, WorldGeneratorConfigStructureRoom>,
+}
+#[derive(Deserialize)]
+pub struct WorldGeneratorConfigStructureRoom {
+    pub prefab: PrefabKey,
+}
+#[derive(Deserialize)]
+pub struct WorldGeneratorConfig {
+    pub structures: Vec<WorldGeneratorConfigStructure>,
+    pub region_structure_spawn_attempts: u32,
+}
 pub struct WorldGenerator {
     pub seed: u64,
     pub config: WorldGeneratorConfig,
-    pub biome_height_cache: moka::sync::Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
+    pub chunk_column_cache: moka::sync::Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
+    pub region_cache: moka::sync::Cache<(i16, i16), Arc<RegionGeneration>>,
 }
 impl WorldGenerator {
     pub fn new(config: WorldGeneratorConfig, seed: u64) -> WorldGenerator {
         WorldGenerator {
             seed,
             config,
-            biome_height_cache: moka::sync::Cache::new(1024),
+            chunk_column_cache: moka::sync::Cache::new(1024),
+            region_cache: moka::sync::Cache::new(64),
         }
     }
+    pub fn get_region_generation(&self, region_x: i16, region_z: i16) -> Arc<RegionGeneration> {
+        self.region_cache.get_with((region_x, region_z), || {
+            let structure_blockers =
+                ChunkColumnGeneration::NEIGHBOR_CHUNK_BLOCKERS.map(|(offset_x, offset_z)| {
+                    RegionGeneration::generate_structure_list(
+                        region_x + offset_x as i16,
+                        region_z + offset_z as i16,
+                        self,
+                    )
+                });
+            let mut region = RegionGeneration {
+                x: region_x,
+                z: region_z,
+                structures: RegionGeneration::generate_structure_list(region_x, region_z, self)
+                    .into_iter()
+                    .filter(|structure| {
+                        !structure_blockers.iter().any(|blocker| {
+                            blocker.iter().any(|blocker| {
+                                let distance = (structure.x - blocker.x).pow(2)
+                                    + (structure.z - blocker.z).pow(2);
+                                distance
+                                    < (structure.exclusion_zone + blocker.exclusion_zone).pow(2)
+                                        as i32
+                            })
+                        })
+                    })
+                    .collect(),
+                structure_grid: [[None; RegionGeneration::GRID_SIZE]; RegionGeneration::GRID_SIZE],
+                structure_grid_prefabs: Vec::new(),
+                roads: [[0; RegionGeneration::REGION_CHUNK_SIZE];
+                    RegionGeneration::REGION_CHUNK_SIZE],
+            };
+
+            Arc::new(region)
+        })
+    }
     pub fn get_column_generation(&self, chunk_x: i16, chunk_z: i16) -> Arc<ChunkColumnGeneration> {
-        self.biome_height_cache.get_with((chunk_x, chunk_z), || {
+        self.chunk_column_cache.get_with((chunk_x, chunk_z), || {
             let height_noise = Perlin::new(self.seed as u32);
             let density_noise = Perlin::new(self.seed as u32 ^ 583279234);
             let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];

@@ -30,6 +30,7 @@ use block_byte_common::{
     },
     model::{DrawAnimation, ModelGeometry, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
+    number_approach_smooth,
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
         BlockRotation, EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel,
@@ -679,6 +680,7 @@ impl ApplicationHandler for App {
                         position: self.camera.position,
                         teleport_id: self.teleport_id,
                         direction: self.camera.direction,
+                        crouching: self.camera.crouching,
                     });
                     if let Some(hit_timer) = self.game.hit_timer {
                         let new_hit_timer = hit_timer + dt;
@@ -784,6 +786,7 @@ impl ApplicationHandler for App {
                                 position,
                                 direction,
                                 hand_item,
+                                crouching,
                             } => {
                                 self.game.entities.insert(
                                     uuid,
@@ -795,6 +798,7 @@ impl ApplicationHandler for App {
                                         previous_direction: direction,
                                         update_timestamp: Instant::now(),
                                         hand_item,
+                                        crouching,
                                     },
                                 );
                             }
@@ -802,6 +806,7 @@ impl ApplicationHandler for App {
                                 uuid,
                                 position,
                                 direction,
+                                crouching,
                             } => {
                                 if let Some(entity) = self.game.entities.get_mut(&uuid) {
                                     entity.previous_position = entity.position;
@@ -809,6 +814,7 @@ impl ApplicationHandler for App {
                                     entity.update_timestamp = time;
                                     entity.position = position;
                                     entity.direction = direction;
+                                    entity.crouching = crouching;
                                 }
                             }
                             NetworkMessageS2C::RemoveEntity { uuid } => {
@@ -831,6 +837,7 @@ impl ApplicationHandler for App {
                                 teleport_id,
                             } => {
                                 self.camera.position = position;
+                                self.camera.height_animation = position.y;
                                 self.teleport_id = teleport_id;
                             }
                             NetworkMessageS2C::PlayerAbilities { abilities } => {
@@ -1235,6 +1242,8 @@ pub struct ClientPlayer {
     pub direction: LookDirection,
     pub controller: CharacterController,
     pub running: bool,
+    pub crouching: bool,
+    pub height_animation: f32,
 }
 impl Default for ClientPlayer {
     fn default() -> Self {
@@ -1243,6 +1252,8 @@ impl Default for ClientPlayer {
             direction: LookDirection { pitch: 0., yaw: 0. },
             running: false,
             controller: CharacterController::new(),
+            crouching: false,
+            height_animation: 0.,
         }
     }
 }
@@ -1262,12 +1273,11 @@ impl ClientPlayer {
         self.direction.yaw = (self.direction.yaw + d_yaw) % (PI * 2.);
     }
     pub fn get_eye(&self, player_entity_data: Option<&EntityData>) -> Pos {
-        self.position
-            + Pos {
-                x: 0.,
-                y: player_entity_data.map(|data| data.eye_height).unwrap_or(0.),
-                z: 0.,
-            }
+        Pos {
+            x: self.position.x,
+            y: self.height_animation + player_entity_data.map(|data| data.eye_height).unwrap_or(0.),
+            z: self.position.z,
+        }
     }
     pub fn raycast(&self, world: &ClientGame, ignore_plants: bool) -> RayCastResult {
         let ray = Ray {
@@ -1300,7 +1310,9 @@ impl ClientPlayer {
                 continue;
             }
             let entity_data = entity.key.data();
-            if let Some(result) = ray.aabb_raycast(entity_data.hitbox().offset(entity.position)) {
+            if let Some(result) =
+                ray.aabb_raycast(entity_data.hitbox(entity.crouching).offset(entity.position))
+            {
                 let distance = result.position.distance(ray.position);
                 if distance < min_distance {
                     min_distance = distance;
@@ -1364,6 +1376,20 @@ impl ClientPlayer {
         game: &mut ClientGame,
         abilities: &PlayerAbilities,
     ) {
+        self.height_animation = number_approach_smooth(
+            self.height_animation,
+            self.position.y
+                - if self.crouching {
+                    game.get_player_data()
+                        .map(|data| data.crouch_difference)
+                        .unwrap_or(0.)
+                } else {
+                    0.
+                },
+            40.,
+            0.5,
+            delta_time,
+        );
         let player_entity_data = game.get_player_data();
         let mut forward =
             cgmath::Vector3::new(self.direction.yaw.sin(), 0., -self.direction.yaw.cos());
@@ -1409,10 +1435,30 @@ impl ClientPlayer {
             }
         }
         move_vector *= if self.running { 1.35 } else { 1. };
-        let crouching = game.keys.is_down(KeyCode::ShiftLeft);
+        self.crouching = game.keys.is_down(KeyCode::ShiftLeft);
+        match abilities.move_mode {
+            MoveMode::Normal | MoveMode::Fly => {
+                if !self.crouching
+                    && CharacterController::collides_at(
+                        self.position,
+                        &|block| game.get_block(block),
+                        player_entity_data
+                            .map(|entity_data| entity_data.hitbox(false))
+                            .unwrap_or(AABB {
+                                min: Pos::ZERO,
+                                max: Pos::ZERO,
+                            }),
+                    )
+                    .is_some()
+                {
+                    self.crouching = true;
+                }
+            }
+            MoveMode::NoClip => {}
+        }
         match abilities.move_mode {
             MoveMode::Normal => {
-                if crouching {
+                if self.crouching {
                     move_vector /= 2.;
                 }
                 if game.keys.is_down(KeyCode::Space) && self.controller.on_ground {
@@ -1428,18 +1474,15 @@ impl ClientPlayer {
             move_vector,
             abilities.move_mode,
             player_entity_data
-                .map(|entity_data| entity_data.hitbox())
+                .map(|entity_data| entity_data.hitbox(self.crouching))
                 .unwrap_or(AABB {
                     min: Pos::ZERO,
                     max: Pos::ZERO,
                 }),
             40. * abilities.speed,
             0.5,
-            crouching,
+            game.keys.is_down(KeyCode::ShiftLeft),
         );
-    }
-    fn eye_height_diff(&self) -> f32 {
-        2. - 0.15
     }
     pub fn create_view_matrix(
         &self,
@@ -1460,13 +1503,6 @@ impl ClientPlayer {
                 z: front.z,
             },
             Self::UP,
-        )
-    }
-    pub fn create_default_view_matrix() -> cgmath::Matrix4<f32> {
-        cgmath::Matrix4::look_at_rh(
-            cgmath::point3(0., 0., 0.),
-            cgmath::point3(0., 0., -1.),
-            ClientPlayer::UP,
         )
     }
     pub fn create_projection_matrix(aspect: f32, fov: f32) -> cgmath::Matrix4<f32> {
@@ -2063,8 +2099,11 @@ impl ClientGame {
                                 color: BlockColor::default(),
                             };
                             for entity in self.entities.values() {
-                                let entity_hitbox =
-                                    entity.key.data().hitbox().offset(entity.position);
+                                let entity_hitbox = entity
+                                    .key
+                                    .data()
+                                    .hitbox(entity.crouching)
+                                    .offset(entity.position);
                                 if fake_block_entry
                                     .colliders(block_position)
                                     .any(|collider| entity_hitbox.intersects(collider))
@@ -2170,6 +2209,7 @@ pub struct ClientEntity {
     previous_direction: LookDirection,
     update_timestamp: Instant,
     hand_item: Option<ClientItem>,
+    crouching: bool,
 }
 struct ChunkMeshBuildData {
     pub blocks: RwLock<BlockPalette>,

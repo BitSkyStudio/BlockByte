@@ -379,7 +379,7 @@ impl CharacterController {
             }
         }
     }
-    fn collides_at(
+    pub fn collides_at(
         position: Pos,
         block_query: &impl Fn(BlockPos) -> Option<BlockEntry>,
         hitbox: AABB<f32>,
@@ -415,4 +415,26 @@ impl CharacterController {
         }
         max_height
     }
+}
+pub fn number_approach_smooth(
+    current: f32,
+    target: f32,
+    smooth: f32,
+    min_speed: f32,
+    dt: f32,
+) -> f32 {
+    let diff = target - current;
+    if diff.abs() < f32::EPSILON {
+        return target;
+    }
+    let t = 1.0 - (-smooth * dt).exp();
+    let mut step = diff * t;
+    let min_step = min_speed * dt;
+    if step.abs() < min_step {
+        step = min_step * diff.signum();
+    }
+    if step.abs() > diff.abs() {
+        return target;
+    }
+    current + step
 }

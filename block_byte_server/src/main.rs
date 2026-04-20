@@ -326,6 +326,7 @@ fn main() {
                         position,
                         direction,
                         teleport_id,
+                        crouching,
                     } => {
                         if teleport_id
                             != user.teleport_id.load(std::sync::atomic::Ordering::Relaxed)
@@ -336,9 +337,9 @@ fn main() {
                             let mut blocked = false;
                             let entity = server.entities.get(entity).unwrap();
 
-                            if server
-                                .hitbox_block_collides(entity.key.data().hitbox().offset(position))
-                            {
+                            if server.hitbox_block_collides(
+                                entity.key.data().hitbox(crouching).offset(position),
+                            ) {
                                 let teleport_id = user
                                     .teleport_id
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -368,6 +369,7 @@ fn main() {
                             let entity = server.entities.get_mut(entity).unwrap();
                             entity.state.get_mut().teleport = Some(position);
                             entity.state.get_mut().direction = direction;
+                            entity.state.get_mut().crouching = crouching;
                         }
                     }
                     NetworkMessageC2S::AttackBlock { position, face } => {
@@ -420,6 +422,7 @@ fn main() {
                                                 continue;
                                             }
                                         }
+                                        let direction = entity.state.lock().direction;
                                         if let Ok(_) = server.place(
                                             position + face.get_block_offset(),
                                             BlockEntry {
@@ -429,10 +432,7 @@ fn main() {
                                                     .block
                                                     .data()
                                                     .rotation
-                                                    .from_look_direction(
-                                                        entity.state.lock().direction,
-                                                        face,
-                                                    ),
+                                                    .from_look_direction(direction, face),
                                             },
                                         ) {
                                             item.count -= place.use_count;
@@ -1234,7 +1234,7 @@ impl Server {
             if let Some(chunk) = self.get_chunk(chunk) {
                 for entity in &chunk.entities {
                     let entity = self.entities.get(*entity).unwrap();
-                    let hitbox = entity.get_hitbox();
+                    let hitbox = entity.get_hitbox(&entity.state.lock());
                     if block
                         .colliders(position)
                         .any(|collider| collider.intersects(hitbox))

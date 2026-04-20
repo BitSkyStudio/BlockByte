@@ -926,6 +926,13 @@ impl BlockRotation {
         )
         .offset(Vec3::all(0.5))
     }
+    pub fn rotate_block_aabb(self, aabb: AABB<i32>) -> AABB<i32> {
+        let orientation = Orientation::from_block_rotation(self);
+        AABB::new(
+            orientation.rotate_block_pos(aabb.min),
+            orientation.rotate_block_pos(aabb.max),
+        )
+    }
     pub fn rotate_face(self, face: Face) -> Face {
         Orientation::from_block_rotation(self).apply(face)
     }
@@ -1127,6 +1134,8 @@ pub struct EntityData {
     pub hitbox_height: f32,
     #[serde(default)]
     pub eye_height: f32,
+    #[serde(default)]
+    pub crouch_difference: f32,
     pub model: ModelInstance,
     #[serde(default)]
     pub interact_action: EntityInteractAction,
@@ -1162,7 +1171,7 @@ impl Default for EntityInteractAction {
     }
 }
 impl EntityData {
-    pub fn hitbox(&self) -> AABB<f32> {
+    pub fn hitbox(&self, crouching: bool) -> AABB<f32> {
         AABB {
             min: Pos {
                 x: -self.hitbox_size,
@@ -1171,7 +1180,12 @@ impl EntityData {
             },
             max: Pos {
                 x: self.hitbox_size,
-                y: self.hitbox_height,
+                y: self.hitbox_height
+                    - if crouching {
+                        self.crouch_difference
+                    } else {
+                        0.
+                    },
                 z: self.hitbox_size,
             },
         }
