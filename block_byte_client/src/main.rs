@@ -1835,9 +1835,7 @@ impl ClientGame {
                 continue;
             }
             let lerp_time = (entity.update_timestamp.elapsed().as_secs_f32() / SERVER_DT).min(1.);
-            let position = entity
-                .previous_position
-                .lerp(entity.position, lerp_time + 1.);
+            let position = entity.previous_position.lerp(entity.position, lerp_time);
             let rotation = -block_byte_common::coord::lerp_number(
                 entity.previous_direction.yaw,
                 entity.direction.yaw,
@@ -2771,10 +2769,10 @@ impl ClientConnection {
                         ClientConnectionState::Disconnect => break,
                         ClientConnectionState::Disconnected => unreachable!(),
                     }
-                    if !client.is_disconnected() {
-                        transport.update(delta_time_duration, &mut client).unwrap();
-                        transport.send_packets(&mut client).unwrap();
-                    } else {
+
+                    transport.update(delta_time_duration, &mut client).ok();
+                    transport.send_packets(&mut client).ok();
+                    if client.is_disconnected() {
                         println!("disconnect {:?}", client.disconnect_reason());
                         *state.lock() = ClientConnectionState::Disconnected;
                         return;

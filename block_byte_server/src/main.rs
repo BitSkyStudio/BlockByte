@@ -4,7 +4,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
     sync::{
-        OnceLock,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU32, AtomicUsize},
     },
     time::{Duration, Instant, SystemTime},
@@ -158,8 +158,30 @@ fn main() {
     let start_time = Instant::now();
     let mut net_users = HashMap::new();
     let mut player_spawns = Vec::new();
-    loop {
+    let stopped = Arc::new(AtomicBool::new(false));
+    {
+        let stopped = stopped.clone();
+        ctrlc::set_handler(move || {
+            match stopped.compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            ) {
+                Ok(_) => {}
+                Err(_) => {
+                    println!("server killed");
+                    std::process::exit(0);
+                }
+            }
+        })
+        .unwrap();
+    }
+    while !stopped.load(std::sync::atomic::Ordering::SeqCst) || !server.chunks.is_empty() {
         let tick_start_time = Instant::now();
+        if stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            network_server.disconnect_all();
+        }
         {
             let delta_time = Duration::from_secs_f32(SERVER_DT); //probably make it smarter
             network_server.update(delta_time);
