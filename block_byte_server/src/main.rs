@@ -19,7 +19,7 @@ use block_byte_common::{
         self, BlockColor, BlockData, BlockEntry, BlockKey, BlockRotation, EntityKey, ItemAction,
         ItemKey, KeyGroup, PrefabData, PrefabPart, ToolData, air_block, load_registries,
     },
-    scripts::ScriptState,
+    scripts::{ScriptState, ScriptValue},
     ui::{PropertyMap, UIScreenKey},
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
@@ -816,6 +816,17 @@ fn main() {
                             );
                         }
                     }
+                    NetworkMessageC2S::UIButtonPress { property, value } => {
+                        if let Some(screen) = user.screen.lock().as_ref() {
+                            for (provider, _) in &screen.inventories {
+                                provider.modify_property_button(
+                                    property.as_str(),
+                                    value,
+                                    &mut server.chunks,
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1556,6 +1567,43 @@ pub enum InventoryProvider {
     Block(BlockPos),
 }
 impl InventoryProvider {
+    pub fn modify_property_button(
+        self,
+        property: &str,
+        value: ScriptValue,
+        chunks: &mut HashMap<ChunkPos, Chunk>,
+    ) {
+        match self {
+            InventoryProvider::Entity(entity) => {}
+            InventoryProvider::Block(block) => {
+                let (chunk, offset) = block.to_chunk_pos_offset();
+                if let Some(chunk) = chunks.get_mut(&chunk) {
+                    let block_data = chunk
+                        .blocks
+                        .get_mut()
+                        .get(offset.index())
+                        .unwrap()
+                        .block
+                        .data();
+                    if let Some(machine) = chunk.components.machine.get_mut().get_mut(offset) {
+                        if let Some(property) = block_data
+                            .machine
+                            .as_ref()
+                            .unwrap()
+                            .script
+                            .named_registers
+                            .iter()
+                            .position(|r| r == property)
+                        {
+                            let mut register =
+                                &mut machine.script_state.get_mut().registers[property];
+                            *register = register.wrapping_add(value);
+                        }
+                    }
+                }
+            }
+        }
+    }
     pub fn get_inventory<'a>(
         self,
         entities: &'a mut SlotMap<EntityIndex, Entity>,

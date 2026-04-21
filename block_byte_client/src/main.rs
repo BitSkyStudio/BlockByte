@@ -532,6 +532,13 @@ impl ApplicationHandler for App {
                                         .send(NetworkMessageC2S::Research { research: key });
                                 }
                             }
+                            HoveredElement::Button { property, value } => {
+                                if self.game.buttons.is_just_down(MouseButton::Left) {
+                                    self.connection
+                                        .tx
+                                        .send(NetworkMessageC2S::UIButtonPress { property, value });
+                                }
+                            }
                         }
                     }
                     if let Some((_, button)) = screen.selected_slot.as_ref() {

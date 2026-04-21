@@ -9,6 +9,7 @@ use crate::{
     ClientItem, ItemMoveMode, LookDirection, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockEntry, BlockKey, BlockPalette, EntityKey, RecipeKey, ResearchKey, ToolData},
+    scripts::ScriptValue,
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
@@ -62,6 +63,10 @@ pub enum NetworkMessageC2S {
     HarvestPlant {
         position: BlockPos,
         index: usize,
+    },
+    UIButtonPress {
+        property: String,
+        value: ScriptValue,
     },
 }
 #[derive(Serialize, Deserialize)]

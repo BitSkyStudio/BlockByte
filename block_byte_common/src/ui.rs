@@ -8,8 +8,9 @@ use taffy::{
     JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Size,
 };
 
-use crate::registry::{
-    Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchData, TextureKey,
+use crate::{
+    registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchData, TextureKey},
+    scripts::ScriptValue,
 };
 
 pub struct UIScreen {
@@ -38,6 +39,11 @@ pub enum UIElementType {
     },
     ResearchTree {
         research: KeyGroup<ResearchData>,
+    },
+    Button {
+        text: String,
+        property: String,
+        value: ScriptValue,
     },
 }
 impl UIElementType {
@@ -79,6 +85,16 @@ impl UIElementType {
             },
             "research" => UIElementType::ResearchTree {
                 research: KeyGroup::parse(node.attribute("research").unwrap()).unwrap(),
+            },
+            "buttton" => UIElementType::Button {
+                text: node.text().unwrap().to_string(),
+                property: node.attribute("property").unwrap().to_string(),
+                value: node
+                    .attribute("value")
+                    .unwrap()
+                    .parse::<i16>()
+                    .unwrap()
+                    .cast_unsigned(),
             },
             other => unimplemented!("{}", other),
         })

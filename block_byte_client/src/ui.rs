@@ -4,6 +4,7 @@ use block_byte_common::{
     ClientItem, Color, TexCoords,
     coord::Pos,
     registry::{BlockRenderData, ItemModel, Key, RecipeKey, ResearchKey, TextureKey},
+    scripts::ScriptValue,
     ui::{
         PropertyMap, StretchTexture, StyleLength, UIElement, UIElementType, UIScreen, UIScreenKey,
         UIStyleRule,
@@ -35,6 +36,10 @@ pub enum HoveredElement {
     Slot(usize),
     Craft(RecipeKey),
     Research(ResearchKey),
+    Button {
+        property: String,
+        value: ScriptValue,
+    },
 }
 pub fn render_screen(
     screen_data: &ScreenData,
@@ -99,7 +104,7 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
     let style = get_element_style(element, properties);
     match &element.element_type {
         UIElementType::Box(uielements) => taffy::Size::ZERO,
-        UIElementType::Label(text) => {
+        UIElementType::Label(text) | UIElementType::Button { text, .. } => {
             let size = text_renderer().get_size(&text, style.font_size);
             taffy::Size {
                 width: size.x,
@@ -567,6 +572,19 @@ fn render_element(
                     );
                     *out_hovered = Some(HoveredElement::Research(*research));
                 }
+            }
+        }
+        UIElementType::Button {
+            text,
+            property,
+            value,
+        } => {
+            context.draw_text(UIPos::all(0.), &text, 20., Color::WHITE);
+            if context.content.contains(mouse_position) {
+                *out_hovered = Some(HoveredElement::Button {
+                    property: property.clone(),
+                    value: *value,
+                });
             }
         }
     }
