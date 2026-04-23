@@ -46,14 +46,15 @@ use crate::{
     inventory::{Inventory, ItemDurability, ItemQuality, ItemStack, generate_loot_table},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
-        BlockEvent, BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity,
-        EntityEvent, EntityIndex, WorldGenerator,
+        BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity, EntityEvent,
+        EntityIndex, WorldEvent, WorldGenerator,
     },
 };
 
 mod debug;
 mod inventory;
 mod world;
+mod worldgen;
 
 fn main() {
     load_registries(&[&Path::new("assets"), &Path::new("assets_generated")]);
@@ -413,7 +414,7 @@ fn main() {
                             };
                             server.schedule_block_event(
                                 position,
-                                BlockEvent::Damage {
+                                WorldEvent::Damage {
                                     damage: tool.damage * quality_multiplier,
                                     damage_type: tool.damage_type,
                                 },
@@ -490,7 +491,7 @@ fn main() {
                                                     NetworkMessageS2C::UpdateBlockComponents {
                                                         chunk: plant_chunk_position,
                                                         offset: plant_offset,
-                                                        data: ClientBlockComponentUpdate::ClientBlockPlants(Some((&*plants).into())),
+                                                        update: ClientBlockComponentUpdate::ClientBlockPlants(Some((&*plants).into())),
                                                     },
                                                 );
                                                 item.count -= 1;
@@ -519,7 +520,7 @@ fn main() {
                         if let Some(entity) = user.entity {
                             server.schedule_block_event(
                                 position,
-                                BlockEvent::PlayerInteract {
+                                WorldEvent::PlayerInteract {
                                     player: entity.into(),
                                 },
                             );
@@ -810,7 +811,7 @@ fn main() {
                         if let Some(entity) = user.entity {
                             server.schedule_block_event(
                                 position,
-                                BlockEvent::PlantHarvest {
+                                WorldEvent::PlantHarvest {
                                     player: entity.into(),
                                 },
                             );
@@ -1204,7 +1205,7 @@ impl Server {
                 NetworkMessageS2C::UpdateBlockComponents {
                     chunk: chunk.position,
                     offset,
-                    data: Option::<ClientBlockDamage>::None.into(),
+                    update: Option::<ClientBlockDamage>::None.into(),
                 },
             );
         }
@@ -1220,7 +1221,7 @@ impl Server {
                 NetworkMessageS2C::UpdateBlockComponents {
                     chunk: chunk.position,
                     offset,
-                    data: Option::<ClientBlockPlants>::None.into(),
+                    update: Option::<ClientBlockPlants>::None.into(),
                 },
             );
         }
@@ -1242,7 +1243,7 @@ impl Server {
         for face in Face::all() {
             self.schedule_block_event(
                 position + face.get_block_offset(),
-                BlockEvent::NeighborDestroyed {
+                WorldEvent::NeighborDestroyed {
                     world_face: face.opposite(),
                 },
             );
@@ -1316,7 +1317,7 @@ impl Server {
         }
         Ok(())
     }
-    pub fn schedule_block_event(&self, position: BlockPos, event: BlockEvent) {
+    pub fn schedule_block_event(&self, position: BlockPos, event: WorldEvent) {
         let (chunk, offset) = position.to_chunk_pos_offset();
         if let Some(chunk) = self.get_chunk(chunk) {
             chunk.block_events.lock().push((offset, event));

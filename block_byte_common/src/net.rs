@@ -67,7 +67,12 @@ pub enum NetworkMessageC2S {
     UIButtonPress {
         property: String,
         value: ScriptValue,
+        modify_mode: PropertyModifyMode,
     },
+}
+pub enum PropertyModifyMode {
+    Add,
+    Set,
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageS2C {
@@ -90,7 +95,7 @@ pub enum NetworkMessageS2C {
     UpdateBlockComponents {
         chunk: ChunkPos,
         offset: ChunkOffset,
-        data: ClientBlockComponentUpdate,
+        update: ClientBlockComponentUpdate,
     },
     AddEntity {
         uuid: Uuid,

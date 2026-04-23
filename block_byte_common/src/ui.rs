@@ -9,6 +9,7 @@ use taffy::{
 };
 
 use crate::{
+    net::PropertyModifyMode,
     registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchData, TextureKey},
     scripts::ScriptValue,
 };
@@ -44,6 +45,7 @@ pub enum UIElementType {
         text: String,
         property: String,
         value: ScriptValue,
+        modify_mode: PropertyModifyMode,
     },
 }
 impl UIElementType {
@@ -95,6 +97,11 @@ impl UIElementType {
                     .parse::<i16>()
                     .unwrap()
                     .cast_unsigned(),
+                modify_mode: match node.attribute("mode").unwrap() {
+                    "add" => PropertyModifyMode::Add,
+                    "set" => PropertyModifyMode::Set,
+                    _ => panic!(),
+                },
             },
             other => unimplemented!("{}", other),
         })

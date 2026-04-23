@@ -3,6 +3,7 @@ use std::{cell::RefCell, sync::OnceLock, u32};
 use block_byte_common::{
     ClientItem, Color, TexCoords,
     coord::Pos,
+    net::PropertyModifyMode,
     registry::{BlockRenderData, ItemModel, Key, RecipeKey, ResearchKey, TextureKey},
     scripts::ScriptValue,
     ui::{
@@ -39,6 +40,7 @@ pub enum HoveredElement {
     Button {
         property: String,
         value: ScriptValue,
+        modify_mode: PropertyModifyMode,
     },
 }
 pub fn render_screen(
@@ -578,12 +580,14 @@ fn render_element(
             text,
             property,
             value,
+            modify_mode,
         } => {
             context.draw_text(UIPos::all(0.), &text, 20., Color::WHITE);
             if context.content.contains(mouse_position) {
                 *out_hovered = Some(HoveredElement::Button {
                     property: property.clone(),
                     value: *value,
+                    modify_mode: *modify_mode,
                 });
             }
         }

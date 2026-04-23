@@ -532,11 +532,17 @@ impl ApplicationHandler for App {
                                         .send(NetworkMessageC2S::Research { research: key });
                                 }
                             }
-                            HoveredElement::Button { property, value } => {
+                            HoveredElement::Button {
+                                property,
+                                value,
+                                modify_mode,
+                            } => {
                                 if self.game.buttons.is_just_down(MouseButton::Left) {
-                                    self.connection
-                                        .tx
-                                        .send(NetworkMessageC2S::UIButtonPress { property, value });
+                                    self.connection.tx.send(NetworkMessageC2S::UIButtonPress {
+                                        property,
+                                        value,
+                                        modify_mode,
+                                    });
                                 }
                             }
                         }
@@ -830,7 +836,7 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::UpdateBlockComponents {
                                 chunk,
                                 offset,
-                                data,
+                                update: data,
                             } => {
                                 if let Some(chunk) = self.game.chunks.get_mut(&chunk) {
                                     data.update(offset, &mut chunk.components);

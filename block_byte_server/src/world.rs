@@ -1,9 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet},
+    cell::{RefCell, UnsafeCell},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    marker::PhantomData,
     mem::MaybeUninit,
     num::{NonZero, NonZeroU32},
     ops::Deref,
     path::Path,
+    ptr::NonNull,
     sync::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -11,10 +14,10 @@ use std::{
 };
 
 use block_byte_common::{
-    CharacterController, Color, DamageType, InventoryView, LookDirection, MoveMode, SERVER_DT,
-    SERVER_TPS,
+    CharacterController, Color, DamageTable, DamageType, InventoryView, LookDirection, MoveMode,
+    SERVER_DT, SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos},
-    net::NetworkMessageS2C,
+    net::{NetworkMessageC2S, NetworkMessageS2C},
     registry::{
         BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
         BlockMachineFace, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, KeyGroup,
@@ -23,7 +26,7 @@ use block_byte_common::{
     scripts::{self, CallbackResult, ExternalScriptByteCode, ScriptState, ScriptValue},
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockMachine,
-        ClientBlockPlants, ClientChunkBlockComponents,
+        ClientBlockPlants, ClientChunkBlockComponents, ComponentTypeAccess,
     },
 };
 use noise::{BasicMulti, NoiseFn, Perlin};
@@ -38,173 +41,113 @@ use splines::{Interpolation, Spline};
 use uuid::Uuid;
 
 use crate::{
-    InventoryProvider, Server, UserIndex,
+    InventoryProvider, MessageQueue, Server, UserIndex,
     inventory::{Inventory, ItemStack, generate_loot_table, lock_inventories},
     registry::{Key, RegistryConfigLoadable},
 };
 #[derive(Serialize, Deserialize)]
 pub struct ChunkSaveData {
     pub blocks: BlockPalette,
-    pub block_events: Vec<(ChunkOffset, BlockEvent)>,
+    pub block_events: Vec<(ChunkOffset, WorldEvent)>,
     pub components: ChunkBlockComponents,
     pub entities: Vec<Entity>,
 }
 pub struct Chunk {
     pub position: ChunkPos,
-    pub blocks: RwLock<BlockPalette>,
+    pub blocks: RefCell<BlockPalette>,
     pub viewers: HashSet<UserIndex>,
-    pub block_events: Mutex<Vec<(ChunkOffset, BlockEvent)>>,
+    pub block_events: RefCell<VecDeque<WorldEvent>>,
     pub components: ChunkBlockComponents,
-    pub entities: Vec<EntityIndex>,
+    pub entities: BTreeMap<Uuid, UnsafeCell<Entity>>,
 }
-impl Chunk {
-    pub fn generate(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
-        /*use noise::MultiFractal;
-        let height_noise: BasicMulti<Perlin> = BasicMulti::new(seed)
-            .set_octaves(4)
-            .set_frequency(1.0)
-            .set_lacunarity(2.0)
-            .set_persistence(0.5);*/
-
-        let column_data = generator.get_column_generation(position.x, position.z);
-
-        let mut blocks = BlockPalette::filled(
-            BlockEntry::simple(air_block()),
-            CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
-        );
-        let mut components = ChunkBlockComponents::default();
-
-        use rand::SeedableRng;
-        let mut rng =
-            StdRng::from_seed(Seeder::from((generator.seed as u32, position)).make_seed());
-        for z in 0..CHUNK_SIZE as u8 {
-            for y in 0..CHUNK_SIZE as u8 {
-                for x in 0..CHUNK_SIZE as u8 {
-                    let offset = ChunkOffset::new(x, y, z);
-                    let y_pos = y as i32 + position.y as i32 * CHUNK_SIZE as i32;
-                    let biome = column_data.biomes[x as usize][y as usize].data();
-                    let height = column_data.height[x as usize][z as usize] as i32;
-                    /*let holes = hole_spline.clamped_sample(height as f32).unwrap();
-                    let density = density_noise.get([
-                        (position.x as f64 * CHUNK_SIZE as f64 + x as f64) / 10.,
-                        (position.y as f64 * CHUNK_SIZE as f64 + y as f64) / 10.,
-                        (position.z as f64 * CHUNK_SIZE as f64 + z as f64) / 10.,
-                    ]) as f32
-                        * holes
-                        + (height - y_pos) as f32 / 20.;
-                    if density > 0. {
-                        blocks.set(
-                            offset.index(),
-                            &BlockEntry {
-                                block: biome.bottom_block,
-                                color: Color::WHITE,
-                                rotation: BlockRotation::default(),
-                            },
-                        );
-                    }*/
-                    if y_pos == height {
-                        blocks.set(offset.index(), &BlockEntry::simple(biome.top_block));
-                        let spawned_plants: SmallVec<_> = biome
-                            .plants
-                            .iter()
-                            .filter_map(|spawner| {
-                                if rng.random_bool(spawner.chance as f64) {
-                                    let plant_data = spawner.plant.data();
-                                    Some((
-                                        spawner.plant,
-                                        rng.random::<f32>() * plant_data.growth_length,
-                                    ))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !spawned_plants.is_empty() {
-                            components.plant.write().set(
-                                offset,
-                                BlockPlants {
-                                    plants: spawned_plants,
-                                },
-                            );
-                        }
-                    } else if y_pos < height - 3 {
-                        blocks.set(offset.index(), &BlockEntry::simple(biome.bottom_block));
-                    } else if y_pos < height {
-                        blocks.set(offset.index(), &BlockEntry::simple(biome.middle_block));
-                    }
-                }
-            }
-        }
-        let replacable_tag = KeyGroup::parse("#prefab_replacable").unwrap();
-        for neighbor_chunk in (AABB {
-            min: ChunkPos { x: -1, y: 0, z: -1 },
-            max: ChunkPos { x: 1, y: 0, z: 1 },
-        })
-        .offset(position)
-        {
-            let block_offset = neighbor_chunk.to_block_pos();
-            let column = generator.get_column_generation(neighbor_chunk.x, neighbor_chunk.z);
-            for placed_decoration in column.get_legal_decorations(generator) {
-                let height = column.height[placed_decoration.x as usize]
-                    [placed_decoration.z as usize] as i32
-                    + 1;
-                let block_position = BlockPos {
-                    x: block_offset.x + placed_decoration.x as i32,
-                    y: height,
-                    z: block_offset.z + placed_decoration.z as i32,
+pub fn tick_chunk(world: &WorldAccess) {
+    for _ in 0..world.get_event_queue_length() {
+        let event = world.pop_event().unwrap();
+        match event {
+            WorldEvent::BlockDamage { block, damage } => {
+                let block_position = world.center_chunk.to_block_pos() + block.xyz();
+                let Some(block) = world.get_block(block_position) else {
+                    continue;
                 };
-                //todo: do bounding box calculations to cull
-                if
-                /*height >= block_offset.y && height < block_offset.y + CHUNK_SIZE as i32*/
-                true {
-                    let prefab = placed_decoration.key.data();
-                    let rotation = [Face::Front, Face::Back, Face::Left, Face::Right]
-                        [placed_decoration.rotation as usize];
-                    let rotation = Orientation::from_front_up(rotation, Face::Up).unwrap();
-                    for part in &prefab.parts {
-                        //todo
-                        /*if !rng.random_bool(part.chance as f64) {
-                            continue;
-                        }*/
-                        for (offset, block) in &part.blocks {
-                            let offset = rotation.rotate_block_pos(*offset);
-                            let mut block = *block;
-                            block.rotation = block.block.data().rotation.get_nearest_valid(
-                                rotation
-                                    .compose(Orientation::from_block_rotation(block.rotation))
-                                    .into_block_rotation(),
-                            );
-                            let place_position = block_position + offset;
-                            let (place_chunk, place_chunk_offset) =
-                                place_position.to_chunk_pos_offset();
-                            if place_chunk == position {
-                                if replacable_tag
-                                    .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
-                                {
-                                    blocks.set(place_chunk_offset.index(), &block);
-                                }
-                            }
-                        }
-                    }
+                let block_data = block.block.data();
+                let damage_dealt = damage
+                    .iter()
+                    .map(|(damage_type, damage)| {
+                        damage * block_data.health.table[damage_type].unwrap_or(1.)
+                    })
+                    .sum::<f32>();
+                let should_break_block = if damage_dealt >= block_data.health.health {
+                    true
+                } else {
+                    let mut block_damage = world
+                        .get_or_create_block_component::<BlockDamage>(block_position, || {
+                            BlockDamage { damage: 0. }
+                        })
+                        .unwrap();
+                    block_damage.damage -= damage_dealt;
+                    if block_damage.damage >= block_data.health.health {
+                        true
+                    } else {
+                        //sync
+                        false
+                    };
+                };
+                if should_break_block {
+                    world.drop_items(
+                        world.break_block(block_position).unwrap().into_iter(),
+                        block_position.to_pos() + Pos::all(0.5),
+                    );
                 }
             }
-        }
-        //blocks.set(ChunkOffset::new(16, 16, 16).index(), &grass);
-        Chunk {
-            position,
-            blocks: RwLock::new(blocks),
-            viewers: HashSet::new(),
-            block_events: Mutex::new(Vec::new()),
-            components,
-            entities: Vec::new(),
+            WorldEvent::BlockLogicSignal {
+                block,
+                value,
+                world_face,
+            } => todo!(),
+            WorldEvent::BlockUpdateLogicState {
+                block,
+                value,
+                world_face,
+            } => todo!(),
+            WorldEvent::BlockNeighborDestroyed { block, world_face } => todo!(),
+            WorldEvent::BlockWakeup {
+                block,
+                inventory_updated,
+            } => todo!(),
+            WorldEvent::EntityDamage {
+                entity: entity_id,
+                damage,
+            } => {
+                let Some(mut entity) = world.get_entity(entity_id) else {
+                    continue;
+                };
+                let entity_data = entity.key.data();
+                for (damage_type, damage) in damage.iter() {
+                    entity.state.health -=
+                        damage * entity_data.damage_table[damage_type].unwrap_or(1.);
+                }
+                if entity.state.health <= 0. {
+                    drop(entity); //check if necessarry
+                    world.remove_entity(entity_id);
+                }
+            }
+            WorldEvent::EntityTeleport { entity, position } => todo!(),
+            WorldEvent::EntityKnockback { entity, knockback } => todo!(),
+            WorldEvent::EntityClientMessage { entity, message } => todo!(),
         }
     }
+    for mut machine in world.iter_block_components::<BlockMachine>() {
+        let position = machine.lock_key;
+        let mut machine = &mut *machine;
+    }
+}
+impl Chunk {
     pub fn tick(&self, server: &Server) {
         let mut processing_events = Vec::new();
         std::mem::swap(&mut processing_events, &mut *self.block_events.lock());
         for (block, event) in processing_events {
             match event {
-                BlockEvent::Damage {
+                WorldEvent::Damage {
                     damage,
                     damage_type,
                 } => {
@@ -251,7 +194,7 @@ impl Chunk {
                             NetworkMessageS2C::UpdateBlockComponents {
                                 chunk: self.position,
                                 offset: block,
-                                data: damage_component
+                                update: damage_component
                                     .get(block)
                                     .map(|component| Into::<ClientBlockDamage>::into(component))
                                     .into(),
@@ -259,7 +202,7 @@ impl Chunk {
                         );
                     }
                 }
-                BlockEvent::PlayerInteract { player } => {
+                WorldEvent::PlayerInteract { player } => {
                     let block_data = self.blocks.read().get(block.index()).unwrap().block.data();
                     let block_position = self.position.to_block_pos() + block.xyz();
                     match &block_data.interact_action {
@@ -311,8 +254,8 @@ impl Chunk {
                         }
                     }
                 }
-                BlockEvent::PlantHarvest { player } => {}
-                BlockEvent::LogicSignal { value, world_face } => {
+                WorldEvent::PlantHarvest { player } => {}
+                WorldEvent::LogicSignal { value, world_face } => {
                     let block_state = *self.blocks.read().get(block.index()).unwrap();
                     let block_data = block_state.block.data();
                     let mut machines = self.components.machine.write();
@@ -327,7 +270,7 @@ impl Chunk {
                         }
                     }
                 }
-                BlockEvent::UpdateLogicState { value, world_face } => {
+                WorldEvent::UpdateLogicState { value, world_face } => {
                     let block_state = *self.blocks.read().get(block.index()).unwrap();
                     let block_data = block_state.block.data();
                     let mut machines = self.components.machine.write();
@@ -342,7 +285,7 @@ impl Chunk {
                         }
                     }
                 }
-                BlockEvent::NeighborDestroyed { world_face } => {
+                WorldEvent::NeighborDestroyed { world_face } => {
                     let block_pos = self.position.to_block_pos() + block.xyz();
                     let block = *self.blocks.read().get(block.index()).unwrap();
                     let block_data = block.block.data();
@@ -364,7 +307,7 @@ impl Chunk {
                         }
                     }
                 }
-                BlockEvent::Wakeup { inventory_updated } => {
+                WorldEvent::Wakeup { inventory_updated } => {
                     let mut machines = self.components.machine.write();
                     if let Some(machine) = machines.get_mut(block) {
                         machine.blocked.store(false, Ordering::Relaxed);
@@ -372,7 +315,7 @@ impl Chunk {
                             for to_wakeup in machine.inventory_observers.get_mut().drain(..) {
                                 server.schedule_block_event(
                                     to_wakeup,
-                                    BlockEvent::Wakeup {
+                                    WorldEvent::Wakeup {
                                         inventory_updated: false,
                                     },
                                 );
@@ -510,7 +453,7 @@ impl Chunk {
                                 + world_face.get_block_offset();
                             server.schedule_block_event(
                                 target_position,
-                                BlockEvent::LogicSignal {
+                                WorldEvent::LogicSignal {
                                     value,
                                     world_face: world_face.opposite(),
                                 },
@@ -533,7 +476,7 @@ impl Chunk {
                                 + world_face.get_block_offset();
                             server.schedule_block_event(
                                 target_position,
-                                BlockEvent::UpdateLogicState {
+                                WorldEvent::UpdateLogicState {
                                     value,
                                     world_face: world_face.opposite(),
                                 },
@@ -663,111 +606,62 @@ impl Chunk {
     }
 }
 
-pub struct EntityIndexSave(pub EntityIndex);
-impl Serialize for EntityIndexSave {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_unit()
-    }
-}
-impl<'de> Deserialize<'de> for EntityIndexSave {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct DefaultVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for DefaultVisitor {
-            type Value = EntityIndexSave;
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("unit")
-            }
-            fn visit_unit<E>(self) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(EntityIndexSave(slotmap::Key::null()))
-            }
-        }
-        deserializer.deserialize_unit(DefaultVisitor)
-    }
-}
-impl Into<EntityIndex> for EntityIndexSave {
-    fn into(self) -> EntityIndex {
-        self.0
-    }
-}
-impl From<EntityIndex> for EntityIndexSave {
-    fn from(value: EntityIndex) -> Self {
-        Self(value)
-    }
-}
-
 #[derive(Serialize, Deserialize)]
-pub enum BlockEvent {
-    Damage {
-        damage: f32,
-        damage_type: DamageType,
+pub enum WorldEvent {
+    BlockDamage {
+        block: ChunkOffset,
+        damage: DamageTable,
     },
-    PlayerInteract {
-        player: EntityIndexSave,
-    },
-    PlantHarvest {
-        player: EntityIndexSave,
-    },
-    LogicSignal {
+    BlockLogicSignal {
+        block: ChunkOffset,
         value: ScriptValue,
         world_face: Face,
     },
-    UpdateLogicState {
+    BlockUpdateLogicState {
+        block: ChunkOffset,
         value: ScriptValue,
         world_face: Face,
     },
-    NeighborDestroyed {
+    BlockNeighborDestroyed {
+        block: ChunkOffset,
         world_face: Face,
     },
-    Wakeup {
+    BlockWakeup {
+        block: ChunkOffset,
         inventory_updated: bool,
     },
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum EntityEvent {
-    Damage {
-        damage: f32,
-        damage_type: DamageType,
+    EntityDamage {
+        entity: Uuid,
+        damage: DamageTable,
     },
-    PlayerInteract {
-        user: EntityIndexSave,
-    },
-    Teleport {
+    EntityTeleport {
+        entity: Uuid,
         position: Pos,
     },
-    Knockback {
+    EntityKnockback {
+        entity: Uuid,
         knockback: Pos,
     },
-    Remove,
+    EntityClientMessage {
+        entity: Uuid,
+        message: NetworkMessageC2S,
+    },
 }
 
-new_key_type! {pub struct EntityIndex;}
 #[derive(Serialize, Deserialize)]
 pub struct Entity {
     pub key: EntityKey,
     pub uuid: Uuid,
     pub position: Pos,
-    pub inventory: RwLock<Inventory>,
-    pub events: Mutex<SmallVec<[EntityEvent; 4]>>,
+    pub inventory: Inventory,
     #[serde(default, skip_serializing, skip_deserializing)]
     pub controller: Option<UserIndex>,
-    pub state: Mutex<InternalEntityState>,
+    pub state: InternalEntityState,
 }
 #[derive(Serialize, Deserialize)]
 pub struct InternalEntityState {
     pub character_controller: CharacterController,
     pub teleport: Option<Pos>,
-    pub removed: bool,
     pub hand_slot: usize,
     #[serde(skip_serializing, skip_deserializing)]
     pub last_hand_item: Option<ItemStack>,
@@ -792,9 +686,8 @@ impl Entity {
             uuid: Uuid::new_v4(),
             position,
             inventory: RwLock::new(Inventory::new(entity_data.inventory_size)),
-            events: Mutex::new(SmallVec::new()),
             controller: None,
-            state: Mutex::new(InternalEntityState {
+            state: InternalEntityState {
                 character_controller: CharacterController::new(),
                 removed: false,
                 teleport: None,
@@ -808,7 +701,7 @@ impl Entity {
                 },
                 direction: LookDirection { pitch: 0., yaw: 0. },
                 crouching: false,
-            }),
+            },
         }
     }
     pub fn schedule_event(&self, event: EntityEvent) {
@@ -898,106 +791,6 @@ impl Entity {
             if new_position != self.position && state.teleport.is_none() {
                 state.teleport = Some(new_position);
             }
-            /*let mut movement = state.velocity;
-            movement.y -= 10. * server.delta_time();
-
-            let mut friction = 0.;
-
-            let mut on_ground = false;
-
-            if movement.x != 0.
-                && server.hitbox_block_collides(hitbox.offset(
-                    self.position
-                        + Pos {
-                            x: movement.x,
-                            y: 0.,
-                            z: 0.,
-                        } * server.delta_time(),
-                ))
-            {
-                movement.x = 0.;
-                friction += 1.;
-            }
-            if movement.y != 0.
-                && server.hitbox_block_collides(hitbox.offset(
-                    self.position
-                        + Pos {
-                            x: movement.x,
-                            y: movement.y,
-                            z: 0.,
-                        } * server.delta_time(),
-                ))
-            {
-                on_ground = movement.y < 0.;
-                movement.y = 0.;
-                friction += 1.;
-            }
-            if movement.z != 0.
-                && server.hitbox_block_collides(hitbox.offset(
-                    self.position
-                        + Pos {
-                            x: movement.x,
-                            y: movement.y,
-                            z: movement.z,
-                        } * server.delta_time(),
-                ))
-            {
-                movement.z = 0.;
-                friction += 1.;
-            }
-            if movement.length_squared() != 0. {
-                if state.teleport.is_none() {
-                    state.teleport = Some(self.position + movement * server.delta_time());
-                } else {
-                    movement = Pos::ZERO;
-                }
-            }
-            {
-                let drag = 0.1;
-                movement = movement * (1. - drag * server.delta_time());
-            }
-            let movement_length = movement.length();
-            if movement_length > 0. {
-                let friction_constant = 8.;
-                let friction_axis = |value: f32| -> f32 {
-                    let force = value / movement_length
-                        * friction_constant
-                        * friction
-                        * server.delta_time();
-                    if value.abs() < force.abs() {
-                        return 0.;
-                    }
-                    value - force
-                };
-                movement.x = friction_axis(movement.x);
-                movement.y = friction_axis(movement.y);
-                movement.z = friction_axis(movement.z);
-            }
-
-            match self.key.data().ai_tasks.get(0) {
-                Some(task) => match task {
-                    block_byte_common::registry::MobAiTask::Attack {
-                        targets,
-                        damage,
-                        damage_type,
-                    } => todo!(),
-                    block_byte_common::registry::MobAiTask::Wander => {
-                        if on_ground {
-                            movement.y += 10.;
-                        }
-                        let front = state.direction.make_front();
-                        movement.x = front.x * 3.;
-                        movement.z = front.z * 3.;
-                        if rand::random_bool(1. / 40. / 5.) {
-                            state.direction.yaw =
-                                rand::random_range((0.)..(std::f32::consts::PI * 2.))
-                        }
-                    }
-                },
-                None => {}
-            }
-
-            state.velocity = movement;*/
         } else {
             if state.character_controller.velocity.length_squared() > 0. {
                 server.send_message(
@@ -1077,34 +870,89 @@ macro_rules! create_chunk_block_components{
         #[derive(Default, Serialize, Deserialize)]
         pub struct ChunkBlockComponents{
             $(
-                #[serde(skip_serializing_if = "skip_serializing_component_storage", default)]
-                pub $id: parking_lot::RwLock<BlockComponentStorage<$type>>,
+                //#[serde(skip_serializing_if = std::concat!("BlockComponentStorage::<", std::stringify!($type), ">::is_empty"), default)]
+                pub $id: BlockComponentStorage<UnsafeCell<$type>>,
             )*
         }
+        $(
+            impl ComponentTypeAccess<$type> for ChunkBlockComponents{
+                type Item = BlockComponentStorage<UnsafeCell<$type>>;
+                fn get_component_type(&self) -> &Self::Item{
+                    &self.$id
+                }
+                fn get_component_type_mut(&mut self) -> &mut Self::Item{
+                    &mut self.$id
+                }
+            }
+        )*
+        pub struct ChunkBlockComponentsMap<T>{
+            $(
+                pub $id: T,
+            )*
+        }
+        impl<T> ChunkBlockComponentsMap<T>{
+            pub fn iter(&self) -> impl Iterator<Item = &T>{
+                [$(&$id,)*].into_iter()
+            }
+        }
+        $(
+            impl<T> ComponentTypeAccess<$type> for ChunkBlockComponentsMap<T>{
+                type Item = T;
+                fn get_component_type(&self) -> &Self::Item{
+                    &self.$id
+                }
+                fn get_component_type_mut(&mut self) -> &mut Self::Item{
+                    &mut self.$id
+                }
+            }
+        )*
     }
 }
-pub fn skip_serializing_component_storage<T>(
-    components: &parking_lot::RwLock<BlockComponentStorage<T>>,
-) -> bool {
-    components.read().iter().count() == 0
+trait BlockComponentUpdater {
+    fn client_update(&self) -> Option<ClientBlockComponentUpdate>;
+    fn client_empty_update() -> Option<ClientBlockComponentUpdate>;
 }
-
 macro_rules! create_chunk_block_components_client_mapping {
-    ($($id:ident),*) => {
+    ($($client: ident, $server: ident, $id:ident);*) => {
         impl ChunkBlockComponents {
             pub fn client(&self) -> ClientChunkBlockComponents {
                 ClientChunkBlockComponents {
                     $(
-                        $id: (&*self.$id.read()).into(),
+                        $id: self.$id.into(),
                     )*
                 }
             }
         }
+        $(
+            impl BlockComponentUpdater for $server {
+                fn client_update(&self) -> Option<ClientBlockComponentUpdate>{
+                    Some(ClientBlockComponentUpdate::$client(Some(self.into())))
+                }
+                fn client_empty_update() -> Option<ClientBlockComponentUpdate>{
+                    Some(ClientBlockComponentUpdate::$client(None))
+                }
+            }
+        )*
+    };
+}
+macro_rules! create_chunk_block_components_server_only {
+    ($($server: ident);*) => {
+        $(
+            impl BlockComponentUpdater for $server {
+                fn client_update(&self) -> Option<ClientBlockComponentUpdate>{
+                    None
+                }
+                fn client_empty_update() -> Option<ClientBlockComponentUpdate>{
+                    None
+                }
+            }
+        )*
     };
 }
 
 create_chunk_block_components!(BlockDamage, damage; BlockPlants, plant; BlockMachine, machine);
-create_chunk_block_components_client_mapping!(damage, plant, machine);
+create_chunk_block_components_client_mapping!(BlockDamage, ClientBlockDamage, damage; BlockPlant, ClientBlockPlants, plant; BlockMachine, ClientBlockMachine, machine);
+create_chunk_block_components_server_only!();
 
 #[derive(Serialize, Deserialize)]
 pub struct BlockDamage {
@@ -1140,318 +988,415 @@ impl Into<ClientBlockPlants> for &BlockPlants {
 }
 #[derive(Serialize, Deserialize)]
 pub struct BlockMachine {
-    pub inventory: RwLock<Inventory>,
-    pub sleep_cooldown: Mutex<u32>,
-    pub script_state: Mutex<ScriptState>,
-    pub logic_state: Mutex<FaceMap<Option<ScriptValue>>>,
-    pub blocked: AtomicBool,
-    pub inventory_observers: Mutex<SmallVec<[BlockPos; 1]>>,
-    pub current_animation: Mutex<u16>,
-    pub animation_start_time: Mutex<u64>,
+    pub inventory: Inventory,
+    pub sleep_cooldown: u32,
+    pub script_state: ScriptState,
+    pub logic_state: FaceMap<Option<ScriptValue>>,
+    pub blocked: bool,
+    pub inventory_observers: SmallVec<[BlockPos; 1]>,
+    pub current_animation: u16,
+    pub animation_start_time: u64,
 }
 
 impl Into<ClientBlockMachine> for &BlockMachine {
     fn into(self) -> ClientBlockMachine {
         ClientBlockMachine {
-            animation: *self.current_animation.lock(),
-            animation_start_time: *self.animation_start_time.lock(),
+            animation: self.current_animation,
+            animation_start_time: self.animation_start_time,
         }
     }
 }
-pub struct RegionGeneration {
-    pub x: i16,
-    pub z: i16,
-    pub structures: Vec<RegionStructure>,
-    pub structure_grid: [[Option<NonZeroU32>; Self::GRID_SIZE]; Self::GRID_SIZE], //could probably be u16
-    pub structure_grid_prefabs: Vec<StructureGridPrefab>,
-    pub roads: [[u8; Self::REGION_CHUNK_SIZE]; Self::REGION_CHUNK_SIZE],
+trait ComponentStorageAccess<C> {
+    fn get_component_storage(&self) -> &BlockComponentStorage<UnsafeCell<C>>;
 }
-impl RegionGeneration {
-    pub fn generate_structure_list(
-        x: i16,
-        z: i16,
-        world_generator: &WorldGenerator,
-    ) -> Vec<RegionStructure> {
-        let mut structures: Vec<RegionStructure> = Vec::new();
-        let mut rng =
-            StdRng::from_seed(Seeder::from((world_generator.seed as u32, x, z)).make_seed());
-        for _ in 0..world_generator.config.region_structure_spawn_attempts {
-            let index = rng.next_u32() as usize % world_generator.config.structures.len();
-            let x = x as i32 * Self::REGION_CHUNK_SIZE as i32
-                + (rng.next_u32() % Self::REGION_CHUNK_SIZE as u32) as i32;
-            let z = z as i32 * Self::REGION_CHUNK_SIZE as i32
-                + (rng.next_u32() % Self::REGION_CHUNK_SIZE as u32) as i32;
-            let seed = rng.next_u64();
-            let structure_data = &world_generator.config.structures[index];
-            if structures.iter().any(|structure| {
-                let distance = (structure.x - x).pow(2) + (structure.z - z).pow(2);
-                distance < (structure.exclusion_zone + structure_data.exclusion_zone).pow(2) as i32
-            }) {
-                continue;
+impl<C> ComponentStorageAccess<C> for ChunkBlockComponents
+where
+    ChunkBlockComponents: ComponentTypeAccess<C, Item = BlockComponentStorage<UnsafeCell<C>>>,
+    C: BlockComponentUpdater,
+{
+    fn get_component_storage(&self) -> &BlockComponentStorage<UnsafeCell<C>> {
+        <ChunkBlockComponents as ComponentTypeAccess<
+            C,
+            Item = BlockComponentStorage<UnsafeCell<C>>,
+        >>::get_component_type(self)
+    }
+}
+impl ChunkBlockComponents {
+    pub fn get_components<C>(&self) -> &BlockComponentStorage<UnsafeCell<C>>
+    where
+        ChunkBlockComponents: ComponentStorageAccess<C>,
+    {
+        <ChunkBlockComponents as ComponentStorageAccess<C>>::get_component_storage(&self)
+    }
+}
+pub struct WorldAccess {
+    ticks_passed: u64,
+    center_chunk: ChunkPos,
+    grid: [Option<&mut Chunk>; 27],
+    message_queue: &MessageQueue,
+    entity_locks: RefCell<Vec<Uuid>>,
+    entities_added: RefCell<BTreeMap<Uuid, Box<UnsafeCell<Entity>>>>,
+    entities_removed: RefCell<Vec<Uuid>>,
+    block_component_locks: ChunkBlockComponentsMap<RefCell<Vec<BlockPos>>>,
+    block_components_added: ChunkBlockComponentsMap<RefCell<BTreeMap<BlockPos, Box<UnsafeCell>>>>,
+    block_components_removed: ChunkBlockComponentsMap<RefCell<Vec<BlockPos>>>,
+}
+impl WorldAccess {
+    const GRID_CENTER: usize = 1 + 3 + 9;
+    fn get_grid_index(&self, chunk: ChunkPos) -> Option<usize> {
+        let x_diff = chunk.x - self.center_chunk.x + 1;
+        let y_diff = chunk.x - self.center_chunk.x + 1;
+        let z_diff = chunk.x - self.center_chunk.x + 1;
+        if x_diff < 0 || x_diff > 2 || y_diff < 0 || y_diff > 2 || z_diff < 0 || z_diff > 2 {
+            return None;
+        }
+        Some(x_diff as usize + y_diff as usize * 3 + z_diff as usize * 9)
+    }
+    pub fn get_block(&self, position: BlockPos) -> Option<BlockEntry> {
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        Some(
+            *self.grid[self.get_grid_index(chunk)?]?
+                .blocks
+                .borrow()
+                .get(offset.index())
+                .unwrap(),
+        )
+    }
+    pub fn replace_block(&self, position: BlockPos, block: BlockEntry) -> Result<BlockEntry, ()> {
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        match self
+            .get_grid_index(chunk)
+            .and_then(|chunk| self.grid[chunk])
+        {
+            Some(chunk) => {
+                let mut blocks = chunk.blocks.borrow_mut();
+                let previous = *blocks.get(offset.index()).unwrap();
+                blocks.set(offset.index(), &block);
+                Ok(previous)
             }
-            structures.push(RegionStructure {
-                x,
-                z,
-                exclusion_zone: structure_data.exclusion_zone,
-                index,
-                seed,
+            None => Err(()),
+        }
+    }
+    pub fn break_block(&self, position: BlockPos) -> Result<Vec<ItemStack>, ()> {
+        let previous_block = self.replace_block(position, BlockEntry::simple(air_block()))?;
+        let block_data = previous_block.block.data();
+        let _ = self.remove_block_component::<BlockDamage>(position);
+        let mut drops = generate_loot_table(block_data.loot_table.data());
+
+        //todo: harvest
+        let _ = self.remove_block_component::<BlockPlants>(position);
+
+        if let Some(mut machine) = self.get_block_component::<BlockMachine>(position) {
+            //todo: this should probably be returned in remove_block_component
+            for item in &mut machine.inventory.items {
+                if let Some(item) = item.take() {
+                    drops.push(item);
+                }
+            }
+            drop(machine);
+            self.remove_block_component::<BlockMachine>(position);
+        }
+        for face in Face::all() {
+            let neighbor_position = position + face.get_block_offset();
+            let (chunk, offset) = neighbor_position.to_chunk_pos_offset();
+            self.schedule_event(
+                chunk,
+                WorldEvent::BlockNeighborDestroyed {
+                    block: offset,
+                    world_face: face.opposite(),
+                },
+            );
+        }
+        Ok(drops)
+    }
+    pub fn place_block(&self, position: BlockPos, block: BlockEntry) -> Result<(), ()> {
+        let block_data = block.block.data();
+        if let Some(hanging) = block_data.hanging {
+            let world_hanging = block.rotation.rotate_face(hanging);
+            let Some(hanging_block) = self.get_block(position + world_hanging.get_block_offset())
+            else {
+                return Err(());
+            };
+            if !hanging_block.supports(world_hanging.opposite()) {
+                return Err(());
+            }
+        }
+        match self.get_block(position) {
+            Some(block) => {
+                if block.block != air_block() {
+                    return Err(());
+                }
+            }
+            None => return Err(()),
+        }
+        self.replace_block(position, block).unwrap();
+        if let Some(machine_data) = &block_data.machine {
+            self.get_or_create_block_component(position, || BlockMachine {
+                inventory: Inventory::new(machine_data.inventory_size),
+                sleep_cooldown: 0,
+                script_state: ScriptState::new(&machine_data.script),
+                logic_state: Default::default(),
+                blocked: false,
+                inventory_observers: SmallVec::new(),
+                current_animation: 0,
+                animation_start_time: self.ticks_passed,
+            })
+            .unwrap();
+        }
+        Ok(())
+    }
+    pub fn get_block_component<'a, C>(
+        &'a self,
+        position: BlockPos,
+    ) -> Option<WorldAccessRef<'a, C, BlockPos>>
+    where
+        ChunkBlockComponents: ComponentStorageAccess<C>,
+    {
+        if let Some(block) = self.block_components_added.get().borrow().get(&position) {
+            self.block_component_locks.borrow_mut().push(position);
+            return Some(WorldAccessRef {
+                value: unsafe { NonNull::new_unchecked(block.get()) },
+                borrow: &self.block_component_locks,
+                lock_key: uuid,
+                _marker: PhantomData,
             });
         }
-        structures
+        let (chunk, offset) = position.to_chunk_pos_offset();
     }
-    pub fn add_structure_prefab(
-        &mut self,
-        position: BlockPos,
-        rotation: BlockRotation,
-        prefab: PrefabKey,
-    ) {
-        let grid_corner_x =
-            self.x * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
-        let grid_corner_z =
-            self.z * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
-
-        let aabb = prefab.data().bounding_box();
-        let aabb = rotation.rotate_block_aabb(aabb);
-        let aabb = aabb.offset(position);
-        for chunk in aabb.to_chunk().vertically_flatten() {
-            let offset_x = chunk.x - grid_corner_x;
-            let offset_z = chunk.z - grid_corner_z;
-            if offset_x >= 0
-                && offset_z >= 0
-                && offset_x < Self::GRID_SIZE as i16
-                && offset_z < Self::GRID_SIZE as i16
-            {
-                self.structure_grid_prefabs.push(StructureGridPrefab {
-                    position,
-                    rotation,
-                    prefab,
-                    next: self.structure_grid[offset_x as usize][offset_z as usize],
-                });
-                self.structure_grid[offset_x as usize][offset_z as usize] =
-                    NonZero::new(self.structure_grid_prefabs.len() as u32);
-            } else {
-                println!("structure generation outside bounds");
-            }
-        }
-    }
-}
-struct StructureGridPrefab {
-    pub position: BlockPos,
-    pub rotation: BlockRotation,
-    pub prefab: PrefabKey,
-    pub next: Option<NonZeroU32>,
-}
-impl RegionGeneration {
-    pub const REGION_CHUNK_SIZE: usize = 64;
-    pub const BORDER_CHUNK_SIZE: usize = 8;
-    const GRID_SIZE: usize = Self::REGION_CHUNK_SIZE + Self::BORDER_CHUNK_SIZE * 2;
-}
-pub struct RegionStructure {
-    pub x: i32,
-    pub z: i32,
-    pub exclusion_zone: u16,
-    pub index: usize,
-    pub seed: u64,
-}
-pub struct ChunkColumnGeneration {
-    pub x: i16,
-    pub z: i16,
-    pub biomes: [[BiomeKey; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
-    pub height: [[u16; CHUNK_SIZE as usize]; CHUNK_SIZE as usize],
-    pub unique_biomes: Vec<BiomeKey>,
-    pub decorations: Vec<ChunkColumnDecoration>,
-}
-impl ChunkColumnGeneration {
-    pub fn is_blocked(&self, x: i32, z: i32, exclusion_radius: u8) -> bool {
-        for decoration in &self.decorations {
-            let decoration_x = (decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32);
-            let decoration_z = (decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32);
-            let distance = (decoration_x - x).pow(2) + (decoration_z - z).pow(2);
-            let decoration_data = decoration.key.data();
-            if distance <= (decoration.exclusion_zone as i32 + exclusion_radius as i32).pow(2) {
-                return true;
-            }
-        }
-        false
-    }
-    const NEIGHBOR_CHUNK_BLOCKERS: [(i8, i8); 4] = [(0, -1), (-1, -1), (-1, 0), (-1, 1)];
-    pub fn get_legal_decorations<'a>(
+    pub fn iter_block_components<'a, C>(
         &'a self,
-        world_generator: &WorldGenerator,
-    ) -> impl Iterator<Item = &'a ChunkColumnDecoration> {
-        let blocking_neighbors = Self::NEIGHBOR_CHUNK_BLOCKERS.map(|(x, z)| {
-            world_generator.get_column_generation(self.x + x as i16, self.z + z as i16)
-        });
-        self.decorations.iter().filter(move |decoration| {
-            !blocking_neighbors.iter().any(|neighbor| {
-                neighbor.is_blocked(
-                    decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32,
-                    decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32,
-                    decoration.exclusion_zone,
-                )
+        exclude: &[BlockPos],
+    ) -> impl Iterator<Item = WorldAccessRef<'a, C, BlockPos>>
+    where
+        ChunkBlockComponents: ComponentStorageAccess<C>,
+    {
+        self.grid
+            .as_ref()
+            .iter()
+            .filter_map(|chunk| {
+                chunk.map(|chunk| {
+                    chunk
+                        .components
+                        .get_components::<C>()
+                        .iter()
+                        .map(|(offset, _)| chunk.position.to_block_pos() + offset.xyz())
+                })
             })
-        })
+            .flatten()
+            .filter(|position| !exclude.contains(position))
+            .filter_map(|position| self.get_block_component::<C>(position))
     }
-}
-struct ChunkColumnDecoration {
-    key: PrefabKey,
-    x: u8,
-    z: u8,
-    exclusion_zone: u8,
-    rotation: u8,
-}
-#[derive(Deserialize)]
-pub struct WorldGeneratorConfigStructure {
-    pub exclusion_zone: u16,
-    pub rooms: HashMap<String, WorldGeneratorConfigStructureRoom>,
-}
-#[derive(Deserialize)]
-pub struct WorldGeneratorConfigStructureRoom {
-    pub prefab: PrefabKey,
-}
-#[derive(Deserialize)]
-pub struct WorldGeneratorConfig {
-    pub structures: Vec<WorldGeneratorConfigStructure>,
-    pub region_structure_spawn_attempts: u32,
-}
-pub struct WorldGenerator {
-    pub seed: u64,
-    pub config: WorldGeneratorConfig,
-    pub chunk_column_cache: moka::sync::Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
-    pub region_cache: moka::sync::Cache<(i16, i16), Arc<RegionGeneration>>,
-}
-impl WorldGenerator {
-    pub fn new(config: WorldGeneratorConfig, seed: u64) -> WorldGenerator {
-        WorldGenerator {
-            seed,
-            config,
-            chunk_column_cache: moka::sync::Cache::new(1024),
-            region_cache: moka::sync::Cache::new(64),
+    pub fn remove_block_component<C>(&self, position: BlockPos) -> Result<(), ()>
+    where
+        ChunkBlockComponents: ComponentStorageAccess<C>,
+    {
+    }
+    pub fn get_or_create_block_component<'a, C>(
+        &'a self,
+        position: BlockPos,
+        init: impl FnOnce() -> C,
+    ) -> Result<WorldAccessRef<'a, C, BlockPos>, ()>
+    where
+        ChunkBlockComponents: ComponentStorageAccess<C>,
+    {
+    }
+    pub fn sync_block_component<C>(&self, position: BlockPos) -> Result<(), ()>
+    where
+        ChunkBlockComponents: ComponentStorageAccess<C>,
+        C: BlockComponentUpdater,
+    {
+        let Some(component) = self.get_block_component(position) else {
+            return Err(());
+        };
+        let Some(update) = (*component).client_update() else {
+            return Ok(());
+        };
+        let (chunk, offset) = position.to_chunk_pos_offset();
+        self.send_viewers(
+            chunk,
+            NetworkMessageS2C::UpdateBlockComponents {
+                chunk,
+                offset,
+                update,
+            },
+        );
+        Ok(())
+    }
+    pub fn schedule_event(&self, chunk: ChunkPos, event: WorldEvent) -> Result<(), ()> {
+        match self.grid[self.get_grid_index(chunk)?] {
+            Some(chunk) => {
+                chunk.block_events.borrow_mut().push_front(event);
+                Ok(())
+            }
+            None => Err(()),
         }
     }
-    pub fn get_region_generation(&self, region_x: i16, region_z: i16) -> Arc<RegionGeneration> {
-        self.region_cache.get_with((region_x, region_z), || {
-            let structure_blockers =
-                ChunkColumnGeneration::NEIGHBOR_CHUNK_BLOCKERS.map(|(offset_x, offset_z)| {
-                    RegionGeneration::generate_structure_list(
-                        region_x + offset_x as i16,
-                        region_z + offset_z as i16,
-                        self,
-                    )
-                });
-            let mut region = RegionGeneration {
-                x: region_x,
-                z: region_z,
-                structures: RegionGeneration::generate_structure_list(region_x, region_z, self)
-                    .into_iter()
-                    .filter(|structure| {
-                        !structure_blockers.iter().any(|blocker| {
-                            blocker.iter().any(|blocker| {
-                                let distance = (structure.x - blocker.x).pow(2)
-                                    + (structure.z - blocker.z).pow(2);
-                                distance
-                                    < (structure.exclusion_zone + blocker.exclusion_zone).pow(2)
-                                        as i32
-                            })
-                        })
-                    })
-                    .collect(),
-                structure_grid: [[None; RegionGeneration::GRID_SIZE]; RegionGeneration::GRID_SIZE],
-                structure_grid_prefabs: Vec::new(),
-                roads: [[0; RegionGeneration::REGION_CHUNK_SIZE];
-                    RegionGeneration::REGION_CHUNK_SIZE],
-            };
-
-            Arc::new(region)
-        })
+    pub fn get_event_queue_length(&self) -> usize {
+        self.grid[WorldAccess::GRID_CENTER]
+            .as_ref()
+            .unwrap()
+            .block_events
+            .borrow()
+            .len()
     }
-    pub fn get_column_generation(&self, chunk_x: i16, chunk_z: i16) -> Arc<ChunkColumnGeneration> {
-        self.chunk_column_cache.get_with((chunk_x, chunk_z), || {
-            let height_noise = Perlin::new(self.seed as u32);
-            let density_noise = Perlin::new(self.seed as u32 ^ 583279234);
-            let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
-            let forest = BiomeKey::id("forest").unwrap();
-            let mut biome_map = [[forest; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
-            let mountain_spline = Spline::from_vec(vec![
-                splines::Key::new(-1., 60., Interpolation::Linear),
-                splines::Key::new(0., 80., Interpolation::Linear),
-                splines::Key::new(0.5, 100., Interpolation::Cosine),
-                splines::Key::new(1., 200., Interpolation::Linear),
-            ]);
-            let small_spline = Spline::from_vec(vec![
-                splines::Key::new(-1., -3., Interpolation::Linear),
-                splines::Key::new(1., 3., Interpolation::Linear),
-            ]);
-            for z in 0..CHUNK_SIZE {
-                for x in 0..CHUNK_SIZE {
-                    let block_x = x as i32 + chunk_x as i32 * CHUNK_SIZE as i32;
-                    let block_z = z as i32 + chunk_z as i32 * CHUNK_SIZE as i32;
-
-                    let mountain_height = height_noise
-                        .get([block_x as f64 / 500., block_z as f64 / 500.])
-                        .clamp(-0.99, 0.99);
-
-                    let small_noise = height_noise
-                        .get([block_x as f64 / 30., block_z as f64 / 30.])
-                        .clamp(-0.99, 0.99);
-                    let height = (mountain_spline.sample(mountain_height).unwrap()
-                        + small_spline.sample(small_noise).unwrap());
-                    height_map[x as usize][z as usize] = height as u16;
-                    //biome_map[x as usize][z as usize] = biome;
+    pub fn pop_event(&self) -> Option<WorldEvent> {
+        self.grid[WorldAccess::GRID_CENTER]
+            .as_ref()
+            .unwrap()
+            .block_events
+            .borrow_mut()
+            .pop_back()
+    }
+    pub fn send(&self, user: UserIndex, message: NetworkMessageS2C) {
+        self.message_queue
+            .send_message(std::iter::once(user), message);
+    }
+    pub fn send_viewers(&self, chunk: ChunkPos, message: NetworkMessageS2C) {
+        if let Some(chunk) = self.get_grid_index(chunk) {
+            if let Some(chunk) = self.grid[chunk] {
+                self.message_queue
+                    .send_message(chunk.viewers.iter(), message);
+            }
+        }
+    }
+    pub fn send_self_viewers(&self, message: NetworkMessageS2C) {
+        self.send_viewers(self.center_chunk, message);
+    }
+    pub fn get_entity<'a>(&'a self, uuid: Uuid) -> Option<WorldAccessRef<'a, Entity, Uuid>> {
+        if self.entity_locks.borrow().contains(&uuid) {
+            panic!("attempted reborrow");
+        }
+        if self.entities_removed.borrow().contains(&uuid) {
+            return None;
+        }
+        if let Some(entity) = self.entities_added.borrow().get(&uuid) {
+            self.entity_locks.borrow_mut().push(uuid);
+            return Some(WorldAccessRef {
+                value: unsafe { NonNull::new_unchecked(entity.get()) },
+                borrow: &self.entity_locks,
+                lock_key: uuid,
+                _marker: PhantomData,
+            });
+        }
+        for cell in &self.grid {
+            if let Some(cell) = cell {
+                if let Some(entity) = cell.entities.get(&uuid) {
+                    self.entity_locks.borrow_mut().push(uuid);
+                    return Some(WorldAccessRef {
+                        value: unsafe { NonNull::new_unchecked(entity.get()) },
+                        borrow: &self.entity_locks,
+                        lock_key: uuid,
+                        _marker: PhantomData,
+                    });
                 }
             }
-            let hole_spline = Spline::from_vec(vec![
-                splines::Key::new(100., 0., Interpolation::Linear),
-                splines::Key::new(120., 0.8, Interpolation::Linear),
-                splines::Key::new(200., 0., Interpolation::Linear),
-            ]);
-            //todo: this is probably broken between runs
-            let unique_biomes = vec![forest];
-            use rand::SeedableRng;
-            let mut rng =
-                StdRng::from_seed(Seeder::from((self.seed as u32, chunk_x, chunk_z)).make_seed());
-            let mut chunk_column_generation = ChunkColumnGeneration {
-                x: chunk_x,
-                z: chunk_z,
-                biomes: biome_map,
-                height: height_map,
-                unique_biomes,
-                decorations: Vec::new(),
+        }
+        None
+    }
+    pub fn iter_entities<'a>(
+        &'a self,
+        exclude: &[Uuid],
+    ) -> impl Iterator<Item = WorldAccessRef<'a, Entity, Uuid>> {
+        self.grid
+            .as_ref()
+            .iter()
+            .filter_map(|chunk| chunk.map(|chunk| chunk.entities.keys()))
+            .flatten()
+            .filter(|uuid| !exclude.contains(*uuid))
+            .filter_map(|uuid| self.get_entity(*uuid))
+    }
+    pub fn spawn_entity<'a>(
+        &'a self,
+        entity: Entity,
+    ) -> Result<WorldAccessRef<'a, Entity, Uuid>, ()> {
+        if self.grid[self
+            .get_grid_index(entity.position.to_chunk_pos())
+            .ok_or(())?]
+        .is_none()
+        {
+            return Err(());
+        }
+        let uuid = entity.uuid;
+        self.entities_added
+            .borrow_mut()
+            .insert(entity.uuid, Box::new(UnsafeCell::new(entity)));
+        Ok(self.get_entity(uuid).unwrap())
+    }
+    pub fn drop_items(
+        &self,
+        items: impl Iterator<Item = ItemStack>,
+        position: Pos,
+    ) -> Result<(), ()> {
+        let item_entity_key = EntityKey::id("item").unwrap();
+        for item in items {
+            let mut item_entity = Entity::new(item_entity_key, position);
+            item_entity.state.character_controller.velocity = Pos {
+                x: rand::random::<f32>() * 2. - 1.,
+                y: rand::random::<f32>(),
+                z: rand::random::<f32>() * 2. - 1.,
             };
-            for biome in &chunk_column_generation.unique_biomes {
-                for decorator in &biome.data().decorators {
-                    for i in 0..decorator.count {
-                        if !rng.random_bool(decorator.chance as f64) {
-                            continue;
-                        }
-                        for _ in 0..10 {
-                            let rotation = rng.random_range(0..4) as u8;
-                            let offset_x = rng.random_range(0..CHUNK_SIZE) as u8;
-                            let offset_z = rng.random_range(0..CHUNK_SIZE) as u8;
-                            if biome_map[offset_x as usize][offset_z as usize] != *biome {
-                                continue;
-                            }
-                            if !chunk_column_generation.is_blocked(
-                                offset_x as i32 + chunk_x as i32 * CHUNK_SIZE as i32,
-                                offset_z as i32 + chunk_z as i32 * CHUNK_SIZE as i32,
-                                decorator.exclusion_zone,
-                            ) {
-                                chunk_column_generation
-                                    .decorations
-                                    .push(ChunkColumnDecoration {
-                                        key: decorator.prefab,
-                                        x: offset_x,
-                                        z: offset_z,
-                                        exclusion_zone: decorator.exclusion_zone,
-                                        rotation,
-                                    });
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            Arc::new(chunk_column_generation)
-        })
+            item_entity.inventory.items[0] = Some(item);
+            let _ = self.spawn_entity(item_entity);
+        }
+        Ok(())
+    }
+    pub fn remove_entity(&self, uuid: Uuid) -> Result<(), ()> {
+        if self.get_entity(uuid).is_none() {
+            return Err(());
+        }
+        self.entities_removed.borrow_mut().push(uuid);
+        Ok(())
+    }
+}
+impl Drop for WorldAccess {
+    fn drop(&mut self) {
+        for (id, entity) in self.entities_added.borrow_mut().extract_if(.., |_, _| true) {
+            let entity = entity.into_inner();
+            let chunk = entity.position.to_chunk_pos();
+            let chunk = self.get_grid_index(chuk).unwrap();
+            assert!(
+                self.grid[chunk]
+                    .as_mut()
+                    .unwrap()
+                    .insert(id, *entity)
+                    .is_none()
+            );
+        }
+        for entity in self.entities_removed.drain(..) {
+            let chunk = self.get_entity(entity).unwrap().position.to_chunk_pos();
+            let chunk = entity.position.to_chunk_pos();
+            let chunk = self.get_grid_index(chunk).unwrap();
+            assert!(self.grid[chunk].as_mut().unwrap().remove(&entity).is_some());
+        }
+    }
+}
+
+pub struct WorldAccessRef<'b, T: 'b, L: PartialEq> {
+    //noalias
+    value: NonNull<T>,
+    borrow: &RefCell<Vec<L>>,
+    lock_key: L,
+    _marker: PhantomData<&'b mut T>,
+}
+impl<T, L: PartialEq> Drop for WorldAccessRef<T, L> {
+    fn drop(&mut self) {
+        let mut locks = self.borrow.borrow_mut();
+        locks.remove(
+            locks
+                .iter()
+                .position(|value| value == self.lock_key)
+                .unwrap(),
+        );
+    }
+}
+impl<T> std::ops::Deref for WorldAccessRef<'_, T, _> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.value.as_ref() }
+    }
+}
+impl<T> std::ops::DerefMut for WorldAccessRef<'_, T, _> {
+    fn deref_mut(&self) -> &mut Self::Target {
+        unsafe { self.value.as_mut() }
     }
 }

@@ -81,6 +81,9 @@ impl<T> BlockComponentStorage<T> {
             .iter_mut()
             .map(|(offset, data)| (*offset, data))
     }
+    pub fn is_empty(&self) -> bool {
+        self.components.is_empty()
+    }
 }
 type TreeIndex = Option<NonZero<u16>>;
 #[derive(Clone, Default)]
@@ -191,17 +194,21 @@ macro_rules! create_client_chunk_block_components{
         pub struct ClientChunkBlockComponents{
             $(pub $id: BlockComponentStorage<$type>,)*
         }
+        $(
+            impl ComponentTypeAccess<$type> for ClientChunkBlockComponents{
+                type Item = BlockComponentStorage<$type>;
+                fn get_component_type(&self) -> &Self::Item{
+                    &self.$id
+                }
+                fn get_component_type_mut(&mut self) -> &mut Self::Item{
+                    &mut self.$id
+                }
+            }
+        )*
         #[derive(Serialize, Deserialize)]
         pub enum ClientBlockComponentUpdate{
             $($type(Option<$type>),)*
         }
-        $(
-            impl From<Option<$type>> for ClientBlockComponentUpdate{
-                fn from(value: Option<$type>) -> ClientBlockComponentUpdate{
-                    ClientBlockComponentUpdate::$type(value)
-                }
-            }
-        )*
         impl ClientBlockComponentUpdate{
             pub fn update(self, offset: ChunkOffset, components: &mut ClientChunkBlockComponents){
                 match self{
@@ -222,6 +229,12 @@ macro_rules! create_client_chunk_block_components{
 }
 
 create_client_chunk_block_components!(ClientBlockDamage, damage; ClientBlockPlants, plant; ClientBlockMachine, machine);
+
+pub trait ComponentTypeAccess<T> {
+    type Item;
+    fn get_component_type(&self) -> &Self::Item;
+    fn get_component_type_mut(&mut self) -> &mut Self::Item;
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockDamage {
