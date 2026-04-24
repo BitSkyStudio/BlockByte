@@ -700,11 +700,11 @@ pub struct BlockMachineData {
     pub model_animations: Vec<String>,
 }
 pub enum MachineInstrution {
-    Next,
+    Yield,
     Sleep {
         time: f32,
     },
-    Suspend,
+    Block,
     TranferItem {
         self_view: usize,
         other: BlockPos,
@@ -712,14 +712,13 @@ pub enum MachineInstrution {
         pull: bool,
         success: ScriptLabel,
     },
+    AddWakeupObserver {
+        other: BlockPos,
+    },
     ReadSignal {
         face: Face,
         register: RegisterId,
         success: ScriptLabel,
-    },
-    ReadSignalBlock {
-        face: Face,
-        register: RegisterId,
     },
     ReadLogic {
         face: Face,
@@ -729,7 +728,7 @@ pub enum MachineInstrution {
         face: Face,
         value: RegisterOrImmediate,
     },
-    WriteValue {
+    WriteLogic {
         face: Face,
         value: RegisterOrImmediate,
     },
@@ -773,13 +772,13 @@ impl ExternalScriptByteCode for MachineInstrution {
             })
         };
         Ok(match opcode {
-            "next" => MachineInstrution::Next,
+            "yield" => MachineInstrution::Yield,
             "sleep" => {
                 expect_argument_count(parse_context.current_line_num, arguments, 2)?;
                 let sleep_time = arguments[0].parse().unwrap();
                 MachineInstrution::Sleep { time: sleep_time }
             }
-            "suspend" => MachineInstrution::Suspend,
+            "block" => MachineInstrution::Block,
             "transfer_pull" | "transfer_push" => {
                 expect_argument_count(parse_context.current_line_num, arguments, 5)?;
                 let x = arguments[1].parse().unwrap();

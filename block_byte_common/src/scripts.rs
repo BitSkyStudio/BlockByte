@@ -289,6 +289,9 @@ impl ScriptState {
         if self.registers.len() != script.named_registers.len() {
             panic!("mismatched script variables");
         }
+        if script.instructions.is_empty() {
+            return RunResult::Suspended;
+        }
         for _ in 0..max_steps {
             self.pc %= script.instructions.len();
             let previous_pc = self.pc;

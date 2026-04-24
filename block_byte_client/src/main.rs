@@ -2194,17 +2194,10 @@ impl ClientGame {
         let dt = SERVER_DT;
         self.stamina += dt * 10.;
         for (_, chunk) in &mut self.chunks {
-            let mut damage_to_clear = Vec::new();
             let blocks = chunk.mesh_build_data.blocks.read();
             for (offset, health) in chunk.components.damage.iter_mut() {
                 let data = blocks.get(offset.index()).unwrap().block.data();
                 health.damage -= dt * data.health.health_regen;
-                if health.damage <= 0. {
-                    damage_to_clear.push(offset);
-                }
-            }
-            for block in damage_to_clear {
-                chunk.components.damage.remove(block);
             }
         }
     }
