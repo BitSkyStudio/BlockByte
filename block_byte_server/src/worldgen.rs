@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
-    num::NonZeroU32,
+    cell::{RefCell, UnsafeCell},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    num::{NonZero, NonZeroU32},
     sync::Arc,
 };
 
@@ -9,13 +10,14 @@ use block_byte_common::{
     registry::{BiomeKey, BlockEntry, BlockPalette, BlockRotation, KeyGroup, PrefabKey, air_block},
 };
 use moka::sync::Cache;
-use noise::Perlin;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use noise::{NoiseFn, Perlin};
+use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use rand_seeder::Seeder;
+use serde::Deserialize;
 use smallvec::SmallVec;
-use splines::Interpolation;
+use splines::{Interpolation, Spline};
 
-use crate::world::{BlockPlants, ChunkBlockComponents};
+use crate::world::{BlockPlants, Chunk, ChunkBlockComponents, WorldAccessCell};
 
 pub struct RegionGeneration {
     pub x: i16,
@@ -373,11 +375,11 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                         })
                         .collect();
                     if !spawned_plants.is_empty() {
-                        components.plant.write().set(
+                        components.plant.set(
                             offset,
-                            BlockPlants {
+                            WorldAccessCell::new(BlockPlants {
                                 plants: spawned_plants,
-                            },
+                            }),
                         );
                     }
                 } else if y_pos < height - 3 {
@@ -445,10 +447,10 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
     //blocks.set(ChunkOffset::new(16, 16, 16).index(), &grass);
     Chunk {
         position,
-        blocks: blocks,
+        blocks: RefCell::new(blocks),
         viewers: HashSet::new(),
-        block_events: Vec::new(),
+        events: RefCell::new(VecDeque::new()),
         components,
-        entities: Vec::new(),
+        entities: BTreeMap::new(),
     }
 }

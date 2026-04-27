@@ -32,3 +32,4 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 pathfinding = "4.15.0"
 ctrlc = "3.5.2"
+ahash = "0.8.12"

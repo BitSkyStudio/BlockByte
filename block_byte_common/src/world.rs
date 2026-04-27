@@ -165,17 +165,14 @@ impl BlockComponentTree {
         (first, second, third)
     }
 }
-impl<T, U> Into<BlockComponentStorage<U>> for &BlockComponentStorage<T>
-where
-    for<'a> &'a T: Into<U>,
-{
-    fn into(self) -> BlockComponentStorage<U> {
+impl<T> BlockComponentStorage<T> {
+    pub fn map<U>(&self, mut mapper: impl FnMut(&T) -> U) -> BlockComponentStorage<U> {
         BlockComponentStorage {
             tree: self.tree.clone(),
             components: self
                 .components
                 .iter()
-                .map(|(offset, data)| (*offset, data.into()))
+                .map(|(offset, data)| (*offset, mapper(data)))
                 .collect(),
         }
     }

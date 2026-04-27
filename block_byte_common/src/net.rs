@@ -70,6 +70,7 @@ pub enum NetworkMessageC2S {
         modify_mode: PropertyModifyMode,
     },
 }
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum PropertyModifyMode {
     Add,
     Set,

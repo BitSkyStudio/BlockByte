@@ -198,7 +198,7 @@ macro_rules! create_damage_types {
         }
         fn default_damage_vulnerability() -> f32{1.}
         #[allow(non_snake_case)]
-        #[derive(Default, Deserialize)]
+        #[derive(Default, Serialize, Deserialize)]
         pub struct DamageTable{
             $(
                 #[serde(default)]
@@ -216,6 +216,13 @@ macro_rules! create_damage_types {
             fn index(&self, damage_type: DamageType) -> &Self::Output {
                 match damage_type {
                     $(DamageType::$id => &self.$id,)*
+                }
+            }
+        }
+        impl std::ops::IndexMut<DamageType> for DamageTable {
+            fn index_mut(&mut self, damage_type: DamageType) -> &mut Self::Output {
+                match damage_type {
+                    $(DamageType::$id => &mut self.$id,)*
                 }
             }
         }

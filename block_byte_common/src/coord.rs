@@ -14,7 +14,7 @@ use crate::{TexCoords, registry::BlockRotation};
 pub const CHUNK_SIZE_BITS: u8 = 5;
 pub const CHUNK_SIZE: usize = 32;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Vec3<T: Copy> {
     pub x: T,
     pub y: T,

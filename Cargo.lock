@@ -251,6 +251,7 @@ dependencies = [
 name = "block_byte_server"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "block_byte_common",
  "ctrlc",
  "image",

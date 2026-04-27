@@ -1,5 +1,6 @@
 use std::{
-    collections::{HashMap, HashSet},
+    cell::{RefCell, UnsafeCell},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     env::args,
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
@@ -46,9 +47,10 @@ use crate::{
     inventory::{Inventory, ItemDurability, ItemQuality, ItemStack, generate_loot_table},
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
-        BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity, EntityEvent,
-        EntityIndex, WorldEvent, WorldGenerator,
+        BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity, WorldAccess,
+        WorldAccessCell, WorldEvent, tick_chunk,
     },
+    worldgen::{WorldGenerator, generate_chunk},
 };
 
 mod debug;
@@ -150,11 +152,9 @@ fn main() {
     let world_generator = WorldGenerator::new(world_generator_config, 1);
     let mut server = Server {
         ticks_passed: 0,
-        chunks: HashMap::new(),
+        chunks: ahash::HashMap::default(),
         users: SlotMap::with_key(),
         message_queue: Default::default(),
-        entities: SlotMap::with_key(),
-        entity_add_queue: Mutex::new(Vec::new()),
     };
     let start_time = Instant::now();
     let mut net_users = HashMap::new();
@@ -192,12 +192,12 @@ fn main() {
         }
         for (user, spawn_position) in player_spawns.drain(..) {
             let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
-            let full_view = entity.inventory.get_mut().full_view();
-            entity.inventory.get_mut().add_item(
+            let full_view = entity.inventory.full_view();
+            entity.inventory.add_item(
                 &full_view,
                 ItemStack::new(ItemKey::id("arrow").unwrap(), 20),
             );
-            entity.inventory.get_mut().add_item(
+            entity.inventory.add_item(
                 &full_view,
                 ItemStack::new(ItemKey::id("rock.limestone.stone").unwrap(), 80),
             );
@@ -205,21 +205,22 @@ fn main() {
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
-            let entity_index = server.entities.insert(entity);
             let mut chunk = server.chunks.get_mut(&chunk_position).unwrap();
-            chunk.entities.push(entity_index);
+            chunk
+                .entities
+                .insert(entity.uuid, WorldAccessCell::new(entity));
             server
                 .message_queue
                 .send_message(chunk.viewers.iter(), add_message);
-            server.users.get_mut(user).unwrap().entity = Some(entity_index);
-            server.send_message(
-                user,
+            server.users.get_mut(user).unwrap().entity = Some(player_uuid);
+            server.message_queue.send_message(
+                std::iter::once(user),
                 NetworkMessageS2C::SetPlayerEntity {
                     uuid: Some(player_uuid),
                 },
             );
-            server.send_message(
-                user,
+            server.message_queue.send_message(
+                std::iter::once(user),
                 NetworkMessageS2C::PlayerAbilities {
                     abilities: PlayerAbilities {
                         move_mode: MoveMode::Normal,
@@ -228,8 +229,8 @@ fn main() {
                     },
                 },
             );
-            server.send_message(
-                user,
+            server.message_queue.send_message(
+                std::iter::once(user),
                 NetworkMessageS2C::UpdateResearch {
                     research: HashSet::new(), //todo: load
                 },
@@ -248,12 +249,14 @@ fn main() {
                     let user = server.users.insert(User {
                         client_id,
                         view_position: Mutex::new(spawn_position.to_chunk_pos()),
+                        last_view_position: spawn_position.to_chunk_pos(),
                         entity: None,
                         teleport_id: AtomicU32::new(1),
                         screen: Mutex::new(None),
+                        message_queue: Mutex::new(VecDeque::new()),
                     });
-                    server.send_message(
-                        user,
+                    server.message_queue.send_message(
+                        std::iter::once(user),
                         NetworkMessageS2C::TeleportPlayer {
                             position: spawn_position,
                             teleport_id: 1,
@@ -271,29 +274,31 @@ fn main() {
                     println!("Client {client_id} disconnected: {reason}");
                     let user_index = net_users.remove(&client_id).unwrap();
                     let user = server.users.remove(user_index).unwrap();
-                    let view_position = *user.view_position.lock();
-                    for chunk_position in User::loading_area_for_view_position(view_position) {
+                    for chunk_position in
+                        User::loading_area_for_view_position(user.last_view_position)
+                    {
                         chunk_viewing_manager.remove_viewer(
                             chunk_position,
                             user_index,
                             &mut server,
                         );
                     }
-                    if let Some(entity) = user.entity {
-                        server
-                            .entities
-                            .get(entity)
-                            .unwrap()
-                            .schedule_event(EntityEvent::Remove);
-                    }
                 }
+            }
+        }
+        for (user_id, user) in &server.users {
+            while let Some(message) = network_server.receive_message(user.client_id, 0) {
+                let message: NetworkMessageC2S = serde_cbor::from_slice(&message).unwrap();
+                user.message_queue.lock().push_front(message);
             }
         }
         let mut view_chunk_chunk_changed_users: HashMap<UserIndex, (ChunkPos, ChunkPos)> =
             HashMap::new();
-        for (user_id, user) in &server.users {
-            while let Some(message) = network_server.receive_message(user.client_id, 0) {
-                let message: NetworkMessageC2S = serde_cbor::from_slice(&message).unwrap();
+        for (id, user) in &mut server.users {
+            let view_position = *user.view_position.lock();
+            if view_position != user.last_view_position {
+                view_chunk_chunk_changed_users.insert(id, (user.last_view_position, view_position));
+                user.last_view_position = view_position;
             }
         }
         for (user, (previous_position, new_position)) in view_chunk_chunk_changed_users {
@@ -338,12 +343,12 @@ fn main() {
                         z: args[8],
                     };
                     let mut blocks = HashMap::new();
-                    for position in AABB::new(from, to) {
+                    /*for position in AABB::new(from, to) {
                         let block = server.get_block(position).unwrap();
                         if block.block != air_block() {
                             blocks.insert(position - center, block);
                         }
-                    }
+                    }*/
                     println!(
                         "{}",
                         ron::ser::to_string_pretty(
@@ -362,7 +367,7 @@ fn main() {
             }
         }
 
-        for (user_index, user) in &server.users {
+        /*for (user_index, user) in &server.users {
             {
                 if let Some(entity) = user
                     .entity
@@ -441,91 +446,18 @@ fn main() {
                     }
                 }
             }
+        }*/
+        let chunks: Vec<_> = server.chunks.keys().cloned().collect();
+        for center in chunks {
+            let mut world_access = WorldAccess::lock(
+                center,
+                &mut server.chunks,
+                server.ticks_passed,
+                &server.users,
+                &server.message_queue,
+            );
+            tick_chunk(&world_access);
         }
-        server.chunks.par_iter().for_each(|(_, chunk)| {
-            chunk.tick(&server);
-        });
-
-        for entity in server.entity_add_queue.get_mut().drain(..) {
-            let add_message = entity.create_add_message();
-            let chunk_position = entity.position.to_chunk_pos();
-            let entity_index = server.entities.insert(entity);
-            let mut chunk = server.chunks.get_mut(&chunk_position).unwrap();
-            chunk.entities.push(entity_index);
-            server
-                .message_queue
-                .send_message(chunk.viewers.iter(), add_message);
-        }
-
-        server.entities.retain(|index, entity| {
-            if entity.state.get_mut().removed {
-                {
-                    let mut chunk_entities = &mut server
-                        .chunks
-                        .get_mut(&entity.position.to_chunk_pos())
-                        .unwrap()
-                        .entities;
-                    chunk_entities
-                        .remove(chunk_entities.iter().position(|ce| *ce == index).unwrap());
-                }
-                server.message_queue.send_message(
-                    server
-                        .chunks
-                        .get(&entity.position.to_chunk_pos())
-                        .unwrap()
-                        .viewers
-                        .iter(),
-                    entity.create_remove_message(),
-                );
-                return false;
-            }
-            if let Some(teleport) = entity.state.get_mut().teleport.take() {
-                if server.chunks.contains_key(&teleport.to_chunk_pos()) {
-                    if entity.position.to_chunk_pos() != teleport.to_chunk_pos() {
-                        let [previous_chunk, new_chunk] = server
-                            .chunks
-                            .get_disjoint_mut([
-                                &entity.position.to_chunk_pos(),
-                                &teleport.to_chunk_pos(),
-                            ])
-                            .map(|v| v.unwrap());
-                        previous_chunk.entities.remove(
-                            previous_chunk
-                                .entities
-                                .iter()
-                                .position(|ce| *ce == index)
-                                .unwrap(),
-                        );
-                        new_chunk.entities.push(index);
-                        entity.position = teleport;
-                        server.message_queue.send_message(
-                            previous_chunk.viewers.difference(&new_chunk.viewers),
-                            entity.create_remove_message(),
-                        );
-                        server.message_queue.send_message(
-                            new_chunk.viewers.difference(&previous_chunk.viewers),
-                            entity.create_add_message(),
-                        );
-                        server.message_queue.send_message(
-                            new_chunk.viewers.intersection(&previous_chunk.viewers),
-                            entity.create_move_message(),
-                        );
-                    } else {
-                        entity.position = teleport;
-                        server.message_queue.send_message(
-                            server
-                                .chunks
-                                .get(&teleport.to_chunk_pos())
-                                .unwrap()
-                                .viewers
-                                .iter(),
-                            entity.create_move_message(),
-                        );
-                    }
-                }
-            }
-            true
-        });
 
         chunk_viewing_manager.manage(&mut server, &database, &world_generator);
 
@@ -602,14 +534,12 @@ impl MessageQueue {
 }
 pub struct Server {
     pub ticks_passed: u64,
-    pub chunks: HashMap<ChunkPos, Chunk>,
+    pub chunks: ahash::HashMap<ChunkPos, Chunk>,
     pub users: SlotMap<UserIndex, User>,
     pub message_queue: MessageQueue,
-    pub entities: SlotMap<EntityIndex, Entity>,
-    entity_add_queue: Mutex<Vec<Entity>>,
 }
 impl Server {
-    pub fn hitbox_block_collides(&self, hitbox: AABB<f32>) -> bool {
+    /*pub fn hitbox_block_collides(&self, hitbox: AABB<f32>) -> bool {
         for block in hitbox.to_block() {
             match self.get_block(block) {
                 Some(block_entry) => {
@@ -629,7 +559,7 @@ impl Server {
             }
         }
         false
-    }
+    }*/
 }
 
 pub struct ChunkViewingManager {
@@ -651,16 +581,18 @@ impl ChunkViewingManager {
             chunk.viewers.insert(user);
             let message = NetworkMessageS2C::LoadChunk {
                 position,
-                blocks: chunk.blocks.read().clone(),
+                blocks: chunk.blocks.borrow().clone(),
                 components: chunk.components.client(),
             };
-            for entity in &chunk.entities {
-                let add_message = server.entities.get(*entity).unwrap().create_add_message();
+            for (_, entity) in &mut chunk.entities {
+                let add_message = entity.get_mut().create_add_message();
                 server
                     .message_queue
                     .send_message(std::iter::once(user), add_message);
             }
-            server.send_message(user, message);
+            server
+                .message_queue
+                .send_message(std::iter::once(user), message);
         } else {
             self.load.entry(position).or_default().push(user);
         }
@@ -671,7 +603,10 @@ impl ChunkViewingManager {
         if chunk.viewers.len() == 0 {
             self.unload.insert(position);
         }
-        server.send_message(user, NetworkMessageS2C::UnloadChunk { position });
+        server.message_queue.send_message(
+            std::iter::once(user),
+            NetworkMessageS2C::UnloadChunk { position },
+        );
     }
     pub fn manage(
         self,
@@ -690,16 +625,13 @@ impl ChunkViewingManager {
                     position,
                     ChunkSaveData {
                         blocks: chunk.blocks.into_inner(),
-                        block_events: chunk.block_events.into_inner(),
+                        block_events: chunk.events.into_inner(),
                         components: chunk.components,
                         entities: chunk
                             .entities
                             .into_iter()
-                            .filter_map(|entity| {
-                                let mut entity = server.entities.remove(entity)?;
-                                if entity.state.get_mut().removed {
-                                    return None;
-                                }
+                            .filter_map(|(_, entity)| {
+                                let entity = entity.into_inner();
                                 if entity.key == Key::id("player").unwrap() {
                                     return None;
                                 }
@@ -763,15 +695,15 @@ impl ChunkViewingManager {
                         Some(data) => (
                             Chunk {
                                 blocks: RefCell::new(data.blocks),
-                                block_events: RefCell::new(data.block_events),
+                                events: RefCell::new(data.block_events),
                                 components: data.components,
                                 position,
                                 viewers: HashSet::new(),
-                                entities: RefCell::new(Vec::new()),
+                                entities: BTreeMap::new(),
                             },
                             data.entities,
                         ),
-                        None => (Chunk::generate(position, world_generator), Vec::new()),
+                        None => (generate_chunk(position, world_generator), Vec::new()),
                     };
                     (
                         position,
@@ -788,8 +720,12 @@ impl ChunkViewingManager {
             {
                 chunk.viewers = users.iter().cloned().collect();
                 for entity in entities {
-                    server.send_message_multiple(users.iter(), entity.create_add_message());
-                    chunk.entities.push(server.entities.insert(entity));
+                    server
+                        .message_queue
+                        .send_message(users.iter(), entity.create_add_message());
+                    chunk
+                        .entities
+                        .insert(entity.uuid, WorldAccessCell::new(entity));
                 }
                 for user in &users {
                     server
@@ -808,9 +744,11 @@ new_key_type! {pub struct UserIndex;}
 pub struct User {
     client_id: ClientId,
     view_position: Mutex<ChunkPos>,
-    entity: Option<EntityIndex>,
+    last_view_position: ChunkPos,
+    entity: Option<Uuid>,
     teleport_id: AtomicU32,
     screen: Mutex<Option<UserScreen>>,
+    message_queue: Mutex<VecDeque<NetworkMessageC2S>>,
 }
 pub struct UserScreen {
     pub screen: UIScreenKey,
@@ -819,7 +757,7 @@ pub struct UserScreen {
     pub previous_state: Vec<Option<ItemStack>>,
 }
 impl UserScreen {
-    pub fn get_items(
+    /*pub fn get_items(
         &self,
         entities: &mut SlotMap<EntityIndex, Entity>,
         chunks: &mut HashMap<ChunkPos, Chunk>,
@@ -832,7 +770,7 @@ impl UserScreen {
             }
         }
         Ok(items)
-    }
+    }*/
 }
 pub enum UserScreenState {
     Open,
@@ -841,48 +779,11 @@ pub enum UserScreenState {
 }
 #[derive(PartialEq, Clone, Copy)]
 pub enum InventoryProvider {
-    Entity(EntityIndex),
+    Entity(Uuid),
     Block(BlockPos),
 }
 impl InventoryProvider {
-    pub fn modify_property_button(
-        self,
-        property: &str,
-        value: ScriptValue,
-        chunks: &mut HashMap<ChunkPos, Chunk>,
-    ) {
-        match self {
-            InventoryProvider::Entity(entity) => {}
-            InventoryProvider::Block(block) => {
-                let (chunk, offset) = block.to_chunk_pos_offset();
-                if let Some(chunk) = chunks.get_mut(&chunk) {
-                    let block_data = chunk
-                        .blocks
-                        .get_mut()
-                        .get(offset.index())
-                        .unwrap()
-                        .block
-                        .data();
-                    if let Some(machine) = chunk.components.machine.get_mut().get_mut(offset) {
-                        if let Some(property) = block_data
-                            .machine
-                            .as_ref()
-                            .unwrap()
-                            .script
-                            .named_registers
-                            .iter()
-                            .position(|r| r == property)
-                        {
-                            let mut register =
-                                &mut machine.script_state.get_mut().registers[property];
-                            *register = register.wrapping_add(value);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    pub fn get_inventory<'a>(
+    /*pub fn get_inventory<'a>(
         self,
         entities: &'a mut SlotMap<EntityIndex, Entity>,
         chunks: &'a mut HashMap<ChunkPos, Chunk>,
@@ -905,7 +806,8 @@ impl InventoryProvider {
                 )
             }
         }
-    }
+        unreachable!()
+    }*/
 }
 impl User {
     pub fn set_screen(
