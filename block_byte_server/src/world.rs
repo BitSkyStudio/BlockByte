@@ -88,8 +88,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                     if block_damage.damage >= block_data.health.health {
                         true
                     } else {
-                        drop(block_damage);
-                        world.sync_block_component::<BlockDamage>(block_position);
+                        world.sync_block_component(&block_damage);
                         false
                     }
                 };
@@ -199,8 +198,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                         damage * entity_data.damage_table[damage_type].unwrap_or(1.);
                 }
                 if entity.state.health <= 0. {
-                    drop(entity); //check if necessarry
-                    world.remove_entity(entity_id);
+                    world.remove_entity(entity);
                 }
             }
             WorldEvent::EntityTeleport { entity, position } => todo!(),
@@ -215,9 +213,9 @@ pub fn tick_chunk(world: &WorldAccess) {
             }
         }
     }
-    for mut entity in world.iter_entities(&[], true) {
-        let entity_data = entity.key.data();
-        let mut entity = &mut *entity;
+    for mut entity_ref in world.iter_entities(&[], true) {
+        let entity_data = entity_ref.key.data();
+        let mut entity = &mut *entity_ref;
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
             std::mem::swap(
@@ -263,10 +261,27 @@ pub fn tick_chunk(world: &WorldAccess) {
                             if user.teleport_id.load(Ordering::SeqCst) != teleport_id {
                                 continue;
                             }
-                            *user.view_position.lock() = position.to_chunk_pos();
+
                             entity.state.direction = direction;
                             entity.state.crouching = crouching;
-                            world.teleport_entity(entity, position);
+                            match world.teleport_entity(entity, position) {
+                                Ok(_) => {
+                                    *user.view_position.lock() = position.to_chunk_pos();
+                                }
+                                Err(_) => {
+                                    let teleport_id = user
+                                        .teleport_id
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                        + 1;
+                                    world.send(
+                                        controlling_user,
+                                        NetworkMessageS2C::TeleportPlayer {
+                                            position: entity.position,
+                                            teleport_id,
+                                        },
+                                    );
+                                }
+                            }
                         }
                         NetworkMessageC2S::AttackBlock { position, face } => {
                             let item = &entity.inventory.items[entity.state.hand_slot];
@@ -300,14 +315,10 @@ pub fn tick_chunk(world: &WorldAccess) {
                         } => {
                             let mut item_stack =
                                 &mut entity.inventory.items[entity.state.hand_slot];
-                            println!("place");
-
                             if let Some(item) = &mut item_stack {
                                 match &item.item.data().action {
                                     ItemAction::Ignore => {}
                                     ItemAction::Place(placements) => {
-                                        println!("place2");
-
                                         let Some(place) = placements.get(variant) else {
                                             continue;
                                         };
@@ -319,22 +330,42 @@ pub fn tick_chunk(world: &WorldAccess) {
                                                 continue;
                                             }
                                         }
+                                        let position = position + face.get_block_offset();
+                                        let block = BlockEntry {
+                                            block: place.block,
+                                            color: BlockColor::default(),
+                                            rotation: place
+                                                .block
+                                                .data()
+                                                .rotation
+                                                .from_look_direction(entity.state.direction, face),
+                                        };
+                                        let entity_collider = entity_data
+                                            .hitbox(entity.state.crouching)
+                                            .offset(entity.position);
+                                        if block.colliders(position).any(|block_collider| {
+                                            block_collider.intersects(entity_collider)
+                                        }) {
+                                            continue;
+                                        }
+                                        let mut blocked = false;
+                                        for other_entity in
+                                            world.iter_entities(&[entity.uuid], false)
+                                        {
+                                            let entity_collider = other_entity.get_hitbox();
+                                            if block.colliders(position).any(|block_collider| {
+                                                block_collider.intersects(entity_collider)
+                                            }) {
+                                                blocked = true;
+                                                break;
+                                            }
+                                        }
+                                        if blocked {
+                                            continue;
+                                        }
+
                                         //todo: aabb collision check
-                                        if let Ok(_) = world.place_block(
-                                            position + face.get_block_offset(),
-                                            BlockEntry {
-                                                block: place.block,
-                                                color: BlockColor::default(),
-                                                rotation: place
-                                                    .block
-                                                    .data()
-                                                    .rotation
-                                                    .from_look_direction(
-                                                        entity.state.direction,
-                                                        face,
-                                                    ),
-                                            },
-                                        ) {
+                                        if let Ok(_) = world.place_block(position, block) {
                                             item.count -= place.use_count;
                                         }
                                     }
@@ -438,8 +469,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                         }
                                     }
                                     if !items_present {
-                                        drop(other_entity);
-                                        world.remove_entity(other_entity_uuid).unwrap();
+                                        world.remove_entity(other_entity);
                                     }
                                 }
                             }
@@ -851,10 +881,7 @@ pub fn tick_chunk(world: &WorldAccess) {
         let block_data = block.block.data();
         damage.damage -= block_data.health.health_regen * SERVER_DT;
         if damage.damage <= 0. {
-            drop(damage);
-            world
-                .remove_block_component::<BlockDamage>(block_position)
-                .unwrap();
+            world.remove_block_component(damage);
         }
     }
 }
@@ -1268,11 +1295,16 @@ impl WorldAccess<'_> {
     pub fn break_block(&self, position: BlockPos) -> Result<Vec<ItemStack>, ()> {
         let previous_block = self.replace_block(position, BlockEntry::simple(air_block()))?;
         let block_data = previous_block.block.data();
-        let _ = self.remove_block_component::<BlockDamage>(position);
+        if let Some(damage) = self.get_block_component::<BlockDamage>(position) {
+            self.remove_block_component(damage);
+        }
+
         let mut drops = generate_loot_table(block_data.loot_table.data());
 
-        //todo: harvest
-        let _ = self.remove_block_component::<BlockPlants>(position);
+        if let Some(plant) = self.get_block_component::<BlockPlants>(position) {
+            //todo: harvest
+            self.remove_block_component(plant);
+        }
 
         if let Some(mut machine) = self.get_block_component::<BlockMachine>(position) {
             //todo: this should probably be returned in remove_block_component
@@ -1281,8 +1313,7 @@ impl WorldAccess<'_> {
                     drops.push(item);
                 }
             }
-            drop(machine);
-            self.remove_block_component::<BlockMachine>(position);
+            self.remove_block_component(machine);
         }
         for face in Face::all() {
             let neighbor_position = position + face.get_block_offset();
@@ -1390,16 +1421,14 @@ impl WorldAccess<'_> {
             .filter(|position| !exclude.contains(position))
             .filter_map(|position| self.get_block_component::<C>(position))
     }
-    pub fn remove_block_component<C>(&self, position: BlockPos) -> Result<(), ()>
+    pub fn remove_block_component<C>(&self, component: WorldAccessRef<'_, C, BlockPos>)
     where
         ChunkBlockComponents:
             ComponentTypeAccess<C, Item = BlockComponentStorage<WorldAccessCell<C>>>,
         ChunkBlockComponentsAccess: ComponentTypeAccess<C, Item = WorldAccessComponentStorage<C>>,
         C: BlockComponentUpdater,
     {
-        if self.get_block_component::<C>(position).is_none() {
-            return Err(());
-        }
+        let position = component.lock_key;
         let component_access = self.block_components.get_component_type();
         component_access.added.borrow_mut().remove(&position);
         component_access.removed.borrow_mut().insert(position);
@@ -1414,7 +1443,6 @@ impl WorldAccess<'_> {
                 },
             );
         }
-        Ok(())
     }
     pub fn get_or_create_block_component<'a, C>(
         &'a self,
@@ -1450,19 +1478,17 @@ impl WorldAccess<'_> {
             .insert(position, Box::new(WorldAccessCell::new(component)));
         Ok(self.get_block_component(position).unwrap())
     }
-    pub fn sync_block_component<C>(&self, position: BlockPos) -> Result<(), ()>
+    pub fn sync_block_component<C>(&self, component: &WorldAccessRef<'_, C, BlockPos>)
     where
         ChunkBlockComponents:
             ComponentTypeAccess<C, Item = BlockComponentStorage<WorldAccessCell<C>>>,
         ChunkBlockComponentsAccess: ComponentTypeAccess<C, Item = WorldAccessComponentStorage<C>>,
         C: BlockComponentUpdater,
     {
-        let Some(component) = self.get_block_component(position) else {
-            return Err(());
-        };
         let Some(update) = (*component).client_update() else {
-            return Ok(());
+            return;
         };
+        let position = component.lock_key;
         let (chunk, offset) = position.to_chunk_pos_offset();
         self.send_viewers(
             chunk,
@@ -1472,7 +1498,6 @@ impl WorldAccess<'_> {
                 update,
             },
         );
-        Ok(())
     }
     pub fn schedule_event(&self, chunk: ChunkPos, event: WorldEvent) -> Result<(), ()> {
         match &self.grid[self.get_grid_index(chunk).ok_or(())?] {
@@ -1538,6 +1563,22 @@ impl WorldAccess<'_> {
         if self.grid[chunk].is_none() {
             return Err(());
         }
+        let hitbox = entity
+            .key
+            .data()
+            .hitbox(entity.state.crouching)
+            .offset(new_position);
+        for block_position in hitbox.to_block() {
+            let Some(block) = self.get_block(block_position) else {
+                return Err(());
+            };
+            if block
+                .colliders(block_position)
+                .any(|block_collider| block_collider.intersects(hitbox))
+            {
+                return Err(());
+            }
+        }
         let mut entity_teleports = self.entity_teleports.borrow_mut();
         if !entity_teleports.contains_key(&entity.uuid) {
             entity_teleports.insert(entity.uuid, entity.position.to_chunk_pos());
@@ -1600,16 +1641,14 @@ impl WorldAccess<'_> {
         }
         Ok(())
     }
-    pub fn remove_entity(&self, uuid: Uuid) -> Result<(), ()> {
-        let chunk_position = match self.get_entity(uuid) {
-            Some(entity) => entity.position.to_chunk_pos(),
-            None => return Err(()),
-        };
+    pub fn remove_entity(&self, entity: WorldAccessRef<'_, Entity, Uuid>) {
+        let chunk_position = entity.position.to_chunk_pos();
+        let uuid = entity.uuid;
+
         self.send_viewers(chunk_position, NetworkMessageS2C::RemoveEntity { uuid });
         self.entities_removed.borrow_mut().push(uuid);
         self.entities_added.borrow_mut().remove(&uuid);
         self.entity_teleports.borrow_mut().remove(&uuid);
-        Ok(())
     }
 }
 impl Drop for WorldAccess<'_> {
