@@ -254,6 +254,7 @@ fn main() {
                         teleport_id: AtomicU32::new(1),
                         screen: Mutex::new(None),
                         message_queue: Mutex::new(VecDeque::new()),
+                        hud_sync_items: Mutex::new(Vec::new()),
                     });
                     server.message_queue.send_message(
                         std::iter::once(user),
@@ -538,29 +539,6 @@ pub struct Server {
     pub users: SlotMap<UserIndex, User>,
     pub message_queue: MessageQueue,
 }
-impl Server {
-    /*pub fn hitbox_block_collides(&self, hitbox: AABB<f32>) -> bool {
-        for block in hitbox.to_block() {
-            match self.get_block(block) {
-                Some(block_entry) => {
-                    let block_collider = &block_entry.block.data().collision;
-                    for block_collider in block_collider {
-                        if hitbox.intersects(
-                            block_entry
-                                .rotation
-                                .rotate_aabb(*block_collider)
-                                .offset(block.to_pos()),
-                        ) {
-                            return true;
-                        }
-                    }
-                }
-                None => return true,
-            }
-        }
-        false
-    }*/
-}
 
 pub struct ChunkViewingManager {
     pub load: HashMap<ChunkPos, Vec<UserIndex>>,
@@ -747,6 +725,7 @@ pub struct User {
     last_view_position: ChunkPos,
     entity: Option<Uuid>,
     teleport_id: AtomicU32,
+    hud_sync_items: Mutex<Vec<Option<ClientItem>>>,
     screen: Mutex<Option<UserScreen>>,
     message_queue: Mutex<VecDeque<NetworkMessageC2S>>,
 }
@@ -754,7 +733,8 @@ pub struct UserScreen {
     pub screen: UIScreenKey,
     pub inventories: Vec<(InventoryProvider, InventoryView)>,
     pub state: UserScreenState,
-    pub previous_state: Vec<Option<ItemStack>>,
+    pub previous_state: Vec<Option<ClientItem>>,
+    pub previous_properties: PropertyMap,
 }
 impl UserScreen {
     /*pub fn get_items(
@@ -822,6 +802,7 @@ impl User {
             inventories,
             screen,
             state: UserScreenState::Open,
+            previous_properties: PropertyMap(HashMap::new()),
         });
     }
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {

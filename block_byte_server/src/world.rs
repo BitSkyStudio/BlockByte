@@ -17,13 +17,14 @@ use block_byte_common::{
     CharacterController, Color, DamageTable, DamageType, InventoryView, LookDirection, MoveMode,
     SERVER_DT, SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos},
-    net::{NetworkMessageC2S, NetworkMessageS2C},
+    net::{NetworkMessageC2S, NetworkMessageS2C, PropertyModifyMode},
     registry::{
         BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
         BlockMachineFace, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, ItemAction,
         KeyGroup, MachineInstrution, PlantKey, PrefabKey, ResearchKey, ToolData, air_block,
     },
     scripts::{self, CallbackResult, ExternalScriptByteCode, RunResult, ScriptState, ScriptValue},
+    ui::PropertyMap,
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockMachine,
         ClientBlockPlants, ClientChunkBlockComponents, ComponentTypeAccess,
@@ -226,28 +227,150 @@ pub fn tick_chunk(world: &WorldAccess) {
                 world.send(controlling_user, NetworkMessageS2C::Knockback { velocity });
             }
             {
-                let inventory: Vec<_> = entity
-                    .inventory
-                    .items
-                    .iter()
-                    .map(|item| item.as_ref().map(|item| item.client()))
-                    .collect();
-                for (i, item) in inventory.into_iter().enumerate() {
-                    world.send(
-                        controlling_user,
-                        NetworkMessageS2C::HUDSlot { slot: i, item },
-                    );
-                }
-                world.send(
-                    controlling_user,
-                    NetworkMessageS2C::HudBarUpdate {
-                        health: entity.state.health,
-                    },
-                );
                 //println!("entity {:?}", world.center_chunk);
                 let Some(user) = world.users.get(controlling_user) else {
                     continue;
                 };
+                {
+                    let hotbar_size = 10;
+                    let inventory: Vec<_> = entity
+                        .inventory
+                        .items
+                        .iter()
+                        .take(hotbar_size)
+                        .map(|item| item.as_ref().map(|item| item.client()))
+                        .collect();
+                    let mut last_update = user.hud_sync_items.lock();
+                    last_update.resize(hotbar_size, None);
+                    for (i, item) in inventory.into_iter().enumerate() {
+                        if item != last_update[i] {
+                            last_update[i] = item.clone();
+                            world.send(
+                                controlling_user,
+                                NetworkMessageS2C::HUDSlot { slot: i, item },
+                            );
+                        }
+                    }
+                    world.send(
+                        controlling_user,
+                        NetworkMessageS2C::HudBarUpdate {
+                            health: entity.state.health,
+                        },
+                    );
+                    let mut screen_lock = user.screen.lock();
+                    if let Some(screen) = &mut *screen_lock {
+                        let mut items = Vec::new();
+                        let mut should_close = false;
+                        let mut properties = PropertyMap(HashMap::new());
+                        let screen_data = screen.screen.data();
+                        for (inventory, view) in &screen.inventories {
+                            let mut load_inventory = |inventory: &Inventory| {
+                                items.extend(view.slots.iter().map(|i| {
+                                    inventory.items[i.slot].as_ref().map(|item| item.client())
+                                }));
+                            };
+                            match inventory {
+                                InventoryProvider::Entity(uuid) => {
+                                    if *uuid == entity.uuid {
+                                        load_inventory(&entity.inventory);
+                                    } else {
+                                        let Some(entity) = world.get_entity(*uuid) else {
+                                            should_close = true;
+                                            break;
+                                        };
+                                        load_inventory(&entity.inventory);
+                                    }
+                                }
+                                InventoryProvider::Block(position) => {
+                                    let Some(machine) =
+                                        world.get_block_component::<BlockMachine>(*position)
+                                    else {
+                                        should_close = true;
+                                        break;
+                                    };
+                                    let machine_data = world
+                                        .get_block(*position)
+                                        .unwrap()
+                                        .block
+                                        .data()
+                                        .machine
+                                        .as_ref()
+                                        .unwrap();
+                                    for property in &screen_data.display_properties {
+                                        if let Some(register_id) = machine_data
+                                            .script
+                                            .named_registers
+                                            .iter()
+                                            .position(|p| p == property)
+                                        {
+                                            properties.0.insert(
+                                                property.clone(),
+                                                machine.script_state.registers[register_id] as f32,
+                                            );
+                                        }
+                                    }
+                                    load_inventory(&machine.inventory);
+                                }
+                            }
+                        }
+                        if !should_close {
+                            match screen.state {
+                                UserScreenState::Open => {
+                                    world.send(
+                                        controlling_user,
+                                        NetworkMessageS2C::UIOpen {
+                                            screen: screen.screen,
+                                            slots: items.clone(),
+                                            properties,
+                                        },
+                                    );
+                                    screen.previous_state = items;
+                                    screen.state = UserScreenState::Normal;
+                                }
+                                UserScreenState::Normal => {
+                                    for (property, value) in properties.0 {
+                                        let old_value = screen
+                                            .previous_properties
+                                            .0
+                                            .entry(property.clone())
+                                            .or_insert(0.);
+                                        if *old_value != value {
+                                            *old_value = value;
+                                            world.send(
+                                                controlling_user,
+                                                NetworkMessageS2C::UISetProperty {
+                                                    property,
+                                                    value,
+                                                },
+                                            );
+                                        }
+                                    }
+                                    for (slot, (previous, new)) in
+                                        screen.previous_state.iter().zip(items.iter()).enumerate()
+                                    {
+                                        if previous != new {
+                                            world.send(
+                                                controlling_user,
+                                                NetworkMessageS2C::UISetSlot {
+                                                    slot,
+                                                    item: new.clone(),
+                                                },
+                                            );
+                                        }
+                                    }
+                                    screen.previous_state = items;
+                                }
+                                UserScreenState::Close => {
+                                    should_close = true;
+                                }
+                            }
+                        }
+                        if should_close {
+                            world.send(controlling_user, NetworkMessageS2C::UIClose);
+                            *screen_lock = None;
+                        }
+                    }
+                }
                 let mut message_queue = user.message_queue.lock();
                 while let Some(message) = message_queue.pop_back() {
                     match message {
@@ -426,11 +549,6 @@ pub fn tick_chunk(world: &WorldAccess) {
                                     }
                                 }
                                 BlockInteractAction::Pickup => {
-                                    println!(
-                                        "{:?} - {:?}",
-                                        world.center_chunk,
-                                        position.to_chunk_pos()
-                                    );
                                     let Ok(drops) = world.break_block(position) else {
                                         continue;
                                     };
@@ -564,7 +682,59 @@ pub fn tick_chunk(world: &WorldAccess) {
                             property,
                             value,
                             modify_mode,
-                        } => todo!(),
+                        } => {
+                            let Some(user) = world.users.get(controlling_user) else {
+                                continue;
+                            };
+                            let mut screen_lock = user.screen.lock();
+                            if let Some(screen_lock) = screen_lock.as_ref() {
+                                if !screen_lock
+                                    .screen
+                                    .data()
+                                    .button_properties
+                                    .contains(&property)
+                                {
+                                    continue;
+                                }
+                                for (provider, _) in &screen_lock.inventories {
+                                    match provider {
+                                        InventoryProvider::Entity(uuid) => {}
+                                        InventoryProvider::Block(position) => {
+                                            let Some(mut machine) = world
+                                                .get_block_component::<BlockMachine>(*position)
+                                            else {
+                                                continue;
+                                            };
+                                            let machine_data = world
+                                                .get_block(*position)
+                                                .unwrap()
+                                                .block
+                                                .data()
+                                                .machine
+                                                .as_ref()
+                                                .unwrap();
+                                            if let Some(property) = machine_data
+                                                .script
+                                                .named_registers
+                                                .iter()
+                                                .position(|r| *r == property)
+                                            {
+                                                let mut register =
+                                                    &mut machine.script_state.registers[property];
+                                                match modify_mode {
+                                                    PropertyModifyMode::Add => {
+                                                        *register = register.wrapping_add(value);
+                                                    }
+                                                    PropertyModifyMode::Set => {
+                                                        *register = value;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

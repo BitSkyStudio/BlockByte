@@ -1,4 +1,8 @@
-use std::{cmp::Ordering, collections::HashMap, path::Path};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use anyhow::anyhow;
 use roxmltree::Node;
@@ -13,17 +17,26 @@ use crate::{
     registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchData, TextureKey},
     scripts::ScriptValue,
 };
-
+#[derive(Default)]
+struct UIParseContext {
+    display_properties: HashSet<String>,
+    button_properties: HashSet<String>,
+}
 pub struct UIScreen {
     pub root: UIElement,
+    pub display_properties: HashSet<String>,
+    pub button_properties: HashSet<String>,
 }
 pub type UIScreenKey = Key<UIScreen>;
 impl RegistryConfigLoadable for UIScreen {
     fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
         let input = std::fs::read_to_string(config).unwrap();
         let doc = roxmltree::Document::parse(&input)?;
+        let mut context = UIParseContext::default();
         Ok(UIScreen {
-            root: UIElement::parse(&doc.root_element())?,
+            root: UIElement::parse(&doc.root_element(), &mut context)?,
+            button_properties: context.button_properties,
+            display_properties: context.display_properties,
         })
     }
 }
@@ -49,7 +62,7 @@ pub enum UIElementType {
     },
 }
 impl UIElementType {
-    pub fn parse(node: &Node) -> anyhow::Result<Self> {
+    pub fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
         Ok(match node.tag_name().name() {
             "box" => UIElementType::Box(
                 node.children()
@@ -57,7 +70,7 @@ impl UIElementType {
                         if child.is_text() {
                             return None;
                         }
-                        Some(UIElement::parse(&child))
+                        Some(UIElement::parse(&child, context))
                     })
                     .collect::<anyhow::Result<Vec<UIElement>>>()?,
             ),
@@ -90,7 +103,11 @@ impl UIElementType {
             },
             "buttton" => UIElementType::Button {
                 text: node.text().unwrap().to_string(),
-                property: node.attribute("property").unwrap().to_string(),
+                property: {
+                    let property = node.attribute("property").unwrap().to_string();
+                    context.button_properties.insert(property.clone());
+                    property
+                },
                 value: node
                     .attribute("value")
                     .unwrap()
@@ -113,17 +130,23 @@ pub struct UIElement {
     pub style_classes: Vec<UIStyleListKey>,
 }
 impl UIElement {
-    pub fn parse(node: &Node) -> anyhow::Result<Self> {
+    pub fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
         Ok(UIElement {
-            element_type: UIElementType::parse(node)?,
+            element_type: UIElementType::parse(node, context)?,
             style: match node.attribute("style") {
-                Some(style) => UIStyleList::parse(style)?,
+                Some(style) => {
+                    let style_list = UIStyleList::parse(style)?;
+                    context
+                        .display_properties
+                        .extend(style_list.properties.iter().cloned());
+                    style_list
+                }
                 None => UIStyleList::default(),
             },
             style_classes: match node.attribute("class") {
                 Some(classes) => classes
                     .split(" ")
-                    .map(|class| UIStyleListKey::id(class).unwrap())
+                    .map(|class| UIStyleListKey::id(class).unwrap()) //todo: add properties to context
                     .collect(),
                 None => Vec::new(),
             },
@@ -131,7 +154,10 @@ impl UIElement {
     }
 }
 #[derive(Default)]
-pub struct UIStyleList(pub Vec<(UIStyleRule, Option<PropertyCondition>)>);
+pub struct UIStyleList {
+    pub rules: Vec<(UIStyleRule, Option<PropertyCondition>)>,
+    pub properties: HashSet<String>,
+}
 impl UIStyleList {
     pub fn parse(input: &str) -> anyhow::Result<Self> {
         let mut rules = Vec::new();
@@ -391,7 +417,10 @@ impl UIStyleList {
                 rule => return Err(anyhow!("unknown style rule '{}'", rule)),
             }
         }
-        Ok(UIStyleList(rules))
+        Ok(UIStyleList {
+            rules,
+            properties: HashSet::new(),
+        })
     }
 }
 impl RegistryConfigLoadable for UIStyleList {

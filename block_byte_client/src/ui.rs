@@ -725,7 +725,7 @@ fn get_element_style(element: &UIElement, properties: &PropertyMap) -> BBStyle {
     //todo: this should be precomputed
     let mut style = BBStyle::default();
     for style_list in &element.style_classes {
-        for (rule, condition) in &style_list.data().0 {
+        for (rule, condition) in &style_list.data().rules {
             if let Some(condition) = &condition {
                 if !condition.satisfies(properties) {
                     continue;
@@ -734,7 +734,7 @@ fn get_element_style(element: &UIElement, properties: &PropertyMap) -> BBStyle {
             style.patch(rule, properties);
         }
     }
-    for (rule, condition) in &element.style.0 {
+    for (rule, condition) in &element.style.rules {
         if let Some(condition) = &condition {
             if !condition.satisfies(properties) {
                 continue;

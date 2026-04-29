@@ -29,7 +29,7 @@ pub struct PlayerAbilities {
     pub speed: f32,
     pub max_stamina: f32,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClientItem {
     pub item: ItemKey,
     pub count: u16,

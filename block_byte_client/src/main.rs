@@ -856,11 +856,15 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::PlayerAbilities { abilities } => {
                                 self.player_abilities = abilities;
                             }
-                            NetworkMessageS2C::UIOpen { screen, slots } => {
+                            NetworkMessageS2C::UIOpen {
+                                screen,
+                                slots,
+                                properties,
+                            } => {
                                 self.game.screen = Some(ScreenData {
                                     screen,
                                     slots,
-                                    properties: PropertyMap(HashMap::new()),
+                                    properties,
                                     selected_slot: None,
                                 });
                                 let render_state = self.render_state.as_ref().unwrap();
@@ -919,6 +923,11 @@ impl ApplicationHandler for App {
                                     .properties
                                     .0
                                     .insert("health".to_string(), health);
+                            }
+                            NetworkMessageS2C::UISetProperty { property, value } => {
+                                if let Some(screen) = &mut self.game.screen {
+                                    screen.properties.0.insert(property, value);
+                                }
                             }
                         }
                     }

@@ -132,10 +132,15 @@ pub enum NetworkMessageS2C {
     UIOpen {
         screen: UIScreenKey,
         slots: Vec<Option<ClientItem>>,
+        properties: PropertyMap,
     },
     UISetSlot {
         slot: usize,
         item: Option<ClientItem>,
+    },
+    UISetProperty {
+        property: String,
+        value: f32,
     },
     UIClose,
     HUDSlot {
