@@ -465,6 +465,7 @@ impl ApplicationHandler for App {
                     self.game.cursor_position,
                     &mut gui_mesh,
                     false,
+                    dt,
                 );
 
                 if let Some(screen) = &mut self.game.screen {
@@ -474,6 +475,7 @@ impl ApplicationHandler for App {
                         self.game.cursor_position,
                         &mut gui_mesh,
                         true,
+                        dt,
                     ) {
                         match hovered {
                             HoveredElement::Slot(target_slot) => match screen.selected_slot {
@@ -866,6 +868,7 @@ impl ApplicationHandler for App {
                                     slots,
                                     properties,
                                     selected_slot: None,
+                                    slot_action_prediction: RefCell::new(HashMap::new()),
                                 });
                                 let render_state = self.render_state.as_ref().unwrap();
                                 render_state.window().set_cursor_visible(true);
@@ -881,6 +884,7 @@ impl ApplicationHandler for App {
                                 if let Some(screen) = &mut self.game.screen {
                                     if slot < screen.slots.len() {
                                         screen.slots[slot] = item;
+                                        screen.slot_action_prediction.borrow_mut().remove(&slot);
                                     }
                                 }
                             }
@@ -1671,6 +1675,7 @@ impl Default for ClientGame {
                 slots: vec![None; 10],
                 properties: PropertyMap(HashMap::new()),
                 selected_slot: None,
+                slot_action_prediction: RefCell::new(HashMap::new()),
             },
             hit_timer: None,
             keys: InputContainer::default(),

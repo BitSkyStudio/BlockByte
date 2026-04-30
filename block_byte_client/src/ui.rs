@@ -1,4 +1,4 @@
-use std::{cell::RefCell, sync::OnceLock, u32};
+use std::{cell::RefCell, collections::HashMap, sync::OnceLock, u32};
 
 use block_byte_common::{
     ClientItem, Color, TexCoords,
@@ -32,6 +32,7 @@ pub struct ScreenData {
     pub slots: Vec<Option<ClientItem>>,
     pub properties: PropertyMap,
     pub selected_slot: Option<(usize, MouseButton)>,
+    pub slot_action_prediction: RefCell<HashMap<usize, (MouseButton, f32)>>,
 }
 pub enum HoveredElement {
     Slot(usize),
@@ -49,7 +50,21 @@ pub fn render_screen(
     cursor_position: PhysicalPosition<f64>,
     mesh: &mut GUIMesh,
     enable_hovering: bool,
+    dt: f32,
 ) -> Option<HoveredElement> {
+    if let Some(selected_slot) = screen_data.selected_slot {
+        screen_data
+            .slot_action_prediction
+            .borrow_mut()
+            .insert(selected_slot.0, (selected_slot.1, 0.1));
+    }
+    screen_data
+        .slot_action_prediction
+        .borrow_mut()
+        .retain(|_, (_, time)| {
+            *time -= dt;
+            *time > 0.
+        });
     let screen = screen_data.screen.data();
     let mut taffy: TaffyTree<&UIElement> = TaffyTree::new();
     let root = add_element_to_taffy(&screen.root, &mut taffy, &screen_data.properties);
@@ -96,7 +111,7 @@ pub fn render_screen(
         &mut hovered,
     );
     if enable_hovering {
-        mesh.vertices.append(&mut overlay_mesh.vertices);
+        mesh.append_mesh(overlay_mesh);
     } else {
         hovered = None;
     }
@@ -468,9 +483,7 @@ fn render_element(
                     );
                 };
 
-                if let Some((selected_slot, selected_button)) = data.selected_slot
-                    && selected_slot == *slot
-                {
+                if let Some((selected_button, _)) = data.slot_action_prediction.borrow().get(slot) {
                     match selected_button {
                         MouseButton::Left => {
                             draw_slot(

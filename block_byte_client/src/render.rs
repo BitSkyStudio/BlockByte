@@ -1538,6 +1538,12 @@ impl<T> Mesh<T> {
     pub fn add_index(&mut self, index: u32) {
         self.indices.push(index);
     }
+    pub fn append_mesh(&mut self, mut other_mesh: Mesh<T>) {
+        let vertex_count = self.vertices.len() as u32;
+        self.vertices.append(&mut other_mesh.vertices);
+        self.indices
+            .extend(other_mesh.indices.into_iter().map(|i| i + vertex_count));
+    }
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }

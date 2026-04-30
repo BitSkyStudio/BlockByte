@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
     mem::MaybeUninit,
     num::{NonZero, NonZeroU32},
-    ops::Deref,
+    ops::{Deref, DerefMut},
     path::Path,
     ptr::NonNull,
     sync::{
@@ -660,7 +660,144 @@ pub fn tick_chunk(world: &WorldAccess) {
                             item_entity.inventory.items[0] = Some(drop_item);
                             world.spawn_entity(item_entity);
                         }
-                        NetworkMessageC2S::MoveItem { from, to, mode } => todo!(),
+                        NetworkMessageC2S::MoveItem { from, to, mode } => {
+                            if from == to {
+                                continue;
+                            }
+                            let Some(user) = entity.controlling_user else {
+                                continue;
+                            };
+                            let Some(user) = world.users.get(user) else {
+                                continue;
+                            };
+                            let screen = user.screen.lock();
+                            let Some(screen) = &*screen else {
+                                continue;
+                            };
+                            let mut running_index = 0;
+                            let mut from_pv = None;
+                            let mut to_pv = None;
+                            for (inventory, view) in &screen.inventories {
+                                if from < running_index + view.size() && from_pv.is_none() {
+                                    from_pv = Some((*inventory, from - running_index));
+                                }
+                                if to < running_index + view.size() && to_pv.is_none() {
+                                    to_pv = Some((*inventory, to - running_index));
+                                }
+                                running_index += view.size();
+                            }
+                            let move_item =
+                                |src: &mut Option<ItemStack>, dst: &mut Option<ItemStack>| {
+                                    if let Some(source) = src.as_mut() {
+                                        let count = mode.get_count(source.count);
+                                        if let Some(destination) = dst.as_mut() {
+                                            //todo: correct viewslot
+                                            if let Some((a, b)) = destination.merge(
+                                                &source.copy(count),
+                                                &block_byte_common::DEFAULT_VIEWSLOT,
+                                            ) {
+                                                *destination = a;
+                                                source.count +=
+                                                    b.map(|item| item.count).unwrap_or(0);
+                                                source.count -= count;
+                                                if source.count == 0 {
+                                                    *src = None;
+                                                }
+                                            } else if mode.can_swap() {
+                                                std::mem::swap(source, destination);
+                                            }
+                                        } else {
+                                            if count >= source.count {
+                                                *dst = src.take();
+                                            } else {
+                                                let (a, b) = source.split(count);
+                                                *dst = Some(a);
+                                                *source = b;
+                                            }
+                                        }
+                                    }
+                                };
+                            let mut user_inventory = RefCell::new(&mut entity.inventory);
+                            enum ProvidedInventory<'a> {
+                                Block(WorldAccessRef<'a, BlockMachine, BlockPos>),
+                                Entity(WorldAccessRef<'a, Entity, Uuid>),
+                                RefMut(std::cell::RefMut<'a, &'a mut Inventory>),
+                            };
+                            impl ProvidedInventory<'_> {
+                                pub fn lock<'a>(
+                                    provider: &InventoryProvider,
+                                    world: &'a WorldAccess,
+                                    user_id: Uuid,
+                                    user_inventory: &'a RefCell<&'a mut Inventory>,
+                                ) -> Result<ProvidedInventory<'a>, ()>
+                                {
+                                    match provider {
+                                        InventoryProvider::Entity(uuid) => {
+                                            if *uuid == user_id {
+                                                Ok(ProvidedInventory::RefMut(
+                                                    user_inventory.borrow_mut(),
+                                                ))
+                                            } else {
+                                                let Some(entity) = world.get_entity(*uuid) else {
+                                                    return Err(());
+                                                };
+                                                Ok(ProvidedInventory::Entity(entity))
+                                            }
+                                        }
+                                        InventoryProvider::Block(position) => {
+                                            let Some(mut machine) = world
+                                                .get_block_component::<BlockMachine>(*position)
+                                            else {
+                                                return Err(());
+                                            };
+                                            Ok(ProvidedInventory::Block(machine))
+                                        }
+                                    }
+                                }
+                                pub fn get(&mut self) -> &mut Inventory {
+                                    match self {
+                                        ProvidedInventory::Block(block) => &mut block.inventory,
+                                        ProvidedInventory::Entity(entity) => &mut entity.inventory,
+                                        ProvidedInventory::RefMut(ref_mut) => ref_mut,
+                                    }
+                                }
+                            }
+                            match (from_pv, to_pv) {
+                                (
+                                    Some((from_provider, from_index)),
+                                    Some((to_provider, to_index)),
+                                ) => {
+                                    let mut from_provided = ProvidedInventory::lock(
+                                        &from_provider,
+                                        world,
+                                        entity.uuid,
+                                        &user_inventory,
+                                    )
+                                    .unwrap();
+                                    if from_provider == to_provider {
+                                        let [src, dst] = from_provided
+                                            .get()
+                                            .items
+                                            .get_disjoint_mut([from_index, to_index])
+                                            .unwrap();
+                                        move_item(src, dst);
+                                    } else {
+                                        let mut to_provided = ProvidedInventory::lock(
+                                            &to_provider,
+                                            world,
+                                            entity.uuid,
+                                            &user_inventory,
+                                        )
+                                        .unwrap();
+                                        move_item(
+                                            &mut from_provided.get().items[from_index],
+                                            &mut to_provided.get().items[to_index],
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                         NetworkMessageC2S::Research { research } => todo!(),
                         NetworkMessageC2S::Craft { recipe, count } => todo!(),
                         NetworkMessageC2S::OpenPlayerInventory => {
