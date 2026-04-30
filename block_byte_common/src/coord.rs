@@ -212,6 +212,9 @@ pub type BlockPos = Vec3<i32>;
 pub type ChunkPos = Vec3<i16>;
 impl BlockPos {
     pub const ZERO: BlockPos = Pos::ZERO.to_block_pos();
+    pub const X: BlockPos = Pos::X.to_block_pos();
+    pub const Y: BlockPos = Pos::Y.to_block_pos();
+    pub const Z: BlockPos = Pos::Z.to_block_pos();
 }
 impl Pos {
     pub const X: Pos = Pos {

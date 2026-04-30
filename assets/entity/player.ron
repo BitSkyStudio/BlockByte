@@ -7,4 +7,5 @@
     model: "player",
     health: 100.,
     damage_table: (),
+    jump_velocity: 8.2,
 )

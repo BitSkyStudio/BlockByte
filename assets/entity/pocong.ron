@@ -7,4 +7,5 @@
     health: 100.,
     damage_table: (),
     ai: (),
+    jump_velocity: 15,
 )

@@ -1134,6 +1134,8 @@ pub struct EntityData {
     #[serde(default)]
     pub eye_height: f32,
     #[serde(default)]
+    pub jump_velocity: f32,
+    #[serde(default)]
     pub crouch_difference: f32,
     pub model: ModelInstance,
     #[serde(default)]

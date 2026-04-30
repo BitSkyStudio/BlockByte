@@ -744,7 +744,7 @@ pub fn tick_chunk(world: &WorldAccess) {
             match &entity_data.ai {
                 Some(_) => {
                     if entity.state.character_controller.on_ground {
-                        entity.state.character_controller.velocity.y += 15.;
+                        entity.state.character_controller.velocity.y += entity_data.jump_velocity;
                     }
                     let front = entity.state.direction.make_front();
                     move_vector.x = front.x * 1.;
@@ -1052,6 +1052,25 @@ pub fn tick_chunk(world: &WorldAccess) {
         damage.damage -= block_data.health.health_regen * SERVER_DT;
         if damage.damage <= 0. {
             world.remove_block_component(damage);
+        }
+    }
+    if (world.center_chunk.x as u32 * 3278
+        + world.center_chunk.y as u32 * 9841
+        + world.center_chunk.z as u32 * 87
+        + world.ticks_passed as u32)
+        % (10 * SERVER_TPS)
+        == 0
+    {
+        for mut plants in world.iter_block_components::<BlockPlants>(&[], true) {
+            let Some(block) = world.get_block(plants.lock_key + BlockPos::Y) else {
+                unreachable!()
+            };
+            if block.block != air_block() {
+                //todo: maybe check tag?
+                world.remove_block_component(plants);
+            } else {
+                //grow
+            }
         }
     }
 }
