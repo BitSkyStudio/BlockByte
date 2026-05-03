@@ -11,12 +11,15 @@ use std::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
+    time::Instant,
 };
 
 use block_byte_common::{
     CharacterController, Color, DamageTable, DamageType, InventoryView, LookDirection, MoveMode,
     SERVER_DT, SERVER_TPS,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos},
+    coord::{
+        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos,
+    },
     net::{NetworkMessageC2S, NetworkMessageS2C, PropertyModifyMode},
     registry::{
         BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
@@ -189,15 +192,25 @@ pub fn tick_chunk(world: &WorldAccess) {
             WorldEvent::EntityDamage {
                 entity: entity_id,
                 damage,
+                source_entity,
             } => {
                 let Some(mut entity) = world.get_entity(entity_id) else {
                     continue;
                 };
                 let entity_data = entity.key.data();
-                for (damage_type, damage) in damage.iter() {
-                    entity.state.health -=
-                        damage * entity_data.damage_table[damage_type].unwrap_or(1.);
+                let received_damage = damage
+                    .iter()
+                    .map(|(damage_type, damage)| {
+                        damage * entity_data.damage_table[damage_type].unwrap_or(1.)
+                    })
+                    .sum::<f32>();
+                if let Some(source_entity) = source_entity {
+                    if let Some(brain) = &mut entity.state.brain {
+                        *brain.received_attacks.entry(source_entity).or_insert(0.) +=
+                            received_damage;
+                    }
                 }
+                entity.state.health -= received_damage;
                 if entity.state.health <= 0. {
                     world.remove_entity(entity);
                 }
@@ -616,6 +629,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                     WorldEvent::EntityDamage {
                                         entity: other_entity_id,
                                         damage: damage_table,
+                                        source_entity: Some(entity.uuid),
                                     },
                                 )
                                 .unwrap();
@@ -644,10 +658,8 @@ pub fn tick_chunk(world: &WorldAccess) {
                             } else {
                                 continue;
                             };
-                            let mut item_entity = Entity::new(
-                                EntityKey::id("item").unwrap(),
-                                entity.position + Pos::Y * entity.key.data().eye_height,
-                            );
+                            let mut item_entity =
+                                Entity::new(EntityKey::id("item").unwrap(), entity.get_eye());
                             item_entity.state.direction = LookDirection {
                                 pitch: 0.,
                                 yaw: entity.state.direction.yaw,
@@ -879,16 +891,128 @@ pub fn tick_chunk(world: &WorldAccess) {
             let hitbox = entity_data.hitbox(entity.state.crouching);
             let mut move_vector = Pos::ZERO;
             match &entity_data.ai {
-                Some(_) => {
-                    if entity.state.character_controller.on_ground {
-                        entity.state.character_controller.velocity.y += entity_data.jump_velocity;
+                Some(ai) => {
+                    let entity_eye_position = entity.get_eye();
+                    let mut brain = entity.state.brain.as_mut().unwrap();
+                    brain.received_attacks.retain(|_, damage| {
+                        *damage -= entity_data.health / 100. * SERVER_DT;
+                        *damage > 0.
+                    });
+                    let target_entity = world
+                        .iter_entities(&[entity.uuid], false)
+                        .filter_map(|target| {
+                            if world.block_ray_test(coord::Ray::new_line(
+                                entity_eye_position,
+                                target.get_eye(),
+                            )) {
+                                return None;
+                            }
+                            let received_damage = brain
+                                .received_attacks
+                                .get(&target.uuid)
+                                .cloned()
+                                .unwrap_or(0.);
+                            if ai.attacks.contains(target.key)
+                                || (ai.self_defends.contains(target.key) && received_damage > 0.)
+                            {
+                                Some((target.uuid, target.position, received_damage))
+                            } else {
+                                None
+                            }
+                        })
+                        .max_by_key(|(id, position, received_damage)| {
+                            ((10. + *received_damage) / (position.distance(*position)) * 1000.)
+                                as u32
+                        });
+                    if let Some((target_id, target_position, _)) = target_entity {
+                        if let Some(goal) = brain.goal {
+                            if goal.to_block_pos() != target_position.to_block_pos() {
+                                brain.path.clear();
+                            }
+                        }
+                        brain.goal = Some(target_position);
+                    } else {
+                        brain.goal = None;
+                        brain.path.clear();
                     }
-                    let front = entity.state.direction.make_front();
-                    move_vector.x = front.x * 1.;
-                    move_vector.z = front.z * 1.;
-                    if rand::random_bool(1. / 40. / 5.) {
-                        entity.state.direction.yaw =
-                            rand::random_range((0.)..(std::f32::consts::PI * 2.))
+                    if let Some(goal) = brain.goal {
+                        let goal_block = goal.to_block_pos();
+                        if goal_block != entity.position.to_block_pos() && brain.path.is_empty() {
+                            let solution = pathfinding::directed::astar::astar(
+                                &entity.position.to_block_pos(),
+                                |node| {
+                                    let node = *node;
+                                    let entity_block_position = entity.position.to_block_pos();
+                                    Face::horizontal().iter().filter_map(move |face| {
+                                        let block_position = node + face.get_block_offset();
+                                        if block_position.distance_squared(entity_block_position)
+                                            > (24i32).pow(2)
+                                        {
+                                            return None;
+                                        }
+                                        let is_block_empty =
+                                            |block: BlockPos| match world.get_block(block) {
+                                                Some(block) => block.block == air_block(),
+                                                None => false,
+                                            };
+                                        if !is_block_empty(block_position) {
+                                            if is_block_empty(block_position + BlockPos::Y) {
+                                                return Some((block_position + BlockPos::Y, 1));
+                                            }
+                                        } else {
+                                            if is_block_empty(block_position - BlockPos::Y) {
+                                                if !is_block_empty(block_position - BlockPos::Y * 2)
+                                                {
+                                                    return Some((block_position - BlockPos::Y, 1));
+                                                }
+                                            } else {
+                                                return Some((block_position, 1));
+                                            }
+                                        }
+                                        None
+                                    })
+                                },
+                                |node| node.distance_squared(goal_block),
+                                |node| {
+                                    node.x == goal_block.x
+                                        && node.z == goal_block.z
+                                        && (node.y - goal_block.y).abs() <= 1
+                                },
+                            );
+                            if let Some((solution, _)) = solution {
+                                brain.path = solution
+                                    .into_iter()
+                                    .rev()
+                                    .map(|p| {
+                                        p.to_pos()
+                                            + Pos {
+                                                x: 0.5,
+                                                y: 0.,
+                                                z: 0.5,
+                                            }
+                                    })
+                                    .collect();
+                            }
+                        }
+                    }
+                    if !brain.path.is_empty() {
+                        if brain.path.last().unwrap().to_block_pos()
+                            == entity.position.to_block_pos()
+                        {
+                            brain.path.pop();
+                        } else {
+                            let next_path_point = *brain.path.last().unwrap();
+                            move_vector = next_path_point - entity.position;
+                            if move_vector.y > 0. {
+                                if entity.state.character_controller.on_ground {
+                                    entity.state.character_controller.velocity.y +=
+                                        entity_data.jump_velocity;
+                                }
+                            }
+                            move_vector.y = 0.;
+                            let speed = 5.;
+                            move_vector = move_vector.normalize() * speed;
+                        }
                     }
                 }
                 None => {}
@@ -1200,7 +1324,7 @@ pub fn tick_chunk(world: &WorldAccess) {
     {
         for mut plants in world.iter_block_components::<BlockPlants>(&[], true) {
             let Some(block) = world.get_block(plants.lock_key + BlockPos::Y) else {
-                unreachable!()
+                continue;
             };
             if block.block != air_block() {
                 //todo: maybe check tag?
@@ -1239,6 +1363,7 @@ pub enum WorldEvent {
     EntityDamage {
         entity: Uuid,
         damage: DamageTable,
+        source_entity: Option<Uuid>,
     },
     EntityTeleport {
         entity: Uuid,
@@ -1274,10 +1399,18 @@ pub struct InternalEntityState {
     pub crouching: bool,
 }
 #[derive(Serialize, Deserialize)]
-pub struct MobBrain {}
+pub struct MobBrain {
+    pub goal: Option<Pos>,
+    pub path: Vec<Pos>,
+    pub received_attacks: HashMap<Uuid, f32>,
+}
 impl MobBrain {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            goal: None,
+            path: Vec::new(),
+            received_attacks: HashMap::new(),
+        }
     }
 }
 impl Entity {
@@ -1304,6 +1437,10 @@ impl Entity {
                 crouching: false,
             },
         }
+    }
+    pub fn get_eye(&self) -> Pos {
+        let entity_data = self.key.data();
+        self.position + Pos::Y * entity_data.eye_height
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
         let entity_data = self.key.data();
@@ -1975,6 +2112,24 @@ impl WorldAccess<'_> {
         self.entities_removed.borrow_mut().push(uuid);
         self.entities_added.borrow_mut().remove(&uuid);
         self.entity_teleports.borrow_mut().remove(&uuid);
+    }
+}
+impl WorldAccess<'_> {
+    pub fn block_ray_test(&self, ray: coord::Ray) -> bool {
+        ray.block_raycast(|pos, _, _| match self.get_block(pos) {
+            Some(block) => {
+                if block
+                    .colliders(pos)
+                    .any(|collider| ray.aabb_raycast(collider).is_some())
+                {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+            None => Some(()),
+        })
+        .is_some()
     }
 }
 impl Drop for WorldAccess<'_> {

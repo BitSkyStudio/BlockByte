@@ -1151,6 +1151,8 @@ pub struct MobAI {
     #[serde(default)]
     pub attacks: KeyGroup<EntityData>,
     #[serde(default)]
+    pub self_defends: KeyGroup<EntityData>,
+    #[serde(default)]
     pub fears: KeyGroup<EntityData>,
 }
 #[derive(Deserialize)]

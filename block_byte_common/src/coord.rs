@@ -653,6 +653,12 @@ pub struct Ray {
     pub direction: Vec3<f32>,
 }
 impl Ray {
+    pub fn new_line(from: Pos, to: Pos) -> Ray {
+        Ray {
+            position: from,
+            direction: to - from,
+        }
+    }
     pub fn block_raycast<T>(
         self,
         mut f: impl FnMut(BlockPos, Pos, Face) -> Option<T>,
