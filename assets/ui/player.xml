@@ -10,6 +10,7 @@
         <slot id="7" class="slot"/>
         <slot id="8" class="slot"/>
         <slot id="9" class="slot"/>
+        <slot id="trash" style="background: trash_slot;"/>
     </box>
     <craft style="background: slot,3;border: 20;" recipes="#player_crafting" craft_width="5"/>
 </box>

@@ -12,12 +12,14 @@ use image_overlay::overlay_dyn_img;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
+use rand::{SeedableRng, random_bool};
+use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
 use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, Orientation, Pos, Vec3};
+use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Orientation, Pos, Vec3};
 use crate::model::Model;
 use crate::scripts::{
     CompiledScript, ExternalScriptByteCode, RegisterId, RegisterOrImmediate, ScriptLabel,
@@ -143,7 +145,7 @@ macro_rules! create_registries{
                                     let stripped_path = entry.path().strip_prefix(&base_asset_path).unwrap();
                                     let extension = stripped_path.extension();
                                     match stripped_path.extension().and_then(|ext| ext.to_str()).unwrap_or(""){
-                                        "py" => continue,
+                                        "py" | "png~" => continue,
                                         _ => {}
                                     }
                                     if <$type>::should_skip(entry.path()){
@@ -1366,28 +1368,70 @@ pub struct RecipeData {
     pub icon_override: Option<ItemModel>,
 }
 pub type RecipeKey = Key<RecipeData>;
+fn default_prefab_entry_true_chance() -> f32 {
+    1.
+}
 #[derive(Serialize, Deserialize)]
-pub struct PrefabPart {
-    pub blocks: HashMap<BlockPos, BlockEntry>,
+pub struct PrefabEntry {
+    //we unfortunately cannot flatten here
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    #[serde(default = "default_prefab_entry_true_chance")]
     pub chance: f32,
+    pub block: BlockKey,
+    #[serde(default)]
+    pub rotation: BlockRotation,
+    #[serde(default)]
+    pub color: BlockColor,
 }
 #[derive(Serialize, Deserialize)]
 pub struct PrefabData {
-    pub parts: Vec<PrefabPart>,
+    pub blocks: Vec<PrefabEntry>,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub bb: OnceLock<AABB<i32>>,
 }
 impl PrefabData {
     pub fn bounding_box(&self) -> AABB<i32> {
         *self.bb.get_or_init(|| {
-            AABB::bound(
-                self.parts
-                    .iter()
-                    .map(|part| part.blocks.keys().cloned())
-                    .flatten(),
-            )
+            AABB::bound(self.blocks.iter().map(|part| BlockPos {
+                x: part.x,
+                y: part.y,
+                z: part.z,
+            }))
             .unwrap()
         })
+    }
+    pub fn build(
+        &self,
+        position: BlockPos,
+        rotation: HorizontalFace,
+        seed: u64,
+        mut callback: impl FnMut(BlockPos, BlockEntry),
+    ) {
+        let rotation = Orientation::from_front_up(rotation.into(), Face::Up)
+            .unwrap()
+            .into_block_rotation();
+        use rand::Rng;
+        use rand::SeedableRng;
+        let mut random = Xoshiro256PlusPlus::seed_from_u64(seed);
+        for entry in &self.blocks {
+            if random.random_bool(entry.chance as f64) {
+                callback(
+                    position
+                        + rotation.rotate_block_pos(BlockPos {
+                            x: entry.x,
+                            y: entry.y,
+                            z: entry.z,
+                        }),
+                    BlockEntry {
+                        block: entry.block,
+                        color: entry.color,
+                        rotation: entry.rotation,
+                    },
+                );
+            }
+        }
     }
 }
 pub type PrefabKey = Key<PrefabData>;

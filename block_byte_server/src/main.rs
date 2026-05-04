@@ -18,7 +18,7 @@ use block_byte_common::{
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockData, BlockEntry, BlockKey, BlockRotation, EntityKey, ItemAction,
-        ItemKey, KeyGroup, PrefabData, PrefabPart, ToolData, air_block, load_registries,
+        ItemKey, KeyGroup, PrefabData, PrefabEntry, ToolData, air_block, load_registries,
     },
     scripts::{ScriptState, ScriptValue},
     ui::{PropertyMap, UIScreenKey},
@@ -44,11 +44,13 @@ use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::{
-    inventory::{Inventory, ItemDurability, ItemQuality, ItemStack, generate_loot_table},
+    inventory::{
+        Inventory, ItemCount, ItemDurability, ItemQuality, ItemStack, generate_loot_table,
+    },
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
         BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity, WorldAccess,
-        WorldAccessCell, WorldEvent, tick_chunk,
+        WorldAccessCell, WorldAccessRef, WorldEvent, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -343,24 +345,24 @@ fn main() {
                         y: args[7],
                         z: args[8],
                     };
-                    let mut blocks = HashMap::new();
+                    //let mut blocks = HashMap::new();
                     /*for position in AABB::new(from, to) {
                         let block = server.get_block(position).unwrap();
                         if block.block != air_block() {
                             blocks.insert(position - center, block);
                         }
                     }*/
-                    println!(
+                    /*println!(
                         "{}",
                         ron::ser::to_string_pretty(
                             &PrefabData {
-                                parts: vec![PrefabPart { blocks, chance: 1. }],
+                                parts: vec![PrefabEntry { blocks, chance: 1. }],
                                 bb: OnceLock::new(),
                             },
                             PrettyConfig::new()
                         )
                         .unwrap()
-                    );
+                    );*/
                 }
                 _ => {
                     println!("unknown command");
@@ -737,6 +739,16 @@ pub struct UserScreen {
     pub previous_properties: PropertyMap,
 }
 impl UserScreen {
+    pub fn get_slot(&self, slot: usize) -> Option<(InventoryProvider, usize)> {
+        let mut running_index = 0;
+        for (inventory, view) in &self.inventories {
+            if slot < running_index + view.size() {
+                return Some((*inventory, slot - running_index));
+            }
+            running_index += view.size();
+        }
+        None
+    }
     /*pub fn get_items(
         &self,
         entities: &mut SlotMap<EntityIndex, Entity>,
@@ -762,32 +774,97 @@ pub enum InventoryProvider {
     Entity(Uuid),
     Block(BlockPos),
 }
-impl InventoryProvider {
-    /*pub fn get_inventory<'a>(
-        self,
-        entities: &'a mut SlotMap<EntityIndex, Entity>,
-        chunks: &'a mut HashMap<ChunkPos, Chunk>,
-    ) -> Option<&'a mut Inventory> {
-        match self {
-            InventoryProvider::Entity(entity) => {
-                Some(entities.get_mut(entity)?.inventory.get_mut())
+enum ProvidedInventory<'a> {
+    Block(WorldAccessRef<'a, BlockMachine, BlockPos>),
+    Entity(WorldAccessRef<'a, Entity, Uuid>),
+    RefMut(std::cell::RefMut<'a, &'a mut Inventory>),
+}
+impl ProvidedInventory<'_> {
+    pub fn lock<'a>(
+        provider: &InventoryProvider,
+        world: &'a WorldAccess,
+        user_id: Uuid,
+        user_inventory: &'a RefCell<&'a mut Inventory>,
+    ) -> Result<ProvidedInventory<'a>, ()> {
+        match provider {
+            InventoryProvider::Entity(uuid) => {
+                if *uuid == user_id {
+                    Ok(ProvidedInventory::RefMut(user_inventory.borrow_mut()))
+                } else {
+                    let Some(entity) = world.get_entity(*uuid) else {
+                        return Err(());
+                    };
+                    Ok(ProvidedInventory::Entity(entity))
+                }
             }
-            InventoryProvider::Block(block) => {
-                let (chunk, offset) = block.to_chunk_pos_offset();
-                Some(
-                    chunks
-                        .get_mut(&chunk)?
-                        .components
-                        .machine
-                        .get_mut()
-                        .get_mut(offset)?
-                        .inventory
-                        .get_mut(),
-                )
+            InventoryProvider::Block(position) => {
+                let Some(mut machine) = world.get_block_component::<BlockMachine>(*position) else {
+                    return Err(());
+                };
+                Ok(ProvidedInventory::Block(machine))
             }
         }
-        unreachable!()
-    }*/
+    }
+    pub fn get(&self) -> &Inventory {
+        match self {
+            ProvidedInventory::Block(block) => &block.inventory,
+            ProvidedInventory::Entity(entity) => &entity.inventory,
+            ProvidedInventory::RefMut(ref_mut) => ref_mut,
+        }
+    }
+    pub fn get_mut(&mut self) -> &mut Inventory {
+        match self {
+            ProvidedInventory::Block(block) => &mut block.inventory,
+            ProvidedInventory::Entity(entity) => &mut entity.inventory,
+            ProvidedInventory::RefMut(ref_mut) => ref_mut,
+        }
+    }
+}
+pub struct ProvidedInventoryList<'a>(Vec<(ProvidedInventory<'a>, &'a InventoryView)>);
+impl ProvidedInventoryList<'_> {
+    pub fn lock_screen<'a>(
+        screen: &'a UserScreen,
+        world: &'a WorldAccess,
+        user_id: Uuid,
+        user_inventory: &'a RefCell<&'a mut Inventory>,
+    ) -> Result<ProvidedInventoryList<'a>, ()> {
+        Ok(ProvidedInventoryList(
+            screen
+                .inventories
+                .iter()
+                .map(|(provider, view)| {
+                    Ok((
+                        ProvidedInventory::lock(provider, world, user_id, user_inventory)?,
+                        view,
+                    ))
+                })
+                .collect::<Result<Vec<(ProvidedInventory, &InventoryView)>, ()>>()?,
+        ))
+    }
+    pub fn add_item(&mut self, mut item: ItemStack) -> Option<ItemStack> {
+        for (inv, view) in &mut self.0 {
+            match inv.get_mut().add_item(view, item) {
+                Some(overflow) => item = overflow,
+                None => return None,
+            }
+        }
+        Some(item)
+    }
+    pub fn count_item(&self, item: ItemKey) -> ItemCount {
+        self.0
+            .iter()
+            .map(|(provided, view)| provided.get().count_item(view, item))
+            .sum()
+    }
+    pub fn remove_item(&mut self, item: ItemKey, mut count: ItemCount) -> ItemCount {
+        for (inv, view) in &mut self.0 {
+            count = inv.get_mut().remove_item(view, item, count);
+            if count == 0 {
+                return 0;
+            }
+        }
+        count
+    }
 }
 impl User {
     pub fn set_screen(

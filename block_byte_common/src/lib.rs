@@ -260,7 +260,7 @@ impl CharacterController {
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }
-        let ground_multiplier = if self.on_ground { 1. } else { 0.5 };
+        let ground_multiplier = if self.on_ground { 1. } else { 0.2 };
         let acceleration = ground_multiplier * acceleration;
         let mut error = (move_vector - self.velocity);
         match move_mode {

@@ -40,12 +40,17 @@ impl RegistryConfigLoadable for UIScreen {
         })
     }
 }
+#[derive(Clone, Copy)]
+pub enum SlotId {
+    Id(usize),
+    Trash,
+}
 pub enum UIElementType {
     Box(Vec<UIElement>),
     Label(String),
     Image(TextureKey, f32, f32),
     ItemSlot {
-        slot: usize,
+        slot: SlotId,
     },
     CraftArea {
         recipes: KeyGroup<RecipeData>,
@@ -89,7 +94,13 @@ impl UIElementType {
                     .unwrap(),
             ),
             "slot" => UIElementType::ItemSlot {
-                slot: node.attribute("id").and_then(|n| n.parse().ok()).unwrap(),
+                slot: {
+                    let attribute = node.attribute("id").unwrap();
+                    match attribute {
+                        "trash" => SlotId::Trash,
+                        id => SlotId::Id(id.parse().unwrap()),
+                    }
+                },
             },
             "craft" => UIElementType::CraftArea {
                 recipes: KeyGroup::parse(node.attribute("recipes").unwrap()).unwrap(),
@@ -146,6 +157,8 @@ impl UIElement {
             style_classes: match node.attribute("class") {
                 Some(classes) => classes
                     .split(" ")
+                    .map(|class| class.trim())
+                    .filter(|class| !class.is_empty())
                     .map(|class| UIStyleListKey::id(class).unwrap()) //todo: add properties to context
                     .collect(),
                 None => Vec::new(),

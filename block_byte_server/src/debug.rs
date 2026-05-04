@@ -6,7 +6,9 @@ use std::{
 
 use block_byte_common::{
     coord::{BlockPos, Face},
-    registry::{BiomeKey, BlockColor, BlockEntry, BlockKey, BlockRotation, PrefabData, PrefabPart},
+    registry::{
+        BiomeKey, BlockColor, BlockEntry, BlockKey, BlockRotation, PrefabData, PrefabEntry,
+    },
 };
 use image::GenericImage;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
@@ -216,7 +218,7 @@ pub fn generate_tree(
             }
         }
     }
-    let part = PrefabPart {
+    /*let part = PrefabEntry {
         chance: 1.,
         blocks: blocks
             .into_iter()
@@ -248,5 +250,6 @@ pub fn generate_tree(
     PrefabData {
         parts: vec![part],
         bb: OnceLock::new(),
-    }
+    }*/
+    unreachable!()
 }

@@ -5,3 +5,4 @@ perf.*
 assets_generated/
 worldgen_vis/
 textureatlasdump.png
+*.png~

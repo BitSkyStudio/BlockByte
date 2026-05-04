@@ -45,7 +45,8 @@ use splines::{Interpolation, Spline};
 use uuid::Uuid;
 
 use crate::{
-    InventoryProvider, MessageQueue, Server, User, UserIndex, UserScreenState,
+    InventoryProvider, MessageQueue, ProvidedInventory, ProvidedInventoryList, Server, User,
+    UserIndex, UserScreenState,
     inventory::{Inventory, ItemQuality, ItemStack, generate_loot_table, lock_inventories},
     registry::{Key, RegistryConfigLoadable},
 };
@@ -545,21 +546,16 @@ pub fn tick_chunk(world: &WorldAccess) {
                                     screen: screen_key,
                                     view,
                                 } => {
-                                    if let Some(user) = entity.controlling_user {
-                                        let Some(user) = world.users.get(user) else {
-                                            continue;
-                                        };
-                                        user.set_screen(
-                                            *screen_key,
-                                            vec![
-                                                (
-                                                    InventoryProvider::Entity(entity.uuid),
-                                                    InventoryView::from_range(0..10),
-                                                ),
-                                                (InventoryProvider::Block(position), view.clone()),
-                                            ],
-                                        );
-                                    }
+                                    user.set_screen(
+                                        *screen_key,
+                                        vec![
+                                            (
+                                                InventoryProvider::Entity(entity.uuid),
+                                                InventoryView::from_range(0..10),
+                                            ),
+                                            (InventoryProvider::Block(position), view.clone()),
+                                        ],
+                                    );
                                 }
                                 BlockInteractAction::Pickup => {
                                     let Ok(drops) = world.break_block(position) else {
@@ -676,28 +672,16 @@ pub fn tick_chunk(world: &WorldAccess) {
                             if from == to {
                                 continue;
                             }
-                            let Some(user) = entity.controlling_user else {
-                                continue;
-                            };
-                            let Some(user) = world.users.get(user) else {
-                                continue;
-                            };
                             let screen = user.screen.lock();
                             let Some(screen) = &*screen else {
                                 continue;
                             };
-                            let mut running_index = 0;
-                            let mut from_pv = None;
-                            let mut to_pv = None;
-                            for (inventory, view) in &screen.inventories {
-                                if from < running_index + view.size() && from_pv.is_none() {
-                                    from_pv = Some((*inventory, from - running_index));
-                                }
-                                if to < running_index + view.size() && to_pv.is_none() {
-                                    to_pv = Some((*inventory, to - running_index));
-                                }
-                                running_index += view.size();
-                            }
+                            let Some((from_provider, from_index)) = screen.get_slot(from) else {
+                                continue;
+                            };
+                            let Some((to_provider, to_index)) = screen.get_slot(to) else {
+                                continue;
+                            };
                             let move_item =
                                 |src: &mut Option<ItemStack>, dst: &mut Option<ItemStack>| {
                                     if let Some(source) = src.as_mut() {
@@ -730,88 +714,115 @@ pub fn tick_chunk(world: &WorldAccess) {
                                     }
                                 };
                             let mut user_inventory = RefCell::new(&mut entity.inventory);
-                            enum ProvidedInventory<'a> {
-                                Block(WorldAccessRef<'a, BlockMachine, BlockPos>),
-                                Entity(WorldAccessRef<'a, Entity, Uuid>),
-                                RefMut(std::cell::RefMut<'a, &'a mut Inventory>),
-                            };
-                            impl ProvidedInventory<'_> {
-                                pub fn lock<'a>(
-                                    provider: &InventoryProvider,
-                                    world: &'a WorldAccess,
-                                    user_id: Uuid,
-                                    user_inventory: &'a RefCell<&'a mut Inventory>,
-                                ) -> Result<ProvidedInventory<'a>, ()>
-                                {
-                                    match provider {
-                                        InventoryProvider::Entity(uuid) => {
-                                            if *uuid == user_id {
-                                                Ok(ProvidedInventory::RefMut(
-                                                    user_inventory.borrow_mut(),
-                                                ))
-                                            } else {
-                                                let Some(entity) = world.get_entity(*uuid) else {
-                                                    return Err(());
-                                                };
-                                                Ok(ProvidedInventory::Entity(entity))
-                                            }
-                                        }
-                                        InventoryProvider::Block(position) => {
-                                            let Some(mut machine) = world
-                                                .get_block_component::<BlockMachine>(*position)
-                                            else {
-                                                return Err(());
-                                            };
-                                            Ok(ProvidedInventory::Block(machine))
-                                        }
-                                    }
-                                }
-                                pub fn get(&mut self) -> &mut Inventory {
-                                    match self {
-                                        ProvidedInventory::Block(block) => &mut block.inventory,
-                                        ProvidedInventory::Entity(entity) => &mut entity.inventory,
-                                        ProvidedInventory::RefMut(ref_mut) => ref_mut,
-                                    }
-                                }
-                            }
-                            match (from_pv, to_pv) {
-                                (
-                                    Some((from_provider, from_index)),
-                                    Some((to_provider, to_index)),
-                                ) => {
-                                    let mut from_provided = ProvidedInventory::lock(
-                                        &from_provider,
-                                        world,
-                                        entity.uuid,
-                                        &user_inventory,
-                                    )
+                            let mut from_provided = ProvidedInventory::lock(
+                                &from_provider,
+                                world,
+                                entity.uuid,
+                                &user_inventory,
+                            )
+                            .unwrap();
+                            if from_provider == to_provider {
+                                let [src, dst] = from_provided
+                                    .get_mut()
+                                    .items
+                                    .get_disjoint_mut([from_index, to_index])
                                     .unwrap();
-                                    if from_provider == to_provider {
-                                        let [src, dst] = from_provided
-                                            .get()
-                                            .items
-                                            .get_disjoint_mut([from_index, to_index])
-                                            .unwrap();
-                                        move_item(src, dst);
-                                    } else {
-                                        let mut to_provided = ProvidedInventory::lock(
-                                            &to_provider,
-                                            world,
-                                            entity.uuid,
-                                            &user_inventory,
-                                        )
-                                        .unwrap();
-                                        move_item(
-                                            &mut from_provided.get().items[from_index],
-                                            &mut to_provided.get().items[to_index],
-                                        );
-                                    }
-                                }
-                                _ => {}
+                                move_item(src, dst);
+                            } else {
+                                let mut to_provided = ProvidedInventory::lock(
+                                    &to_provider,
+                                    world,
+                                    entity.uuid,
+                                    &user_inventory,
+                                )
+                                .unwrap();
+                                move_item(
+                                    &mut from_provided.get_mut().items[from_index],
+                                    &mut to_provided.get_mut().items[to_index],
+                                );
                             }
                         }
-                        NetworkMessageC2S::Research { research } => todo!(),
-                        NetworkMessageC2S::Craft { recipe, count } => todo!(),
+                        NetworkMessageC2S::Research { research } => {
+                            let screen = user.screen.lock();
+                            let Some(screen) = &*screen else {
+                                continue;
+                            };
+                            let mut user_inventory = RefCell::new(&mut entity.inventory);
+                            let Ok(mut list) = ProvidedInventoryList::lock_screen(
+                                screen,
+                                world,
+                                entity.uuid,
+                                &user_inventory,
+                            ) else {
+                                continue;
+                            };
+                            if entity.state.research.contains(&research) {
+                                continue;
+                            }
+                            let research_data = research.data();
+                            let mut failed = false;
+                            for dependency in &research_data.dependencies {
+                                if !entity.state.research.contains(dependency) {
+                                    failed = true;
+                                    break;
+                                }
+                            }
+                            if failed {
+                                continue;
+                            }
+                            for (req_item, req_count) in &research_data.requirements {
+                                if list.count_item(*req_item) < *req_count {
+                                    failed = true;
+                                    break;
+                                }
+                            }
+                            if failed {
+                                continue;
+                            }
+                            for (req_item, req_count) in &research_data.requirements {
+                                assert_eq!(list.remove_item(*req_item, *req_count), 0);
+                            }
+                            entity.state.research.insert(research);
+                            world.send(
+                                controlling_user,
+                                NetworkMessageS2C::UpdateResearch {
+                                    research: entity.state.research.clone(),
+                                },
+                            );
+                        }
+                        NetworkMessageC2S::Craft { recipe, mut count } => {
+                            let screen = user.screen.lock();
+                            let Some(screen) = &*screen else {
+                                continue;
+                            };
+                            let mut user_inventory = RefCell::new(&mut entity.inventory);
+                            let Ok(mut list) = ProvidedInventoryList::lock_screen(
+                                screen,
+                                world,
+                                entity.uuid,
+                                &user_inventory,
+                            ) else {
+                                continue;
+                            };
+                            let recipe = recipe.data();
+                            for (input_item, input_count) in &recipe.inputs {
+                                count = count.min(list.count_item(*input_item) / *input_count);
+                                if count == 0 {
+                                    break;
+                                }
+                            }
+                            if count == 0 {
+                                continue;
+                            }
+                            for (input_item, input_count) in &recipe.inputs {
+                                assert_eq!(list.remove_item(*input_item, *input_count * count), 0);
+                            }
+                            for _ in 0..count {
+                                for item in generate_loot_table(recipe.outputs.data()) {
+                                    list.add_item(item);
+                                }
+                            }
+                        }
                         NetworkMessageC2S::OpenPlayerInventory => {
                             if let Some(user) = entity.controlling_user {
                                 let Some(user) = world.users.get(user) else {
@@ -832,9 +843,6 @@ pub fn tick_chunk(world: &WorldAccess) {
                             value,
                             modify_mode,
                         } => {
-                            let Some(user) = world.users.get(controlling_user) else {
-                                continue;
-                            };
                             let mut screen_lock = user.screen.lock();
                             if let Some(screen_lock) = screen_lock.as_ref() {
                                 if !screen_lock
@@ -883,6 +891,49 @@ pub fn tick_chunk(world: &WorldAccess) {
                                     }
                                 }
                             }
+                        }
+                        NetworkMessageC2S::TrashItem { slot, mode } => {
+                            let screen = user.screen.lock();
+                            let Some(screen) = &*screen else {
+                                continue;
+                            };
+                            let mut user_inventory = RefCell::new(&mut entity.inventory);
+                            let Some((provider, index)) = screen.get_slot(slot) else {
+                                continue;
+                            };
+                            let mut provided = ProvidedInventory::lock(
+                                &provider,
+                                world,
+                                entity.uuid,
+                                &user_inventory,
+                            )
+                            .unwrap();
+                            let mut item_slot = &mut provided.get_mut().items[index];
+                            if let Some(item) = item_slot {
+                                item.count -= mode.get_count(item.count);
+                                if item.count <= 0 {
+                                    *item_slot = None;
+                                }
+                            }
+                        }
+                        NetworkMessageC2S::GiveItem { item, stack } => {
+                            let screen = user.screen.lock();
+                            let Some(screen) = &*screen else {
+                                continue;
+                            };
+                            let mut user_inventory = RefCell::new(&mut entity.inventory);
+                            let Ok(mut list) = ProvidedInventoryList::lock_screen(
+                                screen,
+                                world,
+                                entity.uuid,
+                                &user_inventory,
+                            ) else {
+                                continue;
+                            };
+                            list.add_item(ItemStack::new(
+                                item,
+                                if stack { item.data().stack_size } else { 1 },
+                            ));
                         }
                     }
                 }
@@ -2092,15 +2143,18 @@ impl WorldAccess<'_> {
         position: Pos,
     ) -> Result<(), ()> {
         let item_entity_key = EntityKey::id("item").unwrap();
-        for item in items {
-            let mut item_entity = Entity::new(item_entity_key, position);
-            item_entity.state.character_controller.velocity = Pos {
-                x: rand::random::<f32>() * 2. - 1.,
-                y: rand::random::<f32>(),
-                z: rand::random::<f32>() * 2. - 1.,
-            };
-            item_entity.inventory.items[0] = Some(item);
-            let _ = self.spawn_entity(item_entity);
+        for mut item in items {
+            for _ in 0..item.count {
+                let mut item_entity = Entity::new(item_entity_key, position);
+                let angle = rand::random::<f32>() * 2. * std::f32::consts::PI;
+                item_entity.state.character_controller.velocity = Pos {
+                    x: angle.cos(),
+                    y: rand::random::<f32>() / 2.,
+                    z: angle.sin(),
+                } * 3.;
+                item_entity.inventory.items[0] = Some(item.copy(1));
+                let _ = self.spawn_entity(item_entity);
+            }
         }
         Ok(())
     }

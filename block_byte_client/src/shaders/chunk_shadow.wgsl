@@ -42,7 +42,7 @@ var s_diffuse: sampler;
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let albedo: vec4<f32> = textureSampleLevel(t_diffuse, s_diffuse, in.tex_coords, 0);
-    if albedo.w < 0.1{
+    if albedo.w < 0.9{
         discard;
     }
     return vec4(1.);

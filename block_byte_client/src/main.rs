@@ -37,7 +37,7 @@ use block_byte_common::{
         Key, KeyGroup, ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData,
         TextureKey, ToolData, TranslationLanguageData, air_block, load_registries,
     },
-    ui::PropertyMap,
+    ui::{PropertyMap, SlotId},
     world::{self, ClientChunkBlockComponents},
 };
 use bytemuck::Pod;
@@ -479,42 +479,60 @@ impl ApplicationHandler for App {
                     ) {
                         match hovered {
                             HoveredElement::Slot(target_slot) => match screen.selected_slot {
-                                Some((slot, button)) => match button {
-                                    MouseButton::Left => {
-                                        if self.game.buttons.is_just_up(MouseButton::Left) {
-                                            self.connection.tx.send(NetworkMessageC2S::MoveItem {
-                                                from: slot,
-                                                to: target_slot,
-                                                mode: ItemMoveMode::Stack,
-                                            });
+                                Some((slot, button)) => {
+                                    let move_mode = match button {
+                                        MouseButton::Left => {
+                                            if self.game.buttons.is_just_up(MouseButton::Left) {
+                                                Some(ItemMoveMode::Stack)
+                                            } else if self
+                                                .game
+                                                .buttons
+                                                .is_just_down(MouseButton::Right)
+                                            {
+                                                Some(ItemMoveMode::Single)
+                                            } else {
+                                                None
+                                            }
                                         }
-                                        if self.game.buttons.is_just_down(MouseButton::Right) {
-                                            self.connection.tx.send(NetworkMessageC2S::MoveItem {
-                                                from: slot,
-                                                to: target_slot,
-                                                mode: ItemMoveMode::Single,
-                                            });
+                                        MouseButton::Right => {
+                                            if self.game.buttons.is_just_up(MouseButton::Right) {
+                                                Some(ItemMoveMode::Half)
+                                            } else {
+                                                None
+                                            }
                                         }
-                                    }
-                                    MouseButton::Right => {
-                                        if self.game.buttons.is_just_up(MouseButton::Right) {
-                                            self.connection.tx.send(NetworkMessageC2S::MoveItem {
-                                                from: slot,
-                                                to: target_slot,
-                                                mode: ItemMoveMode::Half,
-                                            });
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                },
-                                None => {
-                                    for button in [MouseButton::Left, MouseButton::Right] {
-                                        if self.game.buttons.is_just_down(button) {
-                                            screen.selected_slot = Some((target_slot, button));
-                                            break;
+                                        _ => unreachable!(),
+                                    };
+                                    if let Some(mode) = move_mode {
+                                        match target_slot {
+                                            SlotId::Id(target_slot) => {
+                                                self.connection.tx.send(
+                                                    NetworkMessageC2S::MoveItem {
+                                                        from: slot,
+                                                        to: target_slot,
+                                                        mode,
+                                                    },
+                                                );
+                                            }
+                                            SlotId::Trash => {
+                                                self.connection.tx.send(
+                                                    NetworkMessageC2S::TrashItem { slot, mode },
+                                                );
+                                            }
                                         }
                                     }
                                 }
+                                None => match target_slot {
+                                    SlotId::Id(target_slot) => {
+                                        for button in [MouseButton::Left, MouseButton::Right] {
+                                            if self.game.buttons.is_just_down(button) {
+                                                screen.selected_slot = Some((target_slot, button));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    SlotId::Trash => {}
+                                },
                             },
                             HoveredElement::Craft(key) => {
                                 for (button, count) in
@@ -545,6 +563,17 @@ impl ApplicationHandler for App {
                                         value,
                                         modify_mode,
                                     });
+                                }
+                            }
+                            HoveredElement::CheatGive(item) => {
+                                for (button, stack) in
+                                    [(MouseButton::Left, false), (MouseButton::Right, true)]
+                                {
+                                    if self.game.buttons.is_just_down(button) {
+                                        self.connection
+                                            .tx
+                                            .send(NetworkMessageC2S::GiveItem { item, stack });
+                                    }
                                 }
                             }
                         }

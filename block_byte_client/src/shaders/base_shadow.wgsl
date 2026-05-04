@@ -11,6 +11,7 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
+    @location(1) color: vec4<f32>,
 }
 
 @vertex
@@ -21,6 +22,7 @@ fn vs_main(
     out.tex_coords = model.tex_coords;
     let projected = shadow_camera.view_proj * vec4<f32>(model.position, 1.0);
     out.clip_position = vec4(shadow_distort_position(projected.xy), projected.z, 1.);
+    out.color = model.color;
     return out;
 }
 
@@ -31,8 +33,8 @@ var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color: vec4<f32> = textureSampleLevel(t_diffuse, s_diffuse, in.tex_coords, 0);
-    if color.w < 0.1{
+    let color: vec4<f32> = textureSampleLevel(t_diffuse, s_diffuse, in.tex_coords, 0) * in.color;
+    if color.w < 0.9{
         discard;
     }
     return vec4(1.);

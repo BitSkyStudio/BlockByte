@@ -542,7 +542,21 @@ impl AABB<i32> {
         }
     }
 }
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct HorizontalFace(Face);
+impl HorizontalFace {
+    pub fn new(face: Face) -> Option<HorizontalFace> {
+        if face.get_block_offset().y != 0 {
+            return None;
+        }
+        Some(HorizontalFace(face))
+    }
+}
+impl Into<Face> for HorizontalFace {
+    fn into(self) -> Face {
+        self.0
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Face {
     Front,

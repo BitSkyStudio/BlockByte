@@ -6,7 +6,7 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Orientation},
     registry::{BiomeKey, BlockEntry, BlockPalette, BlockRotation, KeyGroup, PrefabKey, air_block},
 };
 use moka::sync::Cache;
@@ -159,7 +159,8 @@ struct ChunkColumnDecoration {
     x: u8,
     z: u8,
     exclusion_zone: u8,
-    rotation: u8,
+    rotation: HorizontalFace,
+    seed: u64,
 }
 #[derive(Deserialize)]
 pub struct WorldGeneratorConfigStructure {
@@ -286,6 +287,7 @@ impl WorldGenerator {
                         }
                         for _ in 0..10 {
                             let rotation = rng.random_range(0..4) as u8;
+                            let seed = rng.next_u64();
                             let offset_x = rng.random_range(0..CHUNK_SIZE) as u8;
                             let offset_z = rng.random_range(0..CHUNK_SIZE) as u8;
                             if biome_map[offset_x as usize][offset_z as usize] != *biome {
@@ -303,7 +305,11 @@ impl WorldGenerator {
                                         x: offset_x,
                                         z: offset_z,
                                         exclusion_zone: decorator.exclusion_zone,
-                                        rotation,
+                                        rotation: HorizontalFace::new(
+                                            Face::horizontal()[rotation as usize],
+                                        )
+                                        .unwrap(),
+                                        seed,
                                     });
                                 break;
                             }
@@ -391,6 +397,11 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         }
     }
     let replacable_tag = KeyGroup::parse("#prefab_replacable").unwrap();
+    let chunk_aabb = (AABB {
+        min: BlockPos::all(0),
+        max: BlockPos::all(CHUNK_SIZE as i32),
+    })
+    .offset(position.to_block_pos());
     for neighbor_chunk in (AABB {
         min: ChunkPos { x: -1, y: 0, z: -1 },
         max: ChunkPos { x: 1, y: 0, z: 1 },
@@ -408,28 +419,19 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 y: height,
                 z: block_offset.z + placed_decoration.z as i32,
             };
-            //todo: do bounding box calculations to cull
-            if
-            /*height >= block_offset.y && height < block_offset.y + CHUNK_SIZE as i32*/
-            true {
-                let prefab = placed_decoration.key.data();
-                let rotation = [Face::Front, Face::Back, Face::Left, Face::Right]
-                    [placed_decoration.rotation as usize];
-                let rotation = Orientation::from_front_up(rotation, Face::Up).unwrap();
-                for part in &prefab.parts {
-                    //todo
-                    /*if !rng.random_bool(part.chance as f64) {
-                        continue;
-                    }*/
-                    for (offset, block) in &part.blocks {
-                        let offset = rotation.rotate_block_pos(*offset);
-                        let mut block = *block;
-                        block.rotation = block.block.data().rotation.get_nearest_valid(
-                            rotation
-                                .compose(Orientation::from_block_rotation(block.rotation))
-                                .into_block_rotation(),
-                        );
-                        let place_position = block_position + offset;
+            let prefab = placed_decoration.key.data();
+            if Orientation::from_front_up(placed_decoration.rotation.into(), Face::Up)
+                .unwrap()
+                .into_block_rotation()
+                .rotate_block_aabb(prefab.bounding_box())
+                .offset(block_position)
+                .intersects(chunk_aabb)
+            {
+                prefab.build(
+                    block_position,
+                    placed_decoration.rotation,
+                    placed_decoration.seed,
+                    |place_position, block| {
                         let (place_chunk, place_chunk_offset) =
                             place_position.to_chunk_pos_offset();
                         if place_chunk == position {
@@ -439,8 +441,8 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                 blocks.set(place_chunk_offset.index(), &block);
                             }
                         }
-                    }
-                }
+                    },
+                );
             }
         }
     }

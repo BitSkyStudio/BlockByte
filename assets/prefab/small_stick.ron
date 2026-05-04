@@ -1,9 +1,9 @@
 (
-    parts: [(
+    blocks: [(
+        x: 0,
+        y: 0,
+        z: 0,
         chance: 1.,
-        blocks: {
-        (0, 0, 0): (
-            block: "wood.oak.stick",
-        )
-    })]
+        block: "wood.oak.stick",
+    )]
 )

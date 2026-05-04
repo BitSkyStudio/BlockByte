@@ -8,7 +8,9 @@ use uuid::Uuid;
 use crate::{
     ClientItem, ItemMoveMode, LookDirection, PlayerAbilities,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
-    registry::{BlockEntry, BlockKey, BlockPalette, EntityKey, RecipeKey, ResearchKey, ToolData},
+    registry::{
+        BlockEntry, BlockKey, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey, ToolData,
+    },
     scripts::ScriptValue,
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
@@ -57,7 +59,15 @@ pub enum NetworkMessageC2S {
     },
     Craft {
         recipe: RecipeKey,
-        count: u32,
+        count: u16,
+    },
+    TrashItem {
+        slot: usize,
+        mode: ItemMoveMode,
+    },
+    GiveItem {
+        item: ItemKey,
+        stack: bool,
     },
     OpenPlayerInventory,
     HarvestPlant {
