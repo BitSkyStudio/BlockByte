@@ -429,6 +429,7 @@ impl RenderState {
         frustum: &Frustum,
         delta_time: f32,
     ) -> Result<(), SurfaceError> {
+        let ps = profiler::profiler_scope("load uniforms");
         self.animation_time += delta_time;
         self.time_uniform.write(&self.queue, &self.animation_time);
 
@@ -446,6 +447,9 @@ impl RenderState {
 
         camera_uniform.load_light(camera.position);
         self.shadow_camera.write(&self.queue, &camera_uniform);
+        ps.end();
+
+        let ps = profiler::profiler_scope("render mesh alloc");
 
         let mut encoder = self
             .device
@@ -453,7 +457,6 @@ impl RenderState {
                 label: Some("Upload Encoder"),
             });
 
-        let ps = profiler::profiler_scope("render mesh alloc");
         self.entity_gpu_mesh.upload(
             &entity_mesh,
             &self.device,
@@ -515,7 +518,7 @@ impl RenderState {
                         });
                     }
                 }
-                if frame_load_limit > (5. * 1024. * 1024.) as u64 && false {
+                if frame_load_limit > (1. * 1024. * 1024.) as u64 && true {
                     break;
                 }
             }
@@ -530,6 +533,7 @@ impl RenderState {
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
+                ps.end();
                 return Err(SurfaceError::Recreate);
             }
             wgpu::CurrentSurfaceTexture::Lost => {
@@ -537,7 +541,10 @@ impl RenderState {
             }
             wgpu::CurrentSurfaceTexture::Timeout
             | wgpu::CurrentSurfaceTexture::Validation
-            | wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
+            | wgpu::CurrentSurfaceTexture::Occluded => {
+                ps.end();
+                return Ok(());
+            }
         };
         ps.end();
 

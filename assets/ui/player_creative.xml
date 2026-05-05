@@ -1,0 +1,16 @@
+<box style="height: 100%;width:100%;justify-content: center;align-items: center;gap-row: 30;flex-direction:column;">
+    <box style="gap-column: 10;">
+        <slot id="0" class="slot"/>
+        <slot id="1" class="slot"/>
+        <slot id="2" class="slot"/>
+        <slot id="3" class="slot"/>
+        <slot id="4" class="slot"/>
+        <slot id="5" class="slot"/>
+        <slot id="6" class="slot"/>
+        <slot id="7" class="slot"/>
+        <slot id="8" class="slot"/>
+        <slot id="9" class="slot"/>
+        <slot id="trash" style="background: trash_slot;"/>
+    </box>
+    <craft style="background: slot,3;border: 20;" recipes="cheat_menu" craft_width="10"/>
+</box>

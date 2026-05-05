@@ -6,3 +6,4 @@ assets_generated/
 worldgen_vis/
 textureatlasdump.png
 *.png~
+server_config.ron

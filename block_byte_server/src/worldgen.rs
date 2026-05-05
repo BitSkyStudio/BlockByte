@@ -11,8 +11,9 @@ use block_byte_common::{
 };
 use moka::sync::Cache;
 use noise::{NoiseFn, Perlin};
-use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
+use rand::{Rng, RngCore, SeedableRng};
 use rand_seeder::Seeder;
+use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::Deserialize;
 use smallvec::SmallVec;
 use splines::{Interpolation, Spline};
@@ -34,8 +35,9 @@ impl RegionGeneration {
         world_generator: &WorldGenerator,
     ) -> Vec<RegionStructure> {
         let mut structures: Vec<RegionStructure> = Vec::new();
-        let mut rng =
-            StdRng::from_seed(Seeder::from((world_generator.seed as u32, x, z)).make_seed());
+        let mut rng = Xoshiro256PlusPlus::from_seed(
+            Seeder::from((world_generator.seed as u32, x, z)).make_seed(),
+        );
         for _ in 0..world_generator.config.region_structure_spawn_attempts {
             let index = rng.next_u32() as usize % world_generator.config.structures.len();
             let x = x as i32 * Self::REGION_CHUNK_SIZE as i32
@@ -269,8 +271,9 @@ impl WorldGenerator {
             ]);
             //todo: this is probably broken between runs
             let unique_biomes = vec![forest];
-            let mut rng =
-                StdRng::from_seed(Seeder::from((self.seed as u32, chunk_x, chunk_z)).make_seed());
+            let mut rng = Xoshiro256PlusPlus::from_seed(
+                Seeder::from((self.seed as u32, chunk_x, chunk_z)).make_seed(),
+            );
             let mut chunk_column_generation = ChunkColumnGeneration {
                 x: chunk_x,
                 z: chunk_z,
@@ -337,7 +340,8 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
     );
     let mut components = ChunkBlockComponents::default();
 
-    let mut rng = StdRng::from_seed(Seeder::from((generator.seed as u32, position)).make_seed());
+    let mut rng =
+        Xoshiro256PlusPlus::from_seed(Seeder::from((generator.seed as u32, position)).make_seed());
     for z in 0..CHUNK_SIZE as u8 {
         for y in 0..CHUNK_SIZE as u8 {
             for x in 0..CHUNK_SIZE as u8 {

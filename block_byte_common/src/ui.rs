@@ -45,6 +45,10 @@ pub enum SlotId {
     Id(usize),
     Trash,
 }
+pub enum CraftAreaRecipes {
+    Recipes(KeyGroup<RecipeData>),
+    CheatMenu,
+}
 pub enum UIElementType {
     Box(Vec<UIElement>),
     Label(String),
@@ -53,7 +57,7 @@ pub enum UIElementType {
         slot: SlotId,
     },
     CraftArea {
-        recipes: KeyGroup<RecipeData>,
+        recipes: CraftAreaRecipes,
         craft_width: u32,
     },
     ResearchTree {
@@ -103,7 +107,10 @@ impl UIElementType {
                 },
             },
             "craft" => UIElementType::CraftArea {
-                recipes: KeyGroup::parse(node.attribute("recipes").unwrap()).unwrap(),
+                recipes: match node.attribute("recipes").unwrap() {
+                    "cheat_menu" => CraftAreaRecipes::CheatMenu,
+                    recipe_type => CraftAreaRecipes::Recipes(KeyGroup::parse(recipe_type).unwrap()),
+                },
                 craft_width: node
                     .attribute("craft_width")
                     .and_then(|n| n.parse().ok())

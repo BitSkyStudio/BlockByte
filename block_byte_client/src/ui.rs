@@ -7,8 +7,8 @@ use block_byte_common::{
     registry::{BlockRenderData, ItemKey, ItemModel, Key, RecipeKey, ResearchKey, TextureKey},
     scripts::ScriptValue,
     ui::{
-        PropertyMap, SlotId, StretchTexture, StyleLength, UIElement, UIElementType, UIScreen,
-        UIScreenKey, UIStyleRule,
+        CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, StyleLength, UIElement,
+        UIElementType, UIScreen, UIScreenKey, UIStyleRule,
     },
 };
 use cgmath::{Matrix4, SquareMatrix, Transform, Vector3};
@@ -146,7 +146,13 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
             let craft_width = *craft_width as f32;
             taffy::Size {
                 width: craft_width * craft_size,
-                height: (recipes.list().len() as f32 / craft_width).ceil() * craft_size,
+                height: (match recipes {
+                    CraftAreaRecipes::Recipes(recipes) => recipes.list().len(),
+                    CraftAreaRecipes::CheatMenu => ItemKey::entries().count(), //todo: just cache this number
+                } as f32
+                    / craft_width)
+                    .ceil()
+                    * craft_size,
             }
         }
         UIElementType::ResearchTree { .. } => taffy::Size {
@@ -533,39 +539,97 @@ fn render_element(
             craft_width,
         } => {
             let craft_size = 50.;
-            for (i, recipe) in recipes.list().iter().enumerate() {
-                let recipe_data = recipe.data();
-                let area = UIRect {
-                    pos: UIPos {
-                        x: (i % (*craft_width as usize)) as f32 * craft_size,
-                        y: (i / (*craft_width as usize)) as f32 * craft_size,
-                    },
-                    size: UIPos::all(craft_size),
-                };
-                context.draw_icon(
-                    area,
-                    match &recipe_data.icon_override {
-                        Some(icon) => icon,
-                        None => &recipe_data.outputs.data().entries[0].item.data().model,
-                    },
-                );
-                if (UIRect {
-                    pos: UIPos {
-                        x: area.pos.x + context.content.pos.x,
-                        y: area.pos.y + context.content.pos.y,
-                    },
-                    size: UIPos::all(craft_size),
-                })
-                .contains(mouse_position)
-                    && data.selected_slot.is_none()
-                {
-                    overlay_context.draw_text(
-                        mouse_position,
-                        translate(format!("recipe.{}", recipe.text_id()).as_str()),
-                        40.,
-                        Color::WHITE,
-                    );
-                    *out_hovered = Some(HoveredElement::Craft(*recipe));
+            match recipes {
+                CraftAreaRecipes::CheatMenu => {
+                    for (i, item) in ItemKey::entries().enumerate() {
+                        let item_data = item.data();
+                        let area = UIRect {
+                            pos: UIPos {
+                                x: (i % (*craft_width as usize)) as f32 * craft_size,
+                                y: (i / (*craft_width as usize)) as f32 * craft_size,
+                            },
+                            size: UIPos::all(craft_size),
+                        };
+                        context.draw_icon(area, &item_data.model);
+                        if (UIRect {
+                            pos: UIPos {
+                                x: area.pos.x + context.content.pos.x,
+                                y: area.pos.y + context.content.pos.y,
+                            },
+                            size: UIPos::all(craft_size),
+                        })
+                        .contains(mouse_position)
+                            && data.selected_slot.is_none()
+                        {
+                            overlay_context.draw_text(
+                                mouse_position,
+                                translate(format!("item.{}", item.text_id()).as_str()),
+                                40.,
+                                Color::WHITE,
+                            );
+                            *out_hovered = Some(HoveredElement::CheatGive(item));
+                        }
+                    }
+                }
+                CraftAreaRecipes::Recipes(recipes) => {
+                    for (i, recipe) in recipes.list().iter().enumerate() {
+                        let recipe_data = recipe.data();
+                        let area = UIRect {
+                            pos: UIPos {
+                                x: (i % (*craft_width as usize)) as f32 * craft_size,
+                                y: (i / (*craft_width as usize)) as f32 * craft_size,
+                            },
+                            size: UIPos::all(craft_size),
+                        };
+                        context.draw_icon(
+                            area,
+                            match &recipe_data.icon_override {
+                                Some(icon) => icon,
+                                None => &recipe_data.outputs.data().entries[0].item.data().model,
+                            },
+                        );
+                        if (UIRect {
+                            pos: UIPos {
+                                x: area.pos.x + context.content.pos.x,
+                                y: area.pos.y + context.content.pos.y,
+                            },
+                            size: UIPos::all(craft_size),
+                        })
+                        .contains(mouse_position)
+                            && data.selected_slot.is_none()
+                        {
+                            let mut text =
+                                translate(format!("recipe.{}", recipe.text_id()).as_str())
+                                    .to_string();
+                            for (input_item, input_count) in &recipe_data.inputs {
+                                text += format!(
+                                    "\n-{}x{}",
+                                    *input_count,
+                                    translate(format!("item.{}", input_item.text_id()).as_str())
+                                )
+                                .as_str();
+                            }
+                            for loot_entry in &recipe_data.outputs.data().entries {
+                                //todo: somehow do modifiers
+                                text += format!(
+                                    "\n+{}% {}",
+                                    loot_entry.chance * 100.,
+                                    translate(
+                                        format!("item.{}", loot_entry.item.text_id()).as_str()
+                                    )
+                                )
+                                .as_str();
+                            }
+
+                            overlay_context.draw_multiline_text(
+                                mouse_position,
+                                text.as_str(),
+                                40.,
+                                Color::WHITE,
+                            );
+                            *out_hovered = Some(HoveredElement::Craft(*recipe));
+                        }
+                    }
                 }
             }
         }
@@ -659,7 +723,7 @@ impl UIElementRenderContext<'_> {
     }
     pub fn draw_text(&mut self, position: UIPos, text: &str, size: f32, color: Color) -> UIPos {
         //todo: clip
-        text_renderer().draw(
+        let size = text_renderer().draw(
             UIPos {
                 x: (self.content.pos.x + position.x) / self.gui_size as f32 * 2.
                     - self.aspect_ratio,
@@ -669,7 +733,27 @@ impl UIElementRenderContext<'_> {
             size / self.gui_size as f32 * 2.,
             color,
             self.buffer,
-        )
+        );
+        UIPos {
+            x: size.x * self.gui_size / 2.,
+            y: size.y * self.gui_size / 2.,
+        }
+    }
+    pub fn draw_multiline_text(&mut self, position: UIPos, text: &str, size: f32, color: Color) {
+        let row_gap = 10.;
+        let mut y_shift = 0.;
+        for line in text.lines() {
+            let size = self.draw_text(
+                UIPos {
+                    x: position.x,
+                    y: position.y + y_shift,
+                },
+                line,
+                size,
+                color,
+            );
+            y_shift += size.y + row_gap;
+        }
     }
     pub fn draw_icon(&mut self, quad: UIRect, icon: &ItemModel) {
         //todo: clip

@@ -36,7 +36,7 @@ use rayon::iter::{
 use renet::{
     Bytes, ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent,
 };
-use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
+use renet_netcode::{NetcodeServerTransport, ServerAuthentication};
 use ron::ser::PrettyConfig;
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
@@ -103,7 +103,7 @@ fn main() {
     let mut network_server = RenetServer::new(make_connection_config());
     const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
     let network_socket: UdpSocket = UdpSocket::bind(SERVER_ADDR).unwrap();
-    let network_server_config = ServerConfig {
+    let network_server_config = renet_netcode::ServerConfig {
         current_time: SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap(),
@@ -144,6 +144,15 @@ fn main() {
         });
         rx
     };
+    {
+        let mut config: ServerConfig = ron::from_str(
+            std::fs::read_to_string("server_config.ron")
+                .unwrap_or("()".to_string())
+                .as_str(),
+        )
+        .unwrap();
+        assert!(SERVER_CONFIG_INSTANCE.set(config).is_ok());
+    }
 
     let world_generator_config = ron::from_str(
         std::fs::read_to_string("assets/world_generator.ron")
@@ -195,14 +204,6 @@ fn main() {
         for (user, spawn_position) in player_spawns.drain(..) {
             let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
             let full_view = entity.inventory.full_view();
-            entity.inventory.add_item(
-                &full_view,
-                ItemStack::new(ItemKey::id("arrow").unwrap(), 20),
-            );
-            entity.inventory.add_item(
-                &full_view,
-                ItemStack::new(ItemKey::id("rock.limestone.stone").unwrap(), 80),
-            );
             entity.controlling_user = Some(user);
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
@@ -370,86 +371,6 @@ fn main() {
             }
         }
 
-        /*for (user_index, user) in &server.users {
-            {
-                if let Some(entity) = user
-                    .entity
-                    .as_ref()
-                    .and_then(|entity| server.entities.get_mut(*entity))
-                {
-                    let inventory: Vec<_> = entity
-                        .inventory
-                        .get_mut()
-                        .items
-                        .iter()
-                        .map(|item| item.as_ref().map(|item| item.client()))
-                        .collect();
-                    for (i, item) in inventory.into_iter().enumerate() {
-                        server.message_queue.send_message(
-                            std::iter::once(user_index),
-                            NetworkMessageS2C::HUDSlot { slot: i, item },
-                        );
-                    }
-                    server.message_queue.send_message(
-                        std::iter::once(user_index),
-                        NetworkMessageS2C::HudBarUpdate {
-                            health: entity.state.get_mut().health,
-                        },
-                    );
-                }
-            }
-            let mut screen_lock = user.screen.lock();
-            if let Some(screen) = &mut *screen_lock {
-                match screen.state {
-                    UserScreenState::Open => {
-                        let Ok(items) = screen.get_items(&mut server.entities, &mut server.chunks)
-                        else {
-                            *screen_lock = None;
-                            continue;
-                        };
-                        server.message_queue.send_message(
-                            std::iter::once(user_index),
-                            NetworkMessageS2C::UIOpen {
-                                screen: screen.screen,
-                                slots: items
-                                    .iter()
-                                    .map(|item| item.as_ref().map(|item| item.client()))
-                                    .collect(),
-                            },
-                        );
-                        screen.previous_state = items;
-                        screen.state = UserScreenState::Normal;
-                    }
-                    UserScreenState::Normal => {
-                        let Ok(items) = screen.get_items(&mut server.entities, &mut server.chunks)
-                        else {
-                            *screen_lock = None;
-                            continue;
-                        };
-                        for (slot, (previous, new)) in
-                            screen.previous_state.iter().zip(items.iter()).enumerate()
-                        {
-                            if previous != new {
-                                server.message_queue.send_message(
-                                    std::iter::once(user_index),
-                                    NetworkMessageS2C::UISetSlot {
-                                        slot,
-                                        item: new.as_ref().map(|item| item.client()),
-                                    },
-                                );
-                            }
-                        }
-                        screen.previous_state = items;
-                    }
-                    UserScreenState::Close => {
-                        server
-                            .message_queue
-                            .send_message(std::iter::once(user_index), NetworkMessageS2C::UIClose);
-                        *screen_lock = None;
-                    }
-                }
-            }
-        }*/
         let chunks: Vec<_> = server.chunks.keys().cloned().collect();
         for center in chunks {
             let mut world_access = WorldAccess::lock(
@@ -749,20 +670,6 @@ impl UserScreen {
         }
         None
     }
-    /*pub fn get_items(
-        &self,
-        entities: &mut SlotMap<EntityIndex, Entity>,
-        chunks: &mut HashMap<ChunkPos, Chunk>,
-    ) -> Result<Vec<Option<ItemStack>>, ()> {
-        let mut items = Vec::new();
-        for (inventory, view) in &self.inventories {
-            let inventory = inventory.get_inventory(entities, chunks).ok_or(())?;
-            for i in 0..view.size() {
-                items.push(inventory.get_slot(view, i).cloned());
-            }
-        }
-        Ok(items)
-    }*/
 }
 pub enum UserScreenState {
     Open,
@@ -883,19 +790,34 @@ impl User {
         });
     }
     pub fn loading_area_for_view_position(view_position: ChunkPos) -> AABB<i16> {
-        let distance = 8;
-        let world_height = 12;
+        let config = ServerConfig::config();
         AABB {
             min: ChunkPos {
-                x: view_position.x - distance,
+                x: view_position.x - config.view_distance,
                 y: 0,
-                z: view_position.z - distance,
+                z: view_position.z - config.view_distance,
             },
             max: ChunkPos {
-                x: view_position.x + distance,
-                y: world_height - 1,
-                z: view_position.z + distance,
+                x: view_position.x + config.view_distance,
+                y: config.world_chunk_height - 1,
+                z: view_position.z + config.view_distance,
             },
         }
+    }
+}
+use serde_default_utils::*;
+#[derive(Deserialize)]
+pub struct ServerConfig {
+    #[serde(default = "default_i16::<8>")]
+    view_distance: i16,
+    #[serde(default = "default_i16::<12>")]
+    world_chunk_height: i16,
+    #[serde(skip_deserializing, default)]
+    is_structure_creation_world: bool,
+}
+static SERVER_CONFIG_INSTANCE: OnceLock<ServerConfig> = OnceLock::new();
+impl ServerConfig {
+    pub fn config() -> &'static ServerConfig {
+        SERVER_CONFIG_INSTANCE.get().unwrap()
     }
 }

@@ -819,7 +819,13 @@ pub fn tick_chunk(world: &WorldAccess) {
                             }
                             for _ in 0..count {
                                 for item in generate_loot_table(recipe.outputs.data()) {
-                                    list.add_item(item);
+                                    if let Some(overflow_item) = list.add_item(item) {
+                                        world.drop_items(
+                                            std::iter::once(overflow_item),
+                                            entity.position
+                                                + Pos::Y * entity_data.hitbox_height / 2.,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -829,7 +835,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                     continue;
                                 };
                                 user.set_screen(
-                                    Key::id("player").unwrap(),
+                                    Key::id("player_creative").unwrap(),
                                     vec![(
                                         InventoryProvider::Entity(entity.uuid),
                                         InventoryView::from_range(0..10),
@@ -1208,17 +1214,12 @@ pub fn tick_chunk(world: &WorldAccess) {
                             MachineInstrution::AddWakeupObserver { other } => {
                                 let target_position =
                                     block_position + block.rotation.rotate_block_pos(*other);
-                                let Some(target_block) = world.get_block(target_position) else {
-                                    return CallbackResult::Continue;
-                                };
-                                let target_position =
-                                    block_position + block.rotation.rotate_block_pos(*other);
                                 let Some(mut other_machine) =
                                     world.get_block_component::<BlockMachine>(target_position)
                                 else {
                                     return CallbackResult::Continue;
                                 };
-                                other_machine.inventory_observers.push(target_position);
+                                other_machine.inventory_observers.push(block_position);
                                 CallbackResult::Continue
                             }
                             MachineInstrution::ReadLogic { face, register } => {
