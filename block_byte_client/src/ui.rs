@@ -124,7 +124,10 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
     match &element.element_type {
         UIElementType::Box(uielements) => taffy::Size::ZERO,
         UIElementType::Label(text) | UIElementType::Button { text, .. } => {
-            let size = text_renderer().get_size(&text, style.font_size);
+            let size = text_renderer().get_size(
+                properties.patch_text(text.as_str()).as_str(),
+                style.font_size,
+            );
             taffy::Size {
                 width: size.x,
                 height: size.y,
@@ -419,7 +422,12 @@ fn render_element(
             }
         }
         UIElementType::Label(text) => {
-            context.draw_text(UIPos::all(0.), &text, 20., Color::WHITE);
+            context.draw_text(
+                UIPos::all(0.),
+                data.properties.patch_text(text.as_str()).as_str(),
+                20.,
+                Color::WHITE,
+            );
         }
         UIElementType::Image(key, width, height) => {
             context.draw_quad(
@@ -673,7 +681,12 @@ fn render_element(
             value,
             modify_mode,
         } => {
-            context.draw_text(UIPos::all(0.), &text, 20., Color::WHITE);
+            context.draw_text(
+                UIPos::all(0.),
+                data.properties.patch_text(text.as_str()).as_str(),
+                20.,
+                Color::WHITE,
+            );
             if context.content.contains(mouse_position) {
                 *out_hovered = Some(HoveredElement::Button {
                     property: property.clone(),

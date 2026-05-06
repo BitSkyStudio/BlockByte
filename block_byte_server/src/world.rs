@@ -830,18 +830,13 @@ pub fn tick_chunk(world: &WorldAccess) {
                             }
                         }
                         NetworkMessageC2S::OpenPlayerInventory => {
-                            if let Some(user) = entity.controlling_user {
-                                let Some(user) = world.users.get(user) else {
-                                    continue;
-                                };
-                                user.set_screen(
-                                    Key::id("player_creative").unwrap(),
-                                    vec![(
-                                        InventoryProvider::Entity(entity.uuid),
-                                        InventoryView::from_range(0..10),
-                                    )],
-                                );
-                            }
+                            user.set_screen(
+                                Key::id("player_creative").unwrap(),
+                                vec![(
+                                    InventoryProvider::Entity(entity.uuid),
+                                    InventoryView::from_range(0..10),
+                                )],
+                            );
                         }
                         NetworkMessageC2S::HarvestPlant { position, index } => todo!(),
                         NetworkMessageC2S::UIButtonPress {

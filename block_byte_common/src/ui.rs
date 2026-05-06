@@ -83,7 +83,14 @@ impl UIElementType {
                     })
                     .collect::<anyhow::Result<Vec<UIElement>>>()?,
             ),
-            "label" => UIElementType::Label(node.text().unwrap().to_string()),
+            "label" => UIElementType::Label({
+                let text = node.text().unwrap().to_string();
+                PropertyMap::extract_patched_properties_from_text(
+                    text.as_str(),
+                    &mut context.display_properties,
+                );
+                text
+            }),
             "image" => UIElementType::Image(
                 {
                     let texture = node.attribute("texture").unwrap();
@@ -120,7 +127,14 @@ impl UIElementType {
                 research: KeyGroup::parse(node.attribute("research").unwrap()).unwrap(),
             },
             "buttton" => UIElementType::Button {
-                text: node.text().unwrap().to_string(),
+                text: {
+                    let text = node.text().unwrap().to_string();
+                    PropertyMap::extract_patched_properties_from_text(
+                        text.as_str(),
+                        &mut context.display_properties,
+                    );
+                    text
+                },
                 property: {
                     let property = node.attribute("property").unwrap().to_string();
                     context.button_properties.insert(property.clone());
@@ -530,6 +544,42 @@ impl StyleLength {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct PropertyMap(pub HashMap<String, f32>);
+impl PropertyMap {
+    pub fn extract_patched_properties_from_text(text: &str, properties: &mut HashSet<String>) {
+        let mut current_property = None;
+        for char in text.chars() {
+            if char == '{' {
+                current_property = Some(String::new());
+            } else if char == '}' {
+                properties.insert(current_property.take().unwrap());
+            } else if let Some(current_property) = &mut current_property {
+                current_property.push(char);
+            }
+        }
+    }
+    pub fn patch_text(&self, text: &str) -> String {
+        let mut output_text = String::new();
+        let mut current_property = None;
+        for char in text.chars() {
+            if char == '{' {
+                current_property = Some(String::new());
+            } else if char == '}' {
+                output_text += self
+                    .0
+                    .get(current_property.as_ref().unwrap())
+                    .cloned()
+                    .unwrap_or(0.)
+                    .to_string()
+                    .as_str();
+            } else if let Some(current_property) = &mut current_property {
+                current_property.push(char);
+            } else {
+                output_text.push(char);
+            }
+        }
+        output_text
+    }
+}
 #[derive(Clone, Debug)]
 pub struct PropertyCondition {
     pub property: String,
