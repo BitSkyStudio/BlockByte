@@ -26,7 +26,9 @@ use crate::scripts::{
     ScriptParseContext, ScriptParseError, expect_argument_count,
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
-use crate::{Color, DamageTable, DamageType, InventoryView, LookDirection, ViewSlot};
+use crate::{
+    Color, DamageTable, DamageType, GRAVITY_ACCELERATION, InventoryView, LookDirection, ViewSlot,
+};
 
 use serde_default_utils::*;
 
@@ -750,6 +752,9 @@ pub enum MachineInstrution {
         speed: f32,
         success: ScriptLabel,
     },
+    PlayAnimation {
+        animation: String,
+    },
 }
 impl ExternalScriptByteCode for MachineInstrution {
     fn parse<'a>(
@@ -821,6 +826,12 @@ impl ExternalScriptByteCode for MachineInstrution {
                     output_view: arguments[2].parse().unwrap(),
                     speed: arguments[3].parse().unwrap(),
                     success: arguments[4].parse().unwrap(),
+                }
+            }
+            "play_animation" => {
+                expect_argument_count(parse_context.current_line_num, arguments, 1)?;
+                MachineInstrution::PlayAnimation {
+                    animation: arguments[0].to_string(),
                 }
             }
             _ => {
@@ -1127,6 +1138,9 @@ impl ComposedTexture {
         })
     }
 }
+fn default_acceleration_coefficient() -> f32 {
+    8.
+}
 #[derive(Deserialize)]
 pub struct EntityData {
     #[cfg(feature = "server")]
@@ -1136,9 +1150,12 @@ pub struct EntityData {
     #[serde(default)]
     pub eye_height: f32,
     #[serde(default)]
-    pub jump_velocity: f32,
+    pub jump_height: f32,
+    pub speed: f32,
+    #[serde(default = "default_acceleration_coefficient")]
+    pub acceleration_coefficient: f32,
     #[serde(default)]
-    pub crouch_difference: f32,
+    pub crouch_height_difference: f32,
     pub model: ModelInstance,
     #[serde(default)]
     pub interact_action: EntityInteractAction,
@@ -1147,6 +1164,14 @@ pub struct EntityData {
     pub damage_table: DamageTable,
     #[serde(default)]
     pub ai: Option<MobAI>,
+}
+impl EntityData {
+    pub fn jump_velocity(&self) -> f32 {
+        //s = 1/2at^2
+        let t = (2. * self.jump_height / GRAVITY_ACCELERATION).sqrt();
+        //v = a*t
+        GRAVITY_ACCELERATION * t
+    }
 }
 #[derive(Deserialize)]
 pub struct MobAI {
@@ -1187,7 +1212,7 @@ impl EntityData {
                 x: self.hitbox_size,
                 y: self.hitbox_height
                     - if crouching {
-                        self.crouch_difference
+                        self.crouch_height_difference
                     } else {
                         0.
                     },

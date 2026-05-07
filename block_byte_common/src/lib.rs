@@ -16,6 +16,7 @@ pub mod world;
 
 pub const SERVER_TPS: u32 = 40;
 pub const SERVER_DT: f32 = 1. / (SERVER_TPS as f32);
+pub const GRAVITY_ACCELERATION: f32 = 25.;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum MoveMode {
@@ -256,7 +257,7 @@ impl CharacterController {
     ) {
         match move_mode {
             MoveMode::Normal => {
-                self.velocity.y -= 25. * delta_time;
+                self.velocity.y -= GRAVITY_ACCELERATION * delta_time;
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }

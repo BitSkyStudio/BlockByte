@@ -1436,7 +1436,7 @@ impl ClientPlayer {
             self.position.y
                 - if self.crouching {
                     game.get_player_data()
-                        .map(|data| data.crouch_difference)
+                        .map(|data| data.crouch_height_difference)
                         .unwrap_or(0.)
                 } else {
                     0.
@@ -1445,7 +1445,9 @@ impl ClientPlayer {
             0.5,
             delta_time,
         );
-        let player_entity_data = game.get_player_data();
+        let Some(player_entity_data) = game.get_player_data() else {
+            return;
+        };
         let mut forward =
             cgmath::Vector3::new(self.direction.yaw.sin(), 0., -self.direction.yaw.cos());
         use cgmath::InnerSpace;
@@ -1477,7 +1479,7 @@ impl ClientPlayer {
             move_vector.z /= xz_mag;
         }
         move_vector *= abilities.speed;
-        move_vector *= 5.;
+        move_vector *= player_entity_data.speed;
         self.running = game.keys.is_down(KeyCode::ControlLeft);
         if move_vector.length_squared() == 0. {
             self.running = false;
@@ -1497,12 +1499,7 @@ impl ClientPlayer {
                     && CharacterController::collides_at(
                         self.position,
                         &|block| game.get_block(block),
-                        player_entity_data
-                            .map(|entity_data| entity_data.hitbox(false))
-                            .unwrap_or(AABB {
-                                min: Pos::ZERO,
-                                max: Pos::ZERO,
-                            }),
+                        player_entity_data.hitbox(false),
                     )
                     .is_some()
                 {
@@ -1517,9 +1514,7 @@ impl ClientPlayer {
                     move_vector /= 2.;
                 }
                 if game.keys.is_down(KeyCode::Space) && self.controller.on_ground {
-                    self.controller.velocity.y += player_entity_data
-                        .map(|player_entity_data| player_entity_data.jump_velocity)
-                        .unwrap_or(0.);
+                    self.controller.velocity.y += player_entity_data.jump_velocity();
                 }
             }
             MoveMode::Fly | MoveMode::NoClip => {}
@@ -1530,13 +1525,10 @@ impl ClientPlayer {
             |block| game.get_block(block),
             move_vector,
             abilities.move_mode,
-            player_entity_data
-                .map(|entity_data| entity_data.hitbox(self.crouching))
-                .unwrap_or(AABB {
-                    min: Pos::ZERO,
-                    max: Pos::ZERO,
-                }),
-            40. * abilities.speed,
+            player_entity_data.hitbox(self.crouching),
+            player_entity_data.acceleration_coefficient
+                * player_entity_data.speed
+                * abilities.speed,
             0.5,
             game.keys.is_down(KeyCode::ShiftLeft),
         );

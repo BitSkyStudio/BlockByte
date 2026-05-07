@@ -9,5 +9,6 @@
     ai: (
         attacks: "player",
     ),
-    jump_velocity: 8.2,
+    jump_height: 3.,
+    speed: 5.,
 )

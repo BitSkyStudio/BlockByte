@@ -3,9 +3,10 @@
     hitbox_size: 0.3,
     hitbox_height: 1.9,
     eye_height: 1.7,
-    crouch_difference: 0.45,
+    crouch_height_difference: 0.45,
     model: "player",
     health: 100.,
     damage_table: (),
-    jump_velocity: 8.2,
+    jump_height: 1.3,
+    speed: 5.,
 )
