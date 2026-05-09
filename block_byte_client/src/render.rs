@@ -483,22 +483,35 @@ impl RenderState {
         );
         let ps2 = profiler::profiler_scope("chunk download");
         let mut frame_load_limit = 0;
-        while let Ok((position, buffer, version)) = game.chunk_mesh_channels.1.try_recv() {
+        while let Ok((position, buffer, buffer_high_res, version)) =
+            game.chunk_mesh_channels.1.try_recv()
+        {
             game.chunk_mesh_queue_size -= 1;
             if let Some(chunk) = game.chunks.get_mut(&position) {
                 chunk.scheduled = false;
-                let mut new_gpu_buffer = GPUMesh::empty();
-                std::mem::swap(&mut new_gpu_buffer, &mut chunk.gpu_mesh);
+
                 chunk.gpu_mesh = game.chunk_buffer_pool.allocate_or_reuse(
                     &buffer,
-                    new_gpu_buffer,
+                    chunk.gpu_mesh.take(),
                     &mut self.staging_belt,
                     &mut encoder,
                     &self.device,
                 );
+                chunk.gpu_mesh_high_res = game.chunk_buffer_pool.allocate_or_reuse(
+                    &buffer_high_res,
+                    chunk.gpu_mesh_high_res.take(),
+                    &mut self.staging_belt,
+                    &mut encoder,
+                    &self.device,
+                );
+
                 if let Some(render_data) = &chunk.gpu_mesh.render_data {
-                    frame_load_limit += render_data.vertex_length;
+                    frame_load_limit += render_data.memory_size();
                 }
+                if let Some(render_data) = &chunk.gpu_mesh_high_res.render_data {
+                    frame_load_limit += render_data.memory_size();
+                }
+
                 if version
                     < chunk
                         .mesh_build_data
@@ -518,7 +531,7 @@ impl RenderState {
                         });
                     }
                 }
-                if frame_load_limit > (1. * 1024. * 1024.) as u64 && true {
+                if frame_load_limit > (4. * 1024. * 1024.) as usize && true {
                     break;
                 }
             }
@@ -559,7 +572,8 @@ impl RenderState {
             });
 
         let ps = profiler::profiler_scope("render shadow");
-        if true {
+        let camera_chunk_position = camera.position.to_chunk_pos();
+        {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
                 color_attachments: &[],
@@ -584,10 +598,13 @@ impl RenderState {
                 min: ChunkPos::all(-5),
                 max: ChunkPos::all(5),
             })
-            .offset(camera.position.to_chunk_pos())
+            .offset(camera_chunk_position)
             {
                 if let Some(chunk) = game.chunks.get(&chunk_position) {
                     chunk.gpu_mesh.draw(&mut render_pass);
+                    if chunk_position.distance_squared(camera_chunk_position) <= 2 {
+                        chunk.gpu_mesh_high_res.draw(&mut render_pass);
+                    }
                 }
             }
 
@@ -657,7 +674,7 @@ impl RenderState {
             render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
 
             render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
-            for (_, chunk) in &game.chunks {
+            for (chunk_position, chunk) in &game.chunks {
                 if frustum.intersects_aabb(
                     &AABB {
                         min: Pos::all(0.),
@@ -666,6 +683,9 @@ impl RenderState {
                     .offset(chunk.position.to_block_pos().to_pos()),
                 ) {
                     chunk.gpu_mesh.draw(&mut render_pass);
+                    if chunk_position.distance_squared(camera_chunk_position) <= 5_i16.pow(2) {
+                        chunk.gpu_mesh_high_res.draw(&mut render_pass);
+                    }
                 }
             }
 
@@ -1387,6 +1407,15 @@ struct GPUMeshRenderData {
     pub index_count: u32,
     pub index_format: IndexFormat,
 }
+impl GPUMeshRenderData {
+    pub fn memory_size(&self) -> usize {
+        self.vertex_length as usize
+            + match self.index_format {
+                IndexFormat::Uint16 => 2,
+                IndexFormat::Uint32 => 4,
+            } * self.index_count as usize
+    }
+}
 impl GPUMesh {
     pub fn empty() -> GPUMesh {
         GPUMesh {
@@ -1394,12 +1423,18 @@ impl GPUMesh {
             render_data: None,
         }
     }
+    pub fn take(&mut self) -> GPUMesh {
+        GPUMesh {
+            buffer: self.buffer.take(),
+            render_data: self.render_data.take(),
+        }
+    }
     fn size_align(unpadded_size: u64) -> u64 {
         let align_mask = wgpu::COPY_BUFFER_ALIGNMENT - 1;
         ((unpadded_size + align_mask) & !align_mask).max(wgpu::COPY_BUFFER_ALIGNMENT)
     }
     pub fn allocate<T: Pod>(mesh: &Mesh<T>, min_size: usize, device: &Device) -> GPUMesh {
-        if mesh.indices.is_empty() {
+        if mesh.indices.is_empty() && min_size == 0 {
             return GPUMesh::empty();
         }
         let (vertex_buffer_size, index_buffer_size, index_format) = mesh.get_data_size();
@@ -1619,9 +1654,9 @@ impl ChunkMesh {
     }
 }
 pub struct ChunkMeshVertexConsumer<'a> {
-    mesh: &'a mut ChunkMesh,
-    block_color: BlockColor,
-    flags: u8,
+    pub mesh: &'a mut ChunkMesh,
+    pub block_color: BlockColor,
+    pub flags: u8,
 }
 impl MeshVertexConsumer for ChunkMeshVertexConsumer<'_> {
     fn add_vertex(&mut self, vertex: MeshVertex) -> u32 {

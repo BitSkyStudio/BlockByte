@@ -418,6 +418,7 @@ impl ApplicationHandler for App {
                     &self.connection,
                     render_state.animation_time,
                 );
+                self.game.chunk_buffer_pool.tick(&render_state.device);
                 {
                     let weight = 0.05;
                     self.delta_time_average = weight * dt + (1. - weight) * self.delta_time_average;
@@ -769,11 +770,12 @@ impl ApplicationHandler for App {
                                     ClientChunk {
                                         mesh_build_data: Arc::new(ChunkMeshBuildData {
                                             blocks: RwLock::new(blocks),
+                                            components: RwLock::new(components),
                                             version: AtomicU64::new(0),
                                         }),
                                         gpu_mesh: GPUMesh::empty(),
+                                        gpu_mesh_high_res: GPUMesh::empty(),
                                         position,
-                                        components,
                                         modified: false,
                                         scheduled: false,
                                     },
@@ -786,6 +788,7 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::UnloadChunk { position } => {
                                 if let Some(chunk) = self.game.chunks.remove(&position) {
                                     self.game.chunk_buffer_pool.reclaim(chunk.gpu_mesh);
+                                    self.game.chunk_buffer_pool.reclaim(chunk.gpu_mesh_high_res);
                                 }
                             }
                             NetworkMessageS2C::SetBlock { position, block } => {
@@ -870,7 +873,10 @@ impl ApplicationHandler for App {
                                 update: data,
                             } => {
                                 if let Some(chunk) = self.game.chunks.get_mut(&chunk) {
-                                    data.update(offset, &mut chunk.components);
+                                    data.update(
+                                        offset,
+                                        &mut *chunk.mesh_build_data.components.write(),
+                                    );
                                 }
                             }
                             NetworkMessageS2C::SetPlayerEntity { uuid } => {
@@ -1384,7 +1390,7 @@ impl ClientPlayer {
             .offset(ray.position.to_chunk_pos())
             {
                 if let Some(chunk) = world.chunks.get(&chunk_position) {
-                    for (offset, plants) in chunk.components.plant.iter() {
+                    for (offset, plants) in chunk.mesh_build_data.components.read().plant.iter() {
                         for (i, plant) in plants.plants.iter().enumerate() {
                             let plant_data = plant.0.data();
                             if i != plant_data.stages.len() - 1 {
@@ -1595,8 +1601,8 @@ pub struct ClientGame {
     pub viewmodel_player: AnimationPlayer,
     pub swap_hand_item: Option<(ItemKey, usize)>,
     pub chunk_mesh_channels: (
-        std::sync::mpsc::Sender<(ChunkPos, ChunkMesh, u64)>,
-        std::sync::mpsc::Receiver<(ChunkPos, ChunkMesh, u64)>,
+        std::sync::mpsc::Sender<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
+        std::sync::mpsc::Receiver<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
     ),
     pub researched: HashSet<ResearchKey>,
     pub stamina: f32,
@@ -1611,6 +1617,30 @@ struct ChunkBufferPool {
 }
 impl ChunkBufferPool {
     const MIN_BUFFER_SIZE: usize = 64 * 1024;
+    pub fn tick(&mut self, device: &Device) {
+        let preallocated_buckets = [40, 40, 20, 4];
+        self.buffers
+            .resize_with(preallocated_buckets.len(), Vec::new);
+        /*println!(
+            "{}",
+            self.buffers
+                .iter()
+                .map(|b| b.len().to_string())
+                .collect::<Vec<String>>()
+                .join(",")
+        );*/
+        for (bucket_id, size) in preallocated_buckets.iter().enumerate() {
+            let bucket = &mut self.buffers[bucket_id];
+            if bucket.len() < *size {
+                bucket.push(GPUMesh::allocate(
+                    &BaseMesh::default(),
+                    Self::MIN_BUFFER_SIZE * 4_usize.pow(bucket_id as u32),
+                    device,
+                ));
+                return;
+            }
+        }
+    }
     pub fn reclaim(&mut self, mesh: GPUMesh) {
         if let Some(buffer) = &mesh.buffer {
             let bucket = Self::get_data_index(buffer.size() as usize).0;
@@ -1864,12 +1894,12 @@ impl ClientGame {
                         )
                     });
                     rayon::spawn(move || {
-                        let (mesh, version) = ClientChunk::build_chunk_mesh(
+                        let (mesh, mesh_high_res, version) = ClientChunk::build_chunk_mesh(
                             modified_chunk,
                             build_data,
                             neighbor_chunks,
                         );
-                        tx.send((modified_chunk, mesh, version));
+                        tx.send((modified_chunk, mesh, mesh_high_res, version));
                     });
                     self.chunk_mesh_queue_size += 1;
                     i += 1;
@@ -1931,7 +1961,7 @@ impl ClientGame {
                 continue;
             }
             if let Some(chunk) = self.chunks.get(&chunk_position) {
-                for (offset, damage) in chunk.components.damage.iter() {
+                for (offset, damage) in chunk.mesh_build_data.components.read().damage.iter() {
                     let base_block_position = (chunk_position.to_block_pos() + offset.xyz());
                     let base_position = base_block_position.to_pos();
                     if base_position.distance_squared(self.player_position)
@@ -2017,75 +2047,7 @@ impl ClientGame {
                         }
                     }
                 }
-                for (offset, plants) in chunk.components.plant.iter() {
-                    let base_position = (chunk_position.to_block_pos() + offset.xyz()).to_pos();
-                    if base_position.distance_squared(self.player_position)
-                        > (view_distance * view_distance) as f32
-                            * CHUNK_SIZE as f32
-                            * CHUNK_SIZE as f32
-                    {
-                        continue;
-                    }
-                    let mut mesh_vertex_consumer = entity_mesh.consumer(Color::WHITE);
-                    for (plant, stage) in &plants.plants {
-                        let plant = plant.data();
-                        let position = base_position
-                            + Pos {
-                                x: 0.5,
-                                y: 1.,
-                                z: 0.5,
-                            };
-                        let texture = plant.stages[*stage as usize].tex_coords();
-                        for blade in 0..plant.blades * 2 {
-                            let first_angle =
-                                f32::consts::PI * (blade as f32 / plant.blades as f32 + 0.25);
-                            let second_angle = f32::consts::PI + first_angle;
-                            let first = Pos {
-                                x: first_angle.cos(),
-                                y: 0.,
-                                z: first_angle.sin(),
-                            } * (plant.size / 2.)
-                                + position;
-                            let second = Pos {
-                                x: second_angle.cos(),
-                                y: 0.,
-                                z: second_angle.sin(),
-                            } * (plant.size / 2.)
-                                + position;
-
-                            let up_height_vector = Pos {
-                                x: (world_animation_time * 0.8 + position.x * 0.2).sin() * 0.1,
-                                y: 1.,
-                                z: (world_animation_time * 0.8 + 10. + position.z * 0.2).sin()
-                                    * 0.1,
-                            } * plant.height;
-                            let vertices = [
-                                MeshVertex {
-                                    position: first,
-                                    uv: [texture.u1, texture.v2],
-                                    normal: Pos::Y,
-                                },
-                                MeshVertex {
-                                    position: second,
-                                    uv: [texture.u2, texture.v2],
-                                    normal: Pos::Y,
-                                },
-                                MeshVertex {
-                                    position: second + up_height_vector,
-                                    uv: [texture.u2, texture.v1],
-                                    normal: Pos::Y,
-                                },
-                                MeshVertex {
-                                    position: first + up_height_vector,
-                                    uv: [texture.u1, texture.v1],
-                                    normal: Pos::Y,
-                                },
-                            ];
-                            mesh_vertex_consumer.add_quad(vertices);
-                        }
-                    }
-                }
-                for (offset, machine) in chunk.components.machine.iter() {
+                for (offset, machine) in chunk.mesh_build_data.components.read().machine.iter() {
                     let blocks = chunk.mesh_build_data.blocks.read();
                     let block = blocks.get(offset.index()).unwrap();
                     let block_data = block.block.data();
@@ -2232,7 +2194,7 @@ impl ClientGame {
         self.stamina += dt * 10.;
         for (_, chunk) in &mut self.chunks {
             let blocks = chunk.mesh_build_data.blocks.read();
-            for (offset, health) in chunk.components.damage.iter_mut() {
+            for (offset, health) in chunk.mesh_build_data.components.write().damage.iter_mut() {
                 let data = blocks.get(offset.index()).unwrap().block.data();
                 health.damage -= dt * data.health.health_regen;
             }
@@ -2254,13 +2216,14 @@ pub struct ClientEntity {
 }
 struct ChunkMeshBuildData {
     pub blocks: RwLock<BlockPalette>,
+    pub components: RwLock<ClientChunkBlockComponents>,
     pub version: AtomicU64,
 }
 pub struct ClientChunk {
     pub position: ChunkPos,
     pub mesh_build_data: Arc<ChunkMeshBuildData>,
-    pub components: ClientChunkBlockComponents,
     pub gpu_mesh: GPUMesh,
+    pub gpu_mesh_high_res: GPUMesh,
     pub modified: bool,
     pub scheduled: bool,
 }
@@ -2270,15 +2233,77 @@ impl ClientChunk {
         position: ChunkPos,
         chunk_data: Arc<ChunkMeshBuildData>,
         neighbor_chunks: FaceMap<Option<Arc<ChunkMeshBuildData>>>,
-    ) -> (ChunkMesh, u64) {
-        let mut mesh: ChunkMesh = ChunkMesh::default();
+    ) -> (ChunkMesh, ChunkMesh, u64) {
+        let mut mesh = ChunkMesh::default();
+        let mut mesh_high_res = ChunkMesh::default();
         let chunk_blocks = chunk_data.blocks.read();
+        let chunk_components = chunk_data.components.read();
         let neighbor_chunks =
             neighbor_chunks.map(|chunk| chunk.as_ref().map(|chunk| chunk.blocks.read()));
+
+        for (offset, plants) in chunk_components.plant.iter() {
+            let base_position = (position.to_block_pos() + offset.xyz()).to_pos();
+            let mut mesh_vertex_consumer = mesh_high_res.consumer(BlockColor::default(), 0);
+            for (plant, stage) in &plants.plants {
+                let plant = plant.data();
+                let position = base_position
+                    + Pos {
+                        x: 0.5,
+                        y: 1.,
+                        z: 0.5,
+                    };
+                let texture = plant.stages[*stage as usize].tex_coords();
+                for blade in 0..plant.blades * 2 {
+                    let first_angle = f32::consts::PI * (blade as f32 / plant.blades as f32 + 0.25);
+                    let second_angle = f32::consts::PI + first_angle;
+                    let first = Pos {
+                        x: first_angle.cos(),
+                        y: 0.,
+                        z: first_angle.sin(),
+                    } * (plant.size / 2.)
+                        + position;
+                    let second = Pos {
+                        x: second_angle.cos(),
+                        y: 0.,
+                        z: second_angle.sin(),
+                    } * (plant.size / 2.)
+                        + position;
+
+                    let vertices = [
+                        MeshVertex {
+                            position: first,
+                            uv: [texture.u1, texture.v2],
+                            normal: Pos::Y,
+                        },
+                        MeshVertex {
+                            position: second,
+                            uv: [texture.u2, texture.v2],
+                            normal: Pos::Y,
+                        },
+                        MeshVertex {
+                            position: second + Pos::Y,
+                            uv: [texture.u2, texture.v1],
+                            normal: Pos::Y,
+                        },
+                        MeshVertex {
+                            position: first + Pos::Y,
+                            uv: [texture.u1, texture.v1],
+                            normal: Pos::Y,
+                        },
+                    ];
+                    mesh_vertex_consumer.add_quad(vertices);
+                    let vertex_count = mesh_vertex_consumer.mesh.vertices.len();
+                    for vertex in &mut mesh_vertex_consumer.mesh.vertices[(vertex_count - 2)..] {
+                        vertex.flags = 1;
+                    }
+                }
+            }
+        }
 
         if chunk_blocks.unique_values() == 1 && chunk_blocks.get(0).unwrap().block == air_block() {
             return (
                 mesh,
+                mesh_high_res,
                 chunk_data
                     .version
                     .load(std::sync::atomic::Ordering::Relaxed),
@@ -2290,7 +2315,12 @@ impl ClientChunk {
                 for z in 0..CHUNK_SIZE as u8 {
                     let block = *chunk_blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = block.block.data();
-                    let mut mesh_consumer = mesh.consumer(block.color, block_data.render_flags);
+                    let mut mesh_consumer = if block_data.lod_hidden {
+                        &mut mesh_high_res
+                    } else {
+                        &mut mesh
+                    }
+                    .consumer(block.color, block_data.render_flags);
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { faces } => {
@@ -2392,6 +2422,7 @@ impl ClientChunk {
 
         (
             mesh,
+            mesh_high_res,
             chunk_data
                 .version
                 .load(std::sync::atomic::Ordering::Relaxed),

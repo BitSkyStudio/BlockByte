@@ -538,6 +538,9 @@ pub struct BlockData {
     #[serde(default)]
     #[cfg(feature = "client")]
     pub render_flags: u8,
+    #[serde(default)]
+    #[cfg(feature = "client")]
+    pub lod_hidden: bool,
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
     pub selection: Vec<AABB<f32>>,

@@ -1,5 +1,6 @@
 (
     render_data: Model("stick;wood.§%{woodType}_bark"),
+    lod_hidden: true,
     health: (
         health: 5., 
         health_regen: 0.05, 
