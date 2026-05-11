@@ -24,18 +24,15 @@ use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
     CharacterController, ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities,
     SERVER_DT, TexCoords,
-    coord::{
-        AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos, Ray,
-        Vec3,
-    },
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, ModelGeometry, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     number_approach_smooth,
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
-        BlockRotation, EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel,
-        Key, KeyGroup, ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData,
-        TextureKey, ToolData, TranslationLanguageData, air_block, load_registries,
+        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key, KeyGroup,
+        ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData, TextureKey,
+        ToolData, TranslationLanguageData, air_block, load_registries,
     },
     ui::{PropertyMap, SlotId},
     world::{self, ClientBlockComponentUpdate, ClientChunkBlockComponents},
@@ -2153,22 +2150,9 @@ impl ClientGame {
                                     .unwrap()
                                     .block;
                                 if block == air_block() {
-                                    let orientation = Orientation::from_block_rotation(rotation);
-                                    let right = orientation.right.get_offset();
-                                    let up = orientation.up.get_offset();
-                                    let front = orientation.forward.get_offset();
                                     render::draw_block_model(
                                         place_block.block,
-                                        Matrix4::from_translation(Vector3::new(
-                                            block_position.x as f32 + 0.5,
-                                            block_position.y as f32 + 0.5,
-                                            block_position.z as f32 + 0.5,
-                                        )) * Matrix4::from_cols(
-                                            Vector4::new(right.x, right.y, right.z, 0.),
-                                            Vector4::new(up.x, up.y, up.z, 0.),
-                                            Vector4::new(-front.x, -front.y, -front.z, 0.),
-                                            Vector4::new(0., 0., 0., 1.),
-                                        ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.)),
+                                        get_block_matrix(block_position, rotation),
                                         &mut entity_mesh.consumer(if blocked {
                                             Color {
                                                 r: 255,

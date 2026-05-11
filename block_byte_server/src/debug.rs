@@ -6,9 +6,7 @@ use std::{
 
 use block_byte_common::{
     coord::{BlockPos, Face},
-    registry::{
-        BiomeKey, BlockColor, BlockEntry, BlockKey, BlockRotation, PrefabData, PrefabEntry,
-    },
+    registry::{BiomeKey, BlockColor, BlockEntry, BlockKey, PrefabData, PrefabEntry},
 };
 use image::GenericImage;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};

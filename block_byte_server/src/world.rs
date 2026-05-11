@@ -18,14 +18,14 @@ use block_byte_common::{
     CharacterController, Color, DamageTable, DamageType, InventoryView, LookDirection, MoveMode,
     SERVER_DT, SERVER_TPS,
     coord::{
-        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
-        Orientation, Pos,
+        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace, Pos,
     },
     net::{NetworkMessageC2S, NetworkMessageS2C, PropertyModifyMode},
     registry::{
         BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
-        BlockMachineFace, BlockPalette, BlockRotation, EntityInteractAction, EntityKey, ItemAction,
-        KeyGroup, MachineInstrution, PlantKey, PrefabKey, ResearchKey, ToolData, air_block,
+        BlockMachineData, BlockMachineFace, BlockPalette, EntityInteractAction, EntityKey,
+        ItemAction, KeyGroup, MachineInstrution, PlantKey, PrefabKey, ResearchKey, ToolData,
+        air_block,
     },
     scripts::{self, CallbackResult, ExternalScriptByteCode, RunResult, ScriptState, ScriptValue},
     ui::PropertyMap,
@@ -570,6 +570,26 @@ pub fn tick_chunk(world: &WorldAccess) {
                                         }
                                     }
                                 }
+                                BlockInteractAction::ModifyProperty {
+                                    property,
+                                    value,
+                                    mode,
+                                } => {
+                                    let Some(mut machine) =
+                                        world.get_block_component::<BlockMachine>(position)
+                                    else {
+                                        continue;
+                                    };
+                                    let machine_data = world
+                                        .get_block(position)
+                                        .unwrap()
+                                        .block
+                                        .data()
+                                        .machine
+                                        .as_ref()
+                                        .unwrap();
+                                    machine.modify_property(machine_data, &property, *value, *mode);
+                                }
                             }
                         }
                         NetworkMessageC2S::InteractEntity {
@@ -870,23 +890,12 @@ pub fn tick_chunk(world: &WorldAccess) {
                                                 .machine
                                                 .as_ref()
                                                 .unwrap();
-                                            if let Some(property) = machine_data
-                                                .script
-                                                .named_registers
-                                                .iter()
-                                                .position(|r| *r == property)
-                                            {
-                                                let mut register =
-                                                    &mut machine.script_state.registers[property];
-                                                match modify_mode {
-                                                    PropertyModifyMode::Add => {
-                                                        *register = register.wrapping_add(value);
-                                                    }
-                                                    PropertyModifyMode::Set => {
-                                                        *register = value;
-                                                    }
-                                                }
-                                            }
+                                            machine.modify_property(
+                                                machine_data,
+                                                &property,
+                                                value,
+                                                modify_mode,
+                                            );
                                         }
                                     }
                                 }
@@ -1715,6 +1724,33 @@ pub struct BlockMachine {
     pub inventory_observers: SmallVec<[BlockPos; 1]>,
     pub current_animation: u16,
     pub animation_start_time: u64,
+}
+impl BlockMachine {
+    pub fn modify_property(
+        &mut self,
+        machine_data: &BlockMachineData,
+        property: &str,
+        value: u16,
+        mode: PropertyModifyMode,
+    ) {
+        if let Some(property) = machine_data
+            .script
+            .named_registers
+            .iter()
+            .position(|r| *r == property)
+        {
+            let mut register = &mut self.script_state.registers[property];
+            match mode {
+                PropertyModifyMode::Add => {
+                    *register = register.wrapping_add(value);
+                }
+                PropertyModifyMode::Set => {
+                    *register = value;
+                }
+            }
+            self.blocked = false;
+        }
+    }
 }
 
 impl Into<ClientBlockMachine> for &BlockMachine {

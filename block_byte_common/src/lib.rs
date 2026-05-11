@@ -10,6 +10,7 @@ pub mod coord;
 pub mod model;
 pub mod net;
 pub mod registry;
+pub mod rotation;
 pub mod scripts;
 pub mod ui;
 pub mod world;

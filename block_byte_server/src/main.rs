@@ -14,11 +14,11 @@ use std::{
 use block_byte_common::{
     ClientItem, Color, DEFAULT_VIEWSLOT, InventoryView, LookDirection, MoveMode, PlayerAbilities,
     SERVER_DT, SERVER_TPS,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Orientation, Pos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockColor, BlockData, BlockEntry, BlockKey, BlockRotation, EntityKey, ItemAction,
-        ItemKey, KeyGroup, PrefabData, PrefabEntry, ToolData, air_block, load_registries,
+        self, BlockColor, BlockData, BlockEntry, BlockKey, EntityKey, ItemAction, ItemKey,
+        KeyGroup, PrefabData, PrefabEntry, ToolData, air_block, load_registries,
     },
     scripts::{ScriptState, ScriptValue},
     ui::{PropertyMap, UIScreenKey},

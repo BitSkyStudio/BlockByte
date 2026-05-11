@@ -1,11 +1,10 @@
-use block_byte_common::coord::{
-    AABB, BlockPos, CHUNK_SIZE, ChunkPos, Face, Orientation, Pos, Vec3,
-};
+use block_byte_common::coord::{AABB, BlockPos, CHUNK_SIZE, ChunkPos, Face, Pos, Vec3};
 use block_byte_common::model::{DrawAnimation, ModelGeometry, ModelTexture, ModelVertex};
 use block_byte_common::registry::{
-    BlockColor, BlockData, BlockKey, BlockRenderData, BlockRotation, EntityData, ItemKey,
-    ItemModel, Key, ModelData, ModelInstance, ModelKey, TextureData, TextureKey,
+    BlockColor, BlockData, BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key,
+    ModelData, ModelInstance, ModelKey, TextureData, TextureKey,
 };
+use block_byte_common::rotation::BlockRotation;
 use block_byte_common::ui::UIScreen;
 use block_byte_common::{ClientItem, Color, TexCoords};
 use bytemuck::{NoUninit, Pod};
@@ -128,7 +127,7 @@ impl RenderState {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoNoVsync, //AutoVsync,
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -1383,10 +1382,9 @@ pub fn item_model_icon_view(model: &ItemModel) -> Matrix4<f32> {
 }
 pub fn get_block_matrix(block_pos: BlockPos, rotation: BlockRotation) -> Matrix4<f32> {
     let position = block_pos.to_pos();
-    let orientation = Orientation::from_block_rotation(rotation);
-    let right = orientation.right.get_offset();
-    let up = orientation.up.get_offset();
-    let front = orientation.forward.get_offset();
+    let right = rotation.right_face().get_offset();
+    let up = rotation.up_face().get_offset();
+    let front = rotation.front_face().get_offset();
     use cgmath::Vector4;
     Matrix4::from_translation(Vector3::new(
         position.x + 0.5,

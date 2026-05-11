@@ -9,7 +9,7 @@ use cgmath::{EuclideanSpace, Matrix4, Point3, Transform, Vector3};
 use num_integer::{Integer, Roots};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{TexCoords, registry::BlockRotation};
+use crate::TexCoords;
 
 pub const CHUNK_SIZE_BITS: u8 = 5;
 pub const CHUNK_SIZE: usize = 32;
@@ -544,10 +544,10 @@ impl AABB<i32> {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HorizontalFace {
-    Front,
-    Back,
-    Left,
-    Right,
+    Front = 0,
+    Back = 1,
+    Left = 2,
+    Right = 3,
 }
 impl HorizontalFace {
     pub fn all() -> [HorizontalFace; 4] {
@@ -591,12 +591,12 @@ impl HorizontalFace {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Face {
-    Front,
-    Back,
-    Up,
-    Down,
-    Left,
-    Right,
+    Front = 0,
+    Back = 1,
+    Up = 2,
+    Down = 3,
+    Left = 4,
+    Right = 5,
 }
 impl Face {
     pub fn all() -> [Face; 6] {
@@ -1173,105 +1173,5 @@ impl Face {
                 f_axis == axis && f_dir == dir
             })
             .unwrap()
-    }
-}
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct Orientation {
-    pub right: Face,
-    pub up: Face,
-    pub forward: Face,
-}
-static ALL_ORIENTATIONS: OnceLock<[Orientation; 24]> = OnceLock::new();
-impl Orientation {
-    pub const IDENTITY: Self = Self {
-        right: Face::Right,
-        up: Face::Up,
-        forward: Face::Front,
-    };
-    pub fn compose(self, other: Orientation) -> Orientation {
-        Orientation {
-            right: self.apply(other.right),
-            up: self.apply(other.up),
-            forward: self.apply(other.forward),
-        }
-    }
-    pub fn apply(self, face: Face) -> Face {
-        let (axis, dir) = face.axis_direction();
-        let base = match axis {
-            Axis::X => self.right,
-            Axis::Y => self.up,
-            Axis::Z => self.forward.opposite(),
-        };
-
-        if dir { base.opposite() } else { base }
-    }
-    pub fn inverse_apply(self, face: Face) -> Face {
-        for test in Face::all() {
-            if self.apply(test) == face {
-                return test;
-            }
-        }
-        unreachable!()
-    }
-    pub fn rotate_pos(self, v: Pos) -> Pos {
-        let mut out = Pos::ZERO;
-        out += self.right.get_offset() * v.x;
-        out += self.up.get_offset() * v.y;
-        out += -self.forward.get_offset() * v.z;
-        out
-    }
-    pub fn rotate_block_pos(self, v: BlockPos) -> BlockPos {
-        let mut out = BlockPos::ZERO;
-        out += self.right.get_block_offset() * v.x;
-        out += self.up.get_block_offset() * v.y;
-        out += -self.forward.get_block_offset() * v.z;
-        out
-    }
-    pub fn from_front_up(front: Face, up: Face) -> Option<Self> {
-        if front == up || front == up.opposite() {
-            return None;
-        }
-        let right = front.cross(up);
-        Some(Self {
-            right,
-            up,
-            forward: front,
-        })
-    }
-    pub fn from_front_right(front: Face, right: Face) -> Option<Self> {
-        if front == right || front == right.opposite() {
-            return None;
-        }
-        let up = right.cross(front);
-        Some(Self {
-            right,
-            up,
-            forward: front,
-        })
-    }
-    pub fn all() -> &'static [Orientation; 24] {
-        ALL_ORIENTATIONS.get_or_init(|| {
-            let mut result = Vec::with_capacity(24);
-            for first in Face::all() {
-                for second in Face::all() {
-                    if let Some(orientation) = Orientation::from_front_up(first, second) {
-                        result.push(orientation);
-                    }
-                }
-            }
-            result.try_into().unwrap()
-        })
-    }
-    pub fn from_block_rotation(block_rotation: BlockRotation) -> Orientation {
-        Orientation::all()[block_rotation.0 as usize]
-    }
-    pub fn into_block_rotation(self) -> BlockRotation {
-        //todo: this shouldnt iterate
-        BlockRotation(
-            Orientation::all()
-                .iter()
-                .position(|orientation| *orientation == self)
-                .unwrap() as u8,
-        )
     }
 }

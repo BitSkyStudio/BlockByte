@@ -19,8 +19,10 @@ use serde::de::{DeserializeSeed, Visitor};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Orientation, Pos, Vec3};
+use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos, Vec3};
 use crate::model::Model;
+use crate::net::PropertyModifyMode;
+use crate::rotation::BlockRotation;
 use crate::scripts::{
     CompiledScript, ExternalScriptByteCode, RegisterId, RegisterOrImmediate, ScriptLabel,
     ScriptParseContext, ScriptParseError, expect_argument_count,
@@ -599,14 +601,13 @@ impl BlockRotationMode {
                 let face = closest_face_to_offset(direction.make_front(), |_| true);
                 BlockRotation::looking_to(face)
             }
-            BlockRotationMode::FullOriented => Orientation::from_front_up(
+            BlockRotationMode::FullOriented => BlockRotation::new(
                 closest_face_to_offset(direction.make_front(), |face| {
                     face.axis_direction().0 != up_face.axis_direction().0
                 }),
                 up_face,
             )
-            .unwrap()
-            .into_block_rotation(),
+            .unwrap(),
             BlockRotationMode::Axis => {
                 let face = closest_face_to_offset(direction.make_front(), |_| true);
                 let face = match face {
@@ -620,29 +621,23 @@ impl BlockRotationMode {
     pub fn get_nearest_valid(self, value: BlockRotation) -> BlockRotation {
         match self {
             BlockRotationMode::None => BlockRotation::default(),
-            BlockRotationMode::Horizontal => {
-                match Orientation::from_block_rotation(value).forward {
-                    Face::Up | Face::Down => {
-                        Orientation::from_front_up(Face::Front, Face::Up).unwrap()
-                    }
-                    front => Orientation::from_front_up(front, Face::Up).unwrap(),
-                }
-                .into_block_rotation()
-            }
-            BlockRotationMode::Full => match Orientation::from_block_rotation(value).forward {
-                Face::Up => Orientation::from_front_up(Face::Up, Face::Back).unwrap(),
-                Face::Down => Orientation::from_front_up(Face::Down, Face::Front).unwrap(),
-                front => Orientation::from_front_up(front, Face::Up).unwrap(),
-            }
-            .into_block_rotation(),
+            BlockRotationMode::Horizontal => match value.front_face() {
+                Face::Up | Face::Down => BlockRotation::new(Face::Front, Face::Up).unwrap(),
+                front => BlockRotation::new(front, Face::Up).unwrap(),
+            },
+            BlockRotationMode::Full => match value.front_face() {
+                Face::Up => BlockRotation::new(Face::Up, Face::Back).unwrap(),
+                Face::Down => BlockRotation::new(Face::Down, Face::Front).unwrap(),
+                front => BlockRotation::new(front, Face::Up).unwrap(),
+            },
             BlockRotationMode::FullOriented => value,
             BlockRotationMode::Axis => {
-                let face = Orientation::from_block_rotation(value).forward;
+                let face = value.front_face();
                 let face = match face {
                     Face::Front | Face::Right | Face::Up => face,
                     Face::Back | Face::Left | Face::Down => face.opposite(),
                 };
-                Orientation::from_front_up(
+                BlockRotation::new(
                     face,
                     match face {
                         Face::Up => Face::Back,
@@ -650,7 +645,6 @@ impl BlockRotationMode {
                     },
                 )
                 .unwrap()
-                .into_block_rotation()
             }
         }
     }
@@ -676,6 +670,11 @@ pub enum BlockInteractAction {
         view: InventoryView,
     },
     Pickup,
+    ModifyProperty {
+        property: String,
+        value: u16,
+        mode: PropertyModifyMode,
+    },
 }
 impl BlockInteractAction {
     pub fn tooltip(&self) -> Option<&str> {
@@ -685,6 +684,7 @@ impl BlockInteractAction {
                 Some("block_action.open_inventory")
             }
             BlockInteractAction::Pickup => Some("block_action.pickup"),
+            BlockInteractAction::ModifyProperty { .. } => Some("block_action.modify_property"),
         }
     }
 }
@@ -903,63 +903,12 @@ impl BlockEntry {
     }
     pub fn supports(&self, world_face: Face) -> bool {
         let block_data = self.block.data();
-        let orientation = Orientation::from_block_rotation(self.rotation);
-        let face = orientation.inverse_apply(world_face);
+        let face = self.rotation.inverse_rotate_face(world_face);
         *block_data.supporting.by_face(face)
     }
 }
 pub fn skip_if_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
-}
-impl Default for BlockRotation {
-    fn default() -> Self {
-        Orientation::IDENTITY.into_block_rotation()
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
-pub struct BlockRotation(pub u8);
-impl BlockRotation {
-    pub fn looking_to(face: Face) -> BlockRotation {
-        Orientation::from_front_up(
-            face,
-            match face {
-                Face::Up => Face::Back,
-                Face::Down => Face::Front,
-                _ => Face::Up,
-            },
-        )
-        .unwrap()
-        .into_block_rotation()
-    }
-    pub fn rotate_aabb(self, aabb: AABB<f32>) -> AABB<f32> {
-        let aabb = aabb.offset(Vec3::all(-0.5));
-        let orientation = Orientation::from_block_rotation(self);
-        AABB::new(
-            orientation.rotate_pos(aabb.min),
-            orientation.rotate_pos(aabb.max),
-        )
-        .offset(Vec3::all(0.5))
-    }
-    pub fn rotate_block_aabb(self, aabb: AABB<i32>) -> AABB<i32> {
-        let orientation = Orientation::from_block_rotation(self);
-        AABB::new(
-            orientation.rotate_block_pos(aabb.min),
-            orientation.rotate_block_pos(aabb.max),
-        )
-    }
-    pub fn rotate_face(self, face: Face) -> Face {
-        Orientation::from_block_rotation(self).apply(face)
-    }
-    pub fn inverse_rotate_face(self, face: Face) -> Face {
-        Orientation::from_block_rotation(self).inverse_apply(face)
-    }
-    pub fn rotate_pos(self, v: Pos) -> Pos {
-        Orientation::from_block_rotation(self).rotate_pos(v)
-    }
-    pub fn rotate_block_pos(self, v: BlockPos) -> BlockPos {
-        Orientation::from_block_rotation(self).rotate_block_pos(v)
-    }
 }
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
@@ -1437,9 +1386,7 @@ impl PrefabData {
         seed: u64,
         mut callback: impl FnMut(BlockPos, BlockEntry),
     ) {
-        let rotation = Orientation::from_front_up(rotation.face(), Face::Up)
-            .unwrap()
-            .into_block_rotation();
+        let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
         use rand::SeedableRng;
         let mut random = Xoshiro256PlusPlus::seed_from_u64(seed);
@@ -1455,7 +1402,11 @@ impl PrefabData {
                     BlockEntry {
                         block: entry.block,
                         color: entry.color,
-                        rotation: entry.rotation,
+                        rotation: entry
+                            .block
+                            .data()
+                            .rotation
+                            .get_nearest_valid(rotation.compose(entry.rotation)),
                     },
                 );
             }

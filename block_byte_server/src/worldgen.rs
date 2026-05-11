@@ -6,8 +6,9 @@ use std::{
 };
 
 use block_byte_common::{
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Orientation},
-    registry::{BiomeKey, BlockEntry, BlockPalette, BlockRotation, KeyGroup, PrefabKey, air_block},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace},
+    registry::{BiomeKey, BlockEntry, BlockPalette, KeyGroup, PrefabKey, air_block},
+    rotation::BlockRotation,
 };
 use moka::sync::Cache;
 use noise::{NoiseFn, Perlin};
@@ -75,10 +76,7 @@ impl RegionGeneration {
             self.z * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
 
         let aabb = prefab.data().bounding_box();
-        let aabb = Orientation::from_front_up(rotation.face(), Face::Up)
-            .unwrap()
-            .into_block_rotation()
-            .rotate_block_aabb(aabb);
+        let aabb = BlockRotation::looking_to_horizontal(rotation).rotate_block_aabb(aabb);
         let aabb = aabb.offset(position);
         for chunk in aabb.to_chunk().vertically_flatten() {
             let offset_x = chunk.x - grid_corner_x;
@@ -280,9 +278,7 @@ impl WorldGenerator {
                         entry.room.prefab,
                         rng.random::<u32>(),
                     );
-                    let rotation = Orientation::from_front_up(entry.rotation.face(), Face::Up)
-                        .unwrap()
-                        .into_block_rotation();
+                    let rotation = BlockRotation::looking_to_horizontal(entry.rotation);
                     bounding_boxes.push(
                         rotation
                             .rotate_block_aabb(entry.room.prefab.data().bounding_box())
@@ -299,9 +295,7 @@ impl WorldGenerator {
                             .horizontal()
                             .unwrap();
                         let connection_rotation =
-                            Orientation::from_front_up(connection_facing.face(), Face::Up)
-                                .unwrap()
-                                .into_block_rotation();
+                            BlockRotation::looking_to_horizontal(connection_facing);
                         let mut list: Vec<_> = connection
                             .rooms
                             .iter()
@@ -534,9 +528,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 z: block_offset.z + placed_decoration.z as i32,
             };
             let prefab = placed_decoration.key.data();
-            if Orientation::from_front_up(placed_decoration.rotation.face(), Face::Up)
-                .unwrap()
-                .into_block_rotation()
+            if BlockRotation::looking_to_horizontal(placed_decoration.rotation)
                 .rotate_block_aabb(prefab.bounding_box())
                 .offset(block_position)
                 .intersects(chunk_aabb)
