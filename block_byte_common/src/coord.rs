@@ -543,18 +543,50 @@ impl AABB<i32> {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct HorizontalFace(Face);
-impl HorizontalFace {
-    pub fn new(face: Face) -> Option<HorizontalFace> {
-        if face.get_block_offset().y != 0 {
-            return None;
-        }
-        Some(HorizontalFace(face))
-    }
+pub enum HorizontalFace {
+    Front,
+    Back,
+    Left,
+    Right,
 }
-impl Into<Face> for HorizontalFace {
-    fn into(self) -> Face {
-        self.0
+impl HorizontalFace {
+    pub fn all() -> [HorizontalFace; 4] {
+        [
+            HorizontalFace::Front,
+            HorizontalFace::Back,
+            HorizontalFace::Left,
+            HorizontalFace::Right,
+        ]
+    }
+    pub fn face(self) -> Face {
+        match self {
+            HorizontalFace::Front => Face::Front,
+            HorizontalFace::Back => Face::Back,
+            HorizontalFace::Left => Face::Left,
+            HorizontalFace::Right => Face::Right,
+        }
+    }
+    pub fn get_block_offset(&self) -> BlockPos {
+        self.face().get_block_offset()
+    }
+    pub fn get_offset(&self) -> Pos {
+        self.get_block_offset().to_pos()
+    }
+    pub fn get_chunk_offset(&self) -> ChunkPos {
+        let block_offset = self.get_block_offset();
+        ChunkPos {
+            x: block_offset.x as i16,
+            y: block_offset.y as i16,
+            z: block_offset.z as i16,
+        }
+    }
+    pub fn opposite(&self) -> Self {
+        match self {
+            Self::Front => Self::Back,
+            Self::Back => Self::Front,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -567,8 +599,8 @@ pub enum Face {
     Right,
 }
 impl Face {
-    pub fn all() -> &'static [Face; 6] {
-        &[
+    pub fn all() -> [Face; 6] {
+        [
             Face::Front,
             Face::Back,
             Face::Up,
@@ -577,8 +609,14 @@ impl Face {
             Face::Right,
         ]
     }
-    pub fn horizontal() -> &'static [Face; 4] {
-        &[Face::Front, Face::Back, Face::Left, Face::Right]
+    pub fn horizontal(self) -> Option<HorizontalFace> {
+        Some(match self {
+            Face::Front => HorizontalFace::Front,
+            Face::Back => HorizontalFace::Back,
+            Face::Left => HorizontalFace::Left,
+            Face::Right => HorizontalFace::Right,
+            Face::Up | Face::Down => return None,
+        })
     }
     pub fn get_block_offset(&self) -> BlockPos {
         match self {
@@ -1128,7 +1166,7 @@ impl Face {
             _ => panic!(),
         };
         let dir = dir ^ a_dir ^ b_dir;
-        *Face::all()
+        Face::all()
             .into_iter()
             .find(|face| {
                 let (f_axis, f_dir) = face.axis_direction();
@@ -1169,8 +1207,8 @@ impl Orientation {
     }
     pub fn inverse_apply(self, face: Face) -> Face {
         for test in Face::all() {
-            if self.apply(*test) == face {
-                return *test;
+            if self.apply(test) == face {
+                return test;
             }
         }
         unreachable!()
@@ -1216,7 +1254,7 @@ impl Orientation {
             let mut result = Vec::with_capacity(24);
             for first in Face::all() {
                 for second in Face::all() {
-                    if let Some(orientation) = Orientation::from_front_up(*first, *second) {
+                    if let Some(orientation) = Orientation::from_front_up(first, second) {
                         result.push(orientation);
                     }
                 }

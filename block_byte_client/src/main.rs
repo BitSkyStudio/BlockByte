@@ -38,7 +38,7 @@ use block_byte_common::{
         TextureKey, ToolData, TranslationLanguageData, air_block, load_registries,
     },
     ui::{PropertyMap, SlotId},
-    world::{self, ClientChunkBlockComponents},
+    world::{self, ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
 use bytemuck::Pod;
 use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
@@ -868,11 +868,17 @@ impl ApplicationHandler for App {
                                 self.game.entities.remove(&uuid);
                             }
                             NetworkMessageS2C::UpdateBlockComponents {
-                                chunk,
+                                chunk: chunk_position,
                                 offset,
                                 update: data,
                             } => {
-                                if let Some(chunk) = self.game.chunks.get_mut(&chunk) {
+                                match data {
+                                    ClientBlockComponentUpdate::ClientBlockPlants(..) => {
+                                        self.game.mark_modified(chunk_position);
+                                    }
+                                    _ => {}
+                                }
+                                if let Some(chunk) = self.game.chunks.get_mut(&chunk_position) {
                                     data.update(
                                         offset,
                                         &mut *chunk.mesh_build_data.components.write(),
@@ -2385,7 +2391,7 @@ impl ClientChunk {
                                     }
                                 }
                                 let texture = faces
-                                    .by_face(*face)
+                                    .by_face(face)
                                     .tex_coords(f32::to_bits(
                                         base_position.x * base_position.y * base_position.z,
                                     ) as usize);

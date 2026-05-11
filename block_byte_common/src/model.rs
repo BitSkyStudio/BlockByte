@@ -215,7 +215,7 @@ impl Bone {
                     let io = Matrix4::from_translation(-Vector3::from(origin.into_array()));
                     let world = world * o * Matrix4::from(*rotation) * io;
                     for face in Face::all() {
-                        let (uv, rotation, texture) = *uvs.by_face(*face);
+                        let (uv, rotation, texture) = *uvs.by_face(face);
                         geometry_consumer(ModelGeometry::Quad(
                             face.get_vertices(uv, rotation).map(|(pos, uv)| {
                                 let position = Pos {

@@ -18,7 +18,8 @@ use block_byte_common::{
     CharacterController, Color, DamageTable, DamageType, InventoryView, LookDirection, MoveMode,
     SERVER_DT, SERVER_TPS,
     coord::{
-        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Orientation, Pos,
+        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
+        Orientation, Pos,
     },
     net::{NetworkMessageC2S, NetworkMessageS2C, PropertyModifyMode},
     registry::{
@@ -993,7 +994,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                 |node| {
                                     let node = *node;
                                     let entity_block_position = entity.position.to_block_pos();
-                                    Face::horizontal().iter().filter_map(move |face| {
+                                    HorizontalFace::all().into_iter().filter_map(move |face| {
                                         let block_position = node + face.get_block_offset();
                                         if block_position.distance_squared(entity_block_position)
                                             > (24i32).pow(2)

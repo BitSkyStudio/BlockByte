@@ -1437,7 +1437,7 @@ impl PrefabData {
         seed: u64,
         mut callback: impl FnMut(BlockPos, BlockEntry),
     ) {
-        let rotation = Orientation::from_front_up(rotation.into(), Face::Up)
+        let rotation = Orientation::from_front_up(rotation.face(), Face::Up)
             .unwrap()
             .into_block_rotation();
         use rand::Rng;

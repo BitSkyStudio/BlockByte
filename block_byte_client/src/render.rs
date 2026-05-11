@@ -128,7 +128,7 @@ impl RenderState {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: wgpu::PresentMode::AutoNoVsync, //AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -531,7 +531,7 @@ impl RenderState {
                         });
                     }
                 }
-                if frame_load_limit > (4. * 1024. * 1024.) as usize && true {
+                if frame_load_limit > (1. * 1024. * 1024.) as usize && true {
                     break;
                 }
             }
@@ -1246,8 +1246,8 @@ pub fn draw_block_model(
         BlockRenderData::Full { faces } => {
             for face in Face::all() {
                 vertex_consumer.add_quad(
-                    face.get_vertices(faces.by_face(*face).tex_coords(0), 0)
-                        .map(|(position, uv)| {
+                    face.get_vertices(faces.by_face(face).tex_coords(0), 0).map(
+                        |(position, uv)| {
                             let position = position
                                 - Pos {
                                     x: 0.5,
@@ -1259,7 +1259,8 @@ pub fn draw_block_model(
                                 normal: face.get_offset().multiply_vector(matrix).normalize(),
                                 uv,
                             }
-                        }),
+                        },
+                    ),
                 );
             }
         }

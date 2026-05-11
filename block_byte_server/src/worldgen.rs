@@ -65,8 +65,9 @@ impl RegionGeneration {
     pub fn add_structure_prefab(
         &mut self,
         position: BlockPos,
-        rotation: BlockRotation,
+        rotation: HorizontalFace,
         prefab: PrefabKey,
+        seed: u32,
     ) {
         let grid_corner_x =
             self.x * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
@@ -74,7 +75,10 @@ impl RegionGeneration {
             self.z * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
 
         let aabb = prefab.data().bounding_box();
-        let aabb = rotation.rotate_block_aabb(aabb);
+        let aabb = Orientation::from_front_up(rotation.face(), Face::Up)
+            .unwrap()
+            .into_block_rotation()
+            .rotate_block_aabb(aabb);
         let aabb = aabb.offset(position);
         for chunk in aabb.to_chunk().vertically_flatten() {
             let offset_x = chunk.x - grid_corner_x;
@@ -88,6 +92,7 @@ impl RegionGeneration {
                     position,
                     rotation,
                     prefab,
+                    seed: seed, //todo: do something
                     next: self.structure_grid[offset_x as usize][offset_z as usize],
                 });
                 self.structure_grid[offset_x as usize][offset_z as usize] =
@@ -100,8 +105,9 @@ impl RegionGeneration {
 }
 struct StructureGridPrefab {
     pub position: BlockPos,
-    pub rotation: BlockRotation,
+    pub rotation: HorizontalFace,
     pub prefab: PrefabKey,
+    pub seed: u32,
     pub next: Option<NonZeroU32>,
 }
 impl RegionGeneration {
@@ -109,6 +115,7 @@ impl RegionGeneration {
     pub const BORDER_CHUNK_SIZE: usize = 8;
     const GRID_SIZE: usize = Self::REGION_CHUNK_SIZE + Self::BORDER_CHUNK_SIZE * 2;
 }
+#[derive(Clone, Copy)]
 pub struct RegionStructure {
     pub x: i32,
     pub z: i32,
@@ -167,11 +174,28 @@ struct ChunkColumnDecoration {
 #[derive(Deserialize)]
 pub struct WorldGeneratorConfigStructure {
     pub exclusion_zone: u16,
-    pub rooms: HashMap<String, WorldGeneratorConfigStructureRoom>,
+    pub root_room: String,
+    pub rooms: HashMap<String, StructureConfigRoom>,
 }
 #[derive(Deserialize)]
-pub struct WorldGeneratorConfigStructureRoom {
+pub struct StructureConfigConnection {
+    pub position: BlockPos,
+    pub facing: HorizontalFace,
+    pub rooms: Vec<StructureConfigRoomSelection>,
+}
+#[derive(Deserialize)]
+pub struct StructureConfigRoomSelection {
+    pub room: String,
+    pub weight: f32,
+    #[serde(default)]
+    pub weight_depth_bias: f32,
+}
+#[derive(Deserialize)]
+pub struct StructureConfigRoom {
     pub prefab: PrefabKey,
+    pub connections: Vec<StructureConfigConnection>,
+    #[serde(default)]
+    pub road: Option<BlockPos>,
 }
 #[derive(Deserialize)]
 pub struct WorldGeneratorConfig {
@@ -203,10 +227,8 @@ impl WorldGenerator {
                         self,
                     )
                 });
-            let mut region = RegionGeneration {
-                x: region_x,
-                z: region_z,
-                structures: RegionGeneration::generate_structure_list(region_x, region_z, self)
+            let structures: Vec<_> =
+                RegionGeneration::generate_structure_list(region_x, region_z, self)
                     .into_iter()
                     .filter(|structure| {
                         !structure_blockers.iter().any(|blocker| {
@@ -219,12 +241,103 @@ impl WorldGenerator {
                             })
                         })
                     })
-                    .collect(),
+                    .collect();
+            let mut region = RegionGeneration {
+                x: region_x,
+                z: region_z,
+                structures: structures.clone(), //todo: probably not even required
                 structure_grid: [[None; RegionGeneration::GRID_SIZE]; RegionGeneration::GRID_SIZE],
                 structure_grid_prefabs: Vec::new(),
                 roads: [[0; RegionGeneration::REGION_CHUNK_SIZE];
                     RegionGeneration::REGION_CHUNK_SIZE],
             };
+            for structure in structures {
+                let structure_data = &self.config.structures[structure.index];
+                let mut rng = Xoshiro256PlusPlus::seed_from_u64(structure.seed);
+                let start_rotation = HorizontalFace::all()[rng.random_range(0..4)];
+                let mut queue = VecDeque::new();
+                let mut bounding_boxes = Vec::new();
+                struct QueueEntry<'a> {
+                    depth: u32,
+                    position: BlockPos,
+                    rotation: HorizontalFace,
+                    room: &'a StructureConfigRoom,
+                }
+                queue.push_front(QueueEntry {
+                    depth: 0,
+                    position: BlockPos {
+                        x: structure.x,
+                        y: 80,
+                        z: structure.z,
+                    },
+                    rotation: start_rotation,
+                    room: structure_data.rooms.get(&structure_data.root_room).unwrap(),
+                });
+                while let Some(entry) = queue.pop_back() {
+                    region.add_structure_prefab(
+                        entry.position,
+                        entry.rotation,
+                        entry.room.prefab,
+                        rng.random::<u32>(),
+                    );
+                    let rotation = Orientation::from_front_up(entry.rotation.face(), Face::Up)
+                        .unwrap()
+                        .into_block_rotation();
+                    bounding_boxes.push(
+                        rotation
+                            .rotate_block_aabb(entry.room.prefab.data().bounding_box())
+                            .offset(entry.position),
+                    );
+                    if entry.depth > 32 {
+                        continue;
+                    }
+                    for connection in &entry.room.connections {
+                        let connection_position =
+                            entry.position + rotation.rotate_block_pos(connection.position);
+                        let connection_facing = rotation
+                            .rotate_face(connection.facing.face())
+                            .horizontal()
+                            .unwrap();
+                        let connection_rotation =
+                            Orientation::from_front_up(connection_facing.face(), Face::Up)
+                                .unwrap()
+                                .into_block_rotation();
+                        let mut list: Vec<_> = connection
+                            .rooms
+                            .iter()
+                            .map(|room| {
+                                (
+                                    room,
+                                    rng.random::<f32>().powf(
+                                        1. / (room.weight
+                                            + room.weight_depth_bias * entry.depth as f32),
+                                    ),
+                                )
+                            })
+                            .collect();
+                        list.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+                        for (room, _) in list {
+                            let room = structure_data.rooms.get(&room.room).unwrap();
+                            let room_bb = connection_rotation
+                                .rotate_block_aabb(room.prefab.data().bounding_box())
+                                .offset(connection_position);
+                            if bounding_boxes
+                                .iter()
+                                .any(|existing_bb| existing_bb.intersects(room_bb))
+                            {
+                                continue;
+                            }
+                            queue.push_front(QueueEntry {
+                                depth: entry.depth + 1,
+                                position: connection_position,
+                                rotation: connection_facing,
+                                room,
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
 
             Arc::new(region)
         })
@@ -308,10 +421,7 @@ impl WorldGenerator {
                                         x: offset_x,
                                         z: offset_z,
                                         exclusion_zone: decorator.exclusion_zone,
-                                        rotation: HorizontalFace::new(
-                                            Face::horizontal()[rotation as usize],
-                                        )
-                                        .unwrap(),
+                                        rotation: HorizontalFace::all()[rotation as usize],
                                         seed,
                                     });
                                 break;
@@ -424,7 +534,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 z: block_offset.z + placed_decoration.z as i32,
             };
             let prefab = placed_decoration.key.data();
-            if Orientation::from_front_up(placed_decoration.rotation.into(), Face::Up)
+            if Orientation::from_front_up(placed_decoration.rotation.face(), Face::Up)
                 .unwrap()
                 .into_block_rotation()
                 .rotate_block_aabb(prefab.bounding_box())
@@ -448,6 +558,34 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     },
                 );
             }
+        }
+    }
+    let region = generator.get_region_generation(
+        position.x / RegionGeneration::GRID_SIZE as i16,
+        position.z / RegionGeneration::GRID_SIZE as i16,
+    );
+    {
+        let mut next_placement = region.structure_grid
+            [(position.x.rem_euclid(RegionGeneration::GRID_SIZE as i16)) as usize]
+            [(position.z.rem_euclid(RegionGeneration::GRID_SIZE as i16)) as usize];
+        while let Some(placement) = next_placement {
+            let placement = &region.structure_grid_prefabs[(placement.get() - 1) as usize];
+            placement.prefab.data().build(
+                placement.position,
+                placement.rotation,
+                placement.seed as u64,
+                |place_position, block| {
+                    let (place_chunk, place_chunk_offset) = place_position.to_chunk_pos_offset();
+                    if place_chunk == position {
+                        if replacable_tag
+                            .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
+                        {
+                            blocks.set(place_chunk_offset.index(), &block);
+                        }
+                    }
+                },
+            );
+            next_placement = placement.next;
         }
     }
     //blocks.set(ChunkOffset::new(16, 16, 16).index(), &grass);
