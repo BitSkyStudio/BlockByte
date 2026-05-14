@@ -1264,17 +1264,17 @@ pub fn draw_block_model(
             }
         }
         BlockRenderData::Model(model) => {
-            draw_model(model, matrix, vertex_consumer, &[], |_| None);
+            draw_model(model, matrix, vertex_consumer, &[], |_, _| None);
         }
     }
 }
 
-pub fn draw_model(
+pub fn draw_model<C: MeshVertexConsumer>(
     model: &ModelInstance,
     matrix: Matrix4<f32>,
-    vertex_consumer: &mut impl MeshVertexConsumer,
+    vertex_consumer: &mut C,
     animations: &[DrawAnimation],
-    binding_query: impl Fn(&str) -> Option<Cow<'static, ItemModel>>,
+    binding_query: impl Fn(&str, &mut C) -> Option<Cow<'static, ItemModel>>,
 ) {
     let model_data = &model.model.data().model;
     let embed_textures = &TEXTURE_ATLAS.get().unwrap().models[model.model.numeric_id()];
@@ -1298,39 +1298,39 @@ pub fn draw_model(
             ModelGeometry::Triangle(vertices, texture) => todo!(),
         },
         |matrix, binding| {
-            if let Some(item) = binding_query(binding) {
-                item_models.push((matrix, item, binding.to_string()));
-            }
+            item_models.push((matrix, binding.to_string()));
         },
     );
-    for (matrix, model, binding) in item_models {
-        let anchor = match &*model {
-            ItemModel::Block(block) => match &block.data().render_data {
-                BlockRenderData::Air => Matrix4::identity(),
-                BlockRenderData::Full { faces } => Matrix4::identity(),
-                BlockRenderData::Model(key) => key
+    for (matrix, binding) in item_models {
+        if let Some(model) = binding_query(&binding, vertex_consumer) {
+            let anchor = match &*model {
+                ItemModel::Block(block) => match &block.data().render_data {
+                    BlockRenderData::Air => Matrix4::identity(),
+                    BlockRenderData::Full { faces } => Matrix4::identity(),
+                    BlockRenderData::Model(key) => key
+                        .model
+                        .data()
+                        .model
+                        .anchor(
+                            binding.as_str(),
+                            Matrix4::from_scale(block.data().item_scale),
+                            &[],
+                        )
+                        .map(|matrix| {
+                            Matrix4::from_scale(block.data().item_scale) * matrix.invert().unwrap()
+                        })
+                        .unwrap_or(Matrix4::identity()),
+                },
+                ItemModel::Model(key) => key
                     .model
                     .data()
                     .model
-                    .anchor(
-                        binding.as_str(),
-                        Matrix4::from_scale(block.data().item_scale),
-                        &[],
-                    )
-                    .map(|matrix| {
-                        Matrix4::from_scale(block.data().item_scale) * matrix.invert().unwrap()
-                    })
+                    .anchor(binding.as_str(), Matrix4::identity(), &[])
+                    .map(|matrix| matrix.invert().unwrap())
                     .unwrap_or(Matrix4::identity()),
-            },
-            ItemModel::Model(key) => key
-                .model
-                .data()
-                .model
-                .anchor(binding.as_str(), Matrix4::identity(), &[])
-                .map(|matrix| matrix.invert().unwrap())
-                .unwrap_or(Matrix4::identity()),
-        };
-        draw_item_model(&*model, matrix * anchor, vertex_consumer);
+            };
+            draw_item_model(&*model, matrix * anchor, vertex_consumer);
+        }
     }
 }
 pub fn draw_item_model(
@@ -1347,7 +1347,7 @@ pub fn draw_item_model(
             );
         }
         ItemModel::Model(model) => {
-            draw_model(model, matrix, vertex_consumer, &[], |_| None);
+            draw_model(model, matrix, vertex_consumer, &[], |_, _| None);
         }
     }
 }
@@ -1614,6 +1614,7 @@ impl<T> Default for Mesh<T> {
         }
     }
 }
+#[derive(Clone)]
 pub struct MeshVertex {
     pub position: Pos,
     pub normal: Pos,
@@ -1627,7 +1628,7 @@ impl BaseMesh {
 }
 pub struct BaseMeshVertexConsumer<'a> {
     mesh: &'a mut BaseMesh,
-    color: Color,
+    pub color: Color,
 }
 impl MeshVertexConsumer for BaseMeshVertexConsumer<'_> {
     fn add_vertex(&mut self, vertex: MeshVertex) -> u32 {

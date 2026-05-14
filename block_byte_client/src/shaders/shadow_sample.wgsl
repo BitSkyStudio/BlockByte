@@ -18,7 +18,8 @@ fn sample_shadow(world_position: vec3<f32>, normal: vec3<f32>) -> f32{
         return 1.;
     }
 
-    //return vec4(shadow_uv, 0., 1.);
-
-    return select(0.7, 1., shadow_value + 0.0005 > shadow_projection.z);
+    //let blend_area = 0.001;
+    //return mix(0.75, 1., 1-clamp(-(shadow_value +  - shadow_projection.z)/blend_area,0,1));
+    
+    return select(0.75, 1., shadow_value + 0.0005 > shadow_projection.z);
 }

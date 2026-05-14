@@ -504,7 +504,6 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             }
         }
     }
-    let replacable_tag = KeyGroup::parse("#prefab_replacable").unwrap();
     let chunk_aabb = (AABB {
         min: BlockPos::all(0),
         max: BlockPos::all(CHUNK_SIZE as i32),
@@ -537,11 +536,11 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     block_position,
                     placed_decoration.rotation,
                     placed_decoration.seed,
-                    |place_position, block| {
+                    |place_position, block, replace_list| {
                         let (place_chunk, place_chunk_offset) =
                             place_position.to_chunk_pos_offset();
                         if place_chunk == position {
-                            if replacable_tag
+                            if replace_list
                                 .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
                             {
                                 blocks.set(place_chunk_offset.index(), &block);
@@ -566,10 +565,10 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 placement.position,
                 placement.rotation,
                 placement.seed as u64,
-                |place_position, block| {
+                |place_position, block, replace_list| {
                     let (place_chunk, place_chunk_offset) = place_position.to_chunk_pos_offset();
                     if place_chunk == position {
-                        if replacable_tag
+                        if replace_list
                             .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
                         {
                             blocks.set(place_chunk_offset.index(), &block);

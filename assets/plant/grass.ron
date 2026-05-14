@@ -3,7 +3,7 @@
     size: 1.4,
     height: 1.,
     blades: 3,
-    translation: 0.2,
+    center_offset: 0.,
     growth_length: 10.,
     harvest_loot: Key("empty"),
     break_loot: Key("empty"),

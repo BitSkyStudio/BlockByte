@@ -1859,7 +1859,7 @@ impl ClientGame {
                 * Matrix4::from_angle_x(Rad(camera.direction.pitch)),
             &mut viewmodel_mesh.consumer(Color::WHITE),
             &animation,
-            |binding| match binding {
+            |binding, vc| match binding {
                 "hand" => {
                     let (item, variant) = match self.swap_hand_item.as_ref() {
                         Some(item) => item,
@@ -1868,7 +1868,17 @@ impl ClientGame {
                     let item_data = item.data();
                     match &item_data.action {
                         ItemAction::Place(item_block_placements) => {
-                            let placement = &item_block_placements[*variant];
+                            let placement = &item_block_placements[*variant]; //todo: flash red when not enough items
+                            if let Some(held_item) = self.held_item() {
+                                if held_item.count < placement.use_count {
+                                    vc.color = Color {
+                                        r: 255,
+                                        g: 200,
+                                        b: 200,
+                                        a: 255,
+                                    };
+                                }
+                            }
                             Some(Cow::Owned(ItemModel::Block((placement.block))))
                         }
                         _ => Some(Cow::Borrowed(&item_data.model)),
@@ -1930,7 +1940,7 @@ impl ClientGame {
                     * Matrix4::from_angle_y(Rad(rotation)),
                 &mut entity_mesh.consumer(Color::WHITE),
                 &[],
-                |slot| {
+                |slot, _| {
                     entity
                         .hand_item
                         .as_ref()
@@ -2081,7 +2091,7 @@ impl ClientGame {
                                     Some(animation) => std::slice::from_ref(animation),
                                     None => &[],
                                 },
-                                |_| None,
+                                |_, _| None,
                             );
                         }
                     }
@@ -2243,48 +2253,76 @@ impl ClientChunk {
                         z: 0.5,
                     };
                 let texture = plant.stages[*stage as usize].tex_coords();
-                for blade in 0..plant.blades * 2 {
-                    let first_angle = f32::consts::PI * (blade as f32 / plant.blades as f32 + 0.25);
+                for blade in 0..plant.blades {
+                    let first_angle =
+                        f32::consts::PI * 2. * (blade as f32 / plant.blades as f32 + 0.25);
                     let second_angle = f32::consts::PI + first_angle;
+                    let perpendicular = f32::consts::PI / 2. + first_angle;
+                    let center_offset = Pos {
+                        x: perpendicular.cos(),
+                        y: 0.,
+                        z: perpendicular.sin(),
+                    };
+                    /*let normal = Pos {
+                        x: center_offset.x,
+                        y: 1.,
+                        z: center_offset.z,
+                    }
+                    .normalize();*/
+                    let normal = Pos::Y;
                     let first = Pos {
                         x: first_angle.cos(),
                         y: 0.,
                         z: first_angle.sin(),
                     } * (plant.size / 2.)
-                        + position;
+                        + position
+                        + center_offset * plant.center_offset;
                     let second = Pos {
                         x: second_angle.cos(),
                         y: 0.,
                         z: second_angle.sin(),
                     } * (plant.size / 2.)
-                        + position;
+                        + position
+                        + center_offset * plant.center_offset;
 
-                    let vertices = [
+                    let mut vertices = [
                         MeshVertex {
                             position: first,
                             uv: [texture.u1, texture.v2],
-                            normal: Pos::Y,
+                            normal,
                         },
                         MeshVertex {
                             position: second,
                             uv: [texture.u2, texture.v2],
-                            normal: Pos::Y,
+                            normal,
                         },
                         MeshVertex {
                             position: second + Pos::Y,
                             uv: [texture.u2, texture.v1],
-                            normal: Pos::Y,
+                            normal,
                         },
                         MeshVertex {
                             position: first + Pos::Y,
                             uv: [texture.u1, texture.v1],
-                            normal: Pos::Y,
+                            normal,
                         },
                     ];
-                    mesh_vertex_consumer.add_quad(vertices);
-                    let vertex_count = mesh_vertex_consumer.mesh.vertices.len();
-                    for vertex in &mut mesh_vertex_consumer.mesh.vertices[(vertex_count - 2)..] {
-                        vertex.flags = 1;
+                    for first in [true, false] {
+                        mesh_vertex_consumer.add_quad(vertices.clone());
+                        let vertex_count = mesh_vertex_consumer.mesh.vertices.len();
+                        let start_index = (vertex_count - 2) - if first { 0 } else { 2 };
+                        for vertex in
+                            &mut mesh_vertex_consumer.mesh.vertices[start_index..start_index + 2]
+                        {
+                            vertex.flags = 1;
+                        }
+                        if first {
+                            vertices.reverse();
+                            for vertex in &mut vertices {
+                                vertex.normal *= -1.;
+                                vertex.normal.y *= -1.;
+                            }
+                        }
                     }
                 }
             }
@@ -2402,7 +2440,7 @@ impl ClientChunk {
                                 ),
                                 &mut mesh_consumer,
                                 &[],
-                                |_| None,
+                                |_, _| None,
                             );
                         }
                     }

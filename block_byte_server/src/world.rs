@@ -158,14 +158,26 @@ pub fn tick_chunk(world: &WorldAccess) {
                 let Some(block) = world.get_block(block_position) else {
                     continue;
                 };
+                let face = block.rotation.inverse_rotate_face(world_face);
                 let block_data = block.block.data();
                 if let Some(support_face) = block_data.hanging {
-                    let face = block.rotation.inverse_rotate_face(world_face);
                     if face == support_face {
                         world.drop_items(
                             world.break_block(block_position).unwrap().into_iter(),
                             block_position.to_pos() + Pos::all(0.5),
                         );
+                        continue;
+                    }
+                }
+                if let Some(machine_data) = &block_data.machine {
+                    match machine_data.faces.by_face(face) {
+                        BlockMachineFace::LogicInput => {
+                            let mut machine = world
+                                .get_block_component::<BlockMachine>(block_position)
+                                .unwrap();
+                            *machine.logic_state.by_face_mut(face) = None;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1415,6 +1427,45 @@ pub fn tick_chunk(world: &WorldAccess) {
             }
         }
     }
+    let added_machines: Vec<_> = world
+        .block_components
+        .machine
+        .added
+        .borrow()
+        .keys()
+        .cloned()
+        .collect();
+    for added_machine in added_machines {
+        let block_entry = world.get_block(added_machine).unwrap();
+        let machine_data = block_entry.block.data().machine.as_ref().unwrap();
+        let mut machine = world
+            .get_block_component::<BlockMachine>(added_machine)
+            .unwrap();
+        for face in Face::all() {
+            match machine_data.faces.by_face(face) {
+                BlockMachineFace::LogicInput => {
+                    let world_face = block_entry.rotation.rotate_face(face);
+                    let other_position = added_machine + world_face.get_block_offset();
+                    let other_block = world.get_block(other_position).unwrap();
+                    let other_machine = world
+                        .get_block_component::<BlockMachine>(other_position)
+                        .unwrap();
+                    let other_machine_data = other_block.block.data().machine.as_ref().unwrap();
+                    let other_face = other_block
+                        .rotation
+                        .inverse_rotate_face(world_face.opposite());
+                    match other_machine_data.faces.by_face(other_face) {
+                        BlockMachineFace::LogicOutput => {
+                            *machine.logic_state.by_face_mut(face) =
+                                *other_machine.logic_state.by_face(other_face);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1925,7 +1976,10 @@ impl WorldAccess<'_> {
                 inventory: Inventory::new(machine_data.inventory_size),
                 sleep_cooldown: 0,
                 script_state: ScriptState::new(&machine_data.script),
-                logic_state: Default::default(),
+                logic_state: FaceMap::init(|face| match machine_data.faces.by_face(face) {
+                    BlockMachineFace::LogicOutput => Some(0),
+                    _ => None,
+                }),
                 blocked: false,
                 inventory_observers: SmallVec::new(),
                 current_animation: 0,

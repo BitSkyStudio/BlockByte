@@ -1034,6 +1034,15 @@ enum ComposedTexture {
         height: u32,
         color: Color,
     },
+    Flip {
+        base: Box<ComposedTexture>,
+        #[serde(default)]
+        horizontal: bool,
+        #[serde(default)]
+        vertical: bool,
+        #[serde(default)]
+        diagonal: bool,
+    },
 }
 impl ComposedTexture {
     pub fn resolve(&self, load_texture_type: LoadTextureType) -> anyhow::Result<Arc<DynamicImage>> {
@@ -1086,6 +1095,24 @@ impl ComposedTexture {
                     *pixel = rgba;
                 }
                 Arc::new(image)
+            }
+            ComposedTexture::Flip {
+                base,
+                horizontal,
+                vertical,
+                diagonal,
+            } => {
+                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type)?);
+                if *horizontal {
+                    base.apply_orientation(image::metadata::Orientation::FlipHorizontal);
+                }
+                if *vertical {
+                    base.apply_orientation(image::metadata::Orientation::FlipVertical);
+                }
+                if *diagonal {
+                    base.apply_orientation(image::metadata::Orientation::Rotate90FlipH);
+                }
+                Arc::new(base)
             }
         })
     }
@@ -1185,7 +1212,7 @@ pub struct PlantData {
     #[cfg(feature = "client")]
     pub blades: u32,
     #[cfg(feature = "client")]
-    pub translation: f32,
+    pub center_offset: f32,
     pub growth_length: f32,
     #[serde(default)]
     pub harvest_reset: f32,
@@ -1348,6 +1375,9 @@ pub type RecipeKey = Key<RecipeData>;
 fn default_prefab_entry_true_chance() -> f32 {
     1.
 }
+fn default_prefab_replace() -> KeyGroup<BlockData> {
+    KeyGroup::parse("#prefab_replacable").unwrap()
+}
 #[derive(Serialize, Deserialize)]
 pub struct PrefabEntry {
     //we unfortunately cannot flatten here
@@ -1356,6 +1386,8 @@ pub struct PrefabEntry {
     pub z: i32,
     #[serde(default = "default_prefab_entry_true_chance")]
     pub chance: f32,
+    #[serde(default = "default_prefab_replace", skip_serializing)]
+    pub replace: KeyGroup<BlockData>,
     pub block: BlockKey,
     #[serde(default)]
     pub rotation: BlockRotation,
@@ -1384,7 +1416,7 @@ impl PrefabData {
         position: BlockPos,
         rotation: HorizontalFace,
         seed: u64,
-        mut callback: impl FnMut(BlockPos, BlockEntry),
+        mut callback: impl FnMut(BlockPos, BlockEntry, KeyGroup<BlockData>),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
@@ -1408,6 +1440,7 @@ impl PrefabData {
                             .rotation
                             .get_nearest_valid(rotation.compose(entry.rotation)),
                     },
+                    entry.replace,
                 );
             }
         }
