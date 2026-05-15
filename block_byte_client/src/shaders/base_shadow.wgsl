@@ -37,5 +37,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if color.w < 0.9{
         discard;
     }
-    return vec4(1.);
+
+    let moment1 = in.clip_position.z;
+    var moment2 = pow(in.clip_position.z, 2);
+    let dx = dpdx(moment1);
+    let dy = dpdy(moment1);
+    moment2 += 0.25*(dx*dx+dy*dy);
+    return vec4(moment1, moment2, 0, 1);
 }

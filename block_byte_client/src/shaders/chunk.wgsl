@@ -58,7 +58,7 @@ var material_sampler: sampler;
 var<uniform> shadow_camera: CameraUniform;
 
 @group(3) @binding(0)
-var shadow_texture: texture_depth_2d;
+var shadow_texture: texture_2d<f32>;
 @group(3)@binding(1)
 var shadow_sampler: sampler;
 

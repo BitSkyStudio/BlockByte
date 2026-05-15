@@ -58,6 +58,7 @@ pub struct RenderState {
     texel_size_uniform: GPUUniform<[f32; 2]>,
     blur_texture: GPUTexture,
     blur_render_pipeline: GPURenderPipeline,
+    shadow_depth_texture: GPUTexture,
     shadow_texture: GPUTexture,
     shadow_camera: GPUUniform<CameraUniform>,
     shadow_chunk_render_pipeline: GPURenderPipeline,
@@ -104,7 +105,8 @@ impl RenderState {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::empty()
+                    .union(wgpu::Features::FLOAT32_FILTERABLE),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 required_limits: wgpu::Limits {
                     max_bind_groups: 8,
@@ -189,11 +191,18 @@ impl RenderState {
             TextureFormat::Rgba16Float,
             wgpu::FilterMode::Nearest,
         );
-        let shadow_texture = GPUTexture::new(
+        let shadow_depth_texture = GPUTexture::new(
             &device,
             (2048 * 2, 2048 * 2),
             1,
             TextureFormat::Depth32Float,
+            wgpu::FilterMode::Linear,
+        );
+        let shadow_texture = GPUTexture::new(
+            &device,
+            (2048 * 2, 2048 * 2),
+            1,
+            TextureFormat::Rg32Float,
             wgpu::FilterMode::Linear,
         );
         let shadow_common_shader = include_str!("shaders/shadow_sample.wgsl");
@@ -307,8 +316,8 @@ impl RenderState {
                 Some(&time_uniform.bind_group_layout),
             ],
             None,
-            Some(wgpu::Face::Back),
-            None,
+            Some(wgpu::Face::Front),
+            Some(shadow_texture.format),
             Some(TextureFormat::Depth32Float),
         );
 
@@ -320,8 +329,8 @@ impl RenderState {
                 Some(&camera_uniform.bind_group_layout),
             ],
             None,
-            Some(wgpu::Face::Back),
-            None,
+            Some(wgpu::Face::Front),
+            Some(shadow_texture.format),
             Some(TextureFormat::Depth32Float),
         );
 
@@ -379,6 +388,7 @@ impl RenderState {
             blur_render_pipeline,
             blur_texture,
             shadow_camera,
+            shadow_depth_texture,
             shadow_texture,
             shadow_chunk_render_pipeline,
             shadow_base_render_pipeline,
@@ -575,9 +585,22 @@ impl RenderState {
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.shadow_texture.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.,
+                            g: 0.,
+                            b: 0.,
+                            a: 0.,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -1086,15 +1109,7 @@ impl GPUTexture {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(
-                        match Self::is_format_depth(format)
-                            && filter_mode == FilterMode::Linear
-                            && false
-                        {
-                            true => wgpu::SamplerBindingType::Comparison,
-                            false => wgpu::SamplerBindingType::Filtering,
-                        },
-                    ),
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -1169,13 +1184,7 @@ impl GPUTexture {
             min_filter: filter_mode,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             //border_color: Some(wgpu::SamplerBorderColor::TransparentBlack),
-            compare: match Self::is_format_depth(format)
-                && filter_mode == FilterMode::Linear
-                && false
-            {
-                true => Some(CompareFunction::Less),
-                false => None,
-            },
+            compare: None,
             ..Default::default()
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
