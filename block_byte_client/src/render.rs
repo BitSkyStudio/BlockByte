@@ -1242,7 +1242,7 @@ pub fn draw_block_model(
     let block = block_key.data();
     match &block.render_data {
         BlockRenderData::Air => {}
-        BlockRenderData::Full { faces } => {
+        BlockRenderData::Full { faces, .. } => {
             for face in Face::all() {
                 vertex_consumer.add_quad(
                     face.get_vertices(faces.by_face(face).tex_coords(0), 0).map(
@@ -1263,7 +1263,7 @@ pub fn draw_block_model(
                 );
             }
         }
-        BlockRenderData::Model(model) => {
+        BlockRenderData::Model { model, .. } => {
             draw_model(model, matrix, vertex_consumer, &[], |_, _| None);
         }
     }
@@ -1306,8 +1306,8 @@ pub fn draw_model<C: MeshVertexConsumer>(
             let anchor = match &*model {
                 ItemModel::Block(block) => match &block.data().render_data {
                     BlockRenderData::Air => Matrix4::identity(),
-                    BlockRenderData::Full { faces } => Matrix4::identity(),
-                    BlockRenderData::Model(key) => key
+                    BlockRenderData::Full { faces, .. } => Matrix4::identity(),
+                    BlockRenderData::Model { model: key, .. } => key
                         .model
                         .data()
                         .model
@@ -1363,7 +1363,7 @@ pub fn item_model_icon_view(model: &ItemModel) -> Matrix4<f32> {
     fn block_model_icon_view(model: &BlockData) -> Matrix4<f32> {
         match &model.render_data {
             BlockRenderData::Air | BlockRenderData::Full { .. } => default_view(),
-            BlockRenderData::Model(model_instance) => model_icon_view(model_instance),
+            BlockRenderData::Model { model, .. } => model_icon_view(model),
         }
     }
     fn model_icon_view(model: &ModelInstance) -> Matrix4<f32> {

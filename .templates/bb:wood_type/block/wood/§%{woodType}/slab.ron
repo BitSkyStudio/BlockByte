@@ -1,5 +1,5 @@
 (
-    render_data: Model("slab;wood.§%{woodType}_bark;wood.§%{woodType}_bark;wood.§%{woodType}_bark"),
+    render_data: Model(model:"slab;wood.§%{woodType}_bark;wood.§%{woodType}_bark;wood.§%{woodType}_bark"),
     health: (
         health: 5., 
         health_regen: 0.05, 

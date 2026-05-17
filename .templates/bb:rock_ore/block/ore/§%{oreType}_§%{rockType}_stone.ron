@@ -1,5 +1,5 @@
 (
-    render_data: Model("stone;ore.§%{oreType}_§%{rockType}"),
+    render_data: Model(model:"stone;ore.§%{oreType}_§%{rockType}"),
     health: (health: 5., health_regen: 0.05, table: (Pierce: 2.)),
     loot_table: Own((
         entries: [

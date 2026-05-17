@@ -16,14 +16,9 @@
         inventory_size: 10,
         script: "",
         faces: (
-            front: Empty,
             back: InventoryAccess(
                 input: [(slot:2),(slot:3)]
             ),
-            left: Empty,
-            right: Empty,
-            up: Empty,
-            down: Empty,
         )
     )),
 )

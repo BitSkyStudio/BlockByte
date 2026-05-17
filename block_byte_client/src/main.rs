@@ -2005,17 +2005,6 @@ impl ClientGame {
                                     )
                                     .map(|(position, uv)| {
                                         let mut position = base_position + position;
-                                        if block_data.render_flags & 1 != 0 {
-                                            position.x += (world_animation_time * 0.8
-                                                + position.x * 0.2)
-                                                .sin()
-                                                * 0.1;
-                                            position.z += (world_animation_time * 0.8
-                                                + 10.
-                                                + position.z * 0.2)
-                                                .sin()
-                                                * 0.1;
-                                        }
                                         MeshVertex {
                                             position,
                                             normal: face.get_offset(),
@@ -2025,7 +2014,11 @@ impl ClientGame {
                                 );
                             }
                         }
-                        BlockRenderData::Model(model) => {
+                        BlockRenderData::Model {
+                            model,
+                            render_flags,
+                            ..
+                        } => {
                             let model_data = &model.model.data();
                             model_data.model.draw(
                                 get_block_matrix(base_block_position, block.rotation),
@@ -2035,7 +2028,7 @@ impl ClientGame {
                                         let (_, width, height) = model_data.model.textures[texture];
                                         mesh_vertex_consumer.add_quad(vertices.map(|vertex| {
                                             let mut position = vertex.position;
-                                            if block_data.render_flags & 1 != 0 {
+                                            if *render_flags & 1 != 0 {
                                                 position.x += (world_animation_time * 0.8
                                                     + position.x * 0.2)
                                                     .sin()
@@ -2343,71 +2336,62 @@ impl ClientChunk {
                 for z in 0..CHUNK_SIZE as u8 {
                     let block = *chunk_blocks.get(ChunkOffset::new(x, y, z).index()).unwrap();
                     let block_data = block.block.data();
-                    let mut mesh_consumer = if block_data.lod_hidden {
-                        &mut mesh_high_res
-                    } else {
-                        &mut mesh
-                    }
-                    .consumer(block.color, block_data.render_flags);
+                    let guarantee_inside = x > 0
+                        && x < CHUNK_SIZE as u8 - 1
+                        && y > 0
+                        && y < CHUNK_SIZE as u8 - 1
+                        && z > 0
+                        && z < CHUNK_SIZE as u8 - 1;
+                    let mut get_neighbor = |neighbor_position: BlockPos| -> Option<BlockEntry> {
+                        let (neighbor_chunk, neighbor_offset) = if guarantee_inside {
+                            (
+                                ChunkPos::all(0),
+                                ChunkOffset::new(
+                                    neighbor_position.x as u8,
+                                    neighbor_position.y as u8,
+                                    neighbor_position.z as u8,
+                                ),
+                            )
+                        } else {
+                            neighbor_position.to_chunk_pos_offset()
+                        };
+                        let neighbor_chunk =
+                            match (neighbor_chunk.x, neighbor_chunk.y, neighbor_chunk.z) {
+                                (0, 0, 0) => Some(&chunk_blocks),
+                                (-1, 0, 0) => neighbor_chunks.left.as_ref(),
+                                (1, 0, 0) => neighbor_chunks.right.as_ref(),
+                                (0, -1, 0) => neighbor_chunks.down.as_ref(),
+                                (0, 1, 0) => neighbor_chunks.up.as_ref(),
+                                (0, 0, -1) => neighbor_chunks.front.as_ref(),
+                                (0, 0, 1) => neighbor_chunks.back.as_ref(),
+                                _ => unreachable!(),
+                            };
+                        if let Some(neighbor_chunk) = neighbor_chunk {
+                            Some(*neighbor_chunk.get(neighbor_offset.index()).unwrap())
+                        } else {
+                            None
+                        }
+                    };
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
-                        BlockRenderData::Full { faces } => {
+                        BlockRenderData::Full { faces, .. } => {
+                            let mut mesh_consumer = mesh.consumer(block.color, 0);
                             let base_position = Pos {
                                 x: (position.x as f32 * CHUNK_SIZE as f32) + x as f32,
                                 y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32,
                                 z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32,
                             };
-                            let guarantee_inside = x > 0
-                                && x < CHUNK_SIZE as u8 - 1
-                                && y > 0
-                                && y < CHUNK_SIZE as u8 - 1
-                                && z > 0
-                                && z < CHUNK_SIZE as u8 - 1;
                             for face in Face::all() {
                                 let neighbor_position = BlockPos {
                                     x: x as i32,
                                     y: y as i32,
                                     z: z as i32,
                                 } + face.get_block_offset();
-                                let (neighbor_chunk, neighbor_offset) = if guarantee_inside {
-                                    (
-                                        ChunkPos::all(0),
-                                        ChunkOffset::new(
-                                            neighbor_position.x as u8,
-                                            neighbor_position.y as u8,
-                                            neighbor_position.z as u8,
-                                        ),
-                                    )
-                                } else {
-                                    neighbor_position.to_chunk_pos_offset()
-                                };
-                                /*let neighbor_chunk = match Face::all()
-                                    .iter()
-                                    .find(|f| f.get_chunk_offset() == neighbor_chunk)
-                                {
-                                    Some(face) => neighbor_chunks.by_face(*face).as_ref(),
-                                    None => Some(&chunk_blocks),
-                                };*/
-                                let neighbor_chunk =
-                                    match (neighbor_chunk.x, neighbor_chunk.y, neighbor_chunk.z) {
-                                        (0, 0, 0) => Some(&chunk_blocks),
-                                        (-1, 0, 0) => neighbor_chunks.left.as_ref(),
-                                        (1, 0, 0) => neighbor_chunks.right.as_ref(),
-                                        (0, -1, 0) => neighbor_chunks.down.as_ref(),
-                                        (0, 1, 0) => neighbor_chunks.up.as_ref(),
-                                        (0, 0, -1) => neighbor_chunks.front.as_ref(),
-                                        (0, 0, 1) => neighbor_chunks.back.as_ref(),
-                                        _ => unreachable!(),
-                                    };
-                                if let Some(neighbor_chunk) = neighbor_chunk {
-                                    let neighbor_block_data = neighbor_chunk
-                                        .get(neighbor_offset.index())
-                                        .unwrap()
-                                        .block
-                                        .data();
+                                if let Some(neighbor_block) = get_neighbor(neighbor_position) {
+                                    let neighbor_block_data = neighbor_block.block.data();
                                     match &neighbor_block_data.render_data {
-                                        BlockRenderData::Air | BlockRenderData::Model(_) => {}
-                                        BlockRenderData::Full { faces } => {
+                                        BlockRenderData::Air | BlockRenderData::Model { .. } => {}
+                                        BlockRenderData::Full { faces, .. } => {
                                             continue;
                                         }
                                     }
@@ -2426,7 +2410,13 @@ impl ClientChunk {
                                 ));
                             }
                         }
-                        BlockRenderData::Model(model) => {
+                        BlockRenderData::Model {
+                            model,
+                            lod_hidden,
+                            render_flags,
+                            render_connections,
+                            ..
+                        } => {
                             render::draw_model(
                                 model,
                                 get_block_matrix(
@@ -2438,10 +2428,73 @@ impl ClientChunk {
                                         },
                                     block.rotation,
                                 ),
-                                &mut mesh_consumer,
+                                &mut {
+                                    if *lod_hidden {
+                                        &mut mesh_high_res
+                                    } else {
+                                        &mut mesh
+                                    }
+                                    .consumer(block.color, *render_flags)
+                                },
                                 &[],
                                 |_, _| None,
                             );
+                            for connection in render_connections {
+                                for rotation in &connection.rotations {
+                                    let final_rotation = block.rotation.compose(*rotation);
+                                    let rotated_offset_face =
+                                        final_rotation.rotate_face(connection.offset);
+                                    let neighbor_position = BlockPos {
+                                        x: x as i32,
+                                        y: y as i32,
+                                        z: z as i32,
+                                    } + rotated_offset_face
+                                        .get_block_offset();
+                                    if let Some(neighbor_block) = get_neighbor(neighbor_position) {
+                                        let neighbor_block_data = neighbor_block.block.data();
+                                        let connectors = match &neighbor_block_data.render_data {
+                                            BlockRenderData::Air => continue,
+                                            BlockRenderData::Model {
+                                                render_connectors, ..
+                                            }
+                                            | BlockRenderData::Full {
+                                                render_connectors, ..
+                                            } => render_connectors,
+                                        };
+                                        let connectors = connectors.by_face(
+                                            neighbor_block.rotation.inverse_rotate_face(
+                                                rotated_offset_face.opposite(),
+                                            ),
+                                        );
+                                        if connection.contain.is_subset(connectors)
+                                            && connection.deny.is_disjoint(connectors)
+                                        {
+                                            render::draw_model(
+                                                &connection.model,
+                                                get_block_matrix(
+                                                    position.to_block_pos()
+                                                        + BlockPos {
+                                                            x: x as i32,
+                                                            y: y as i32,
+                                                            z: z as i32,
+                                                        },
+                                                    final_rotation,
+                                                ),
+                                                &mut {
+                                                    if connection.lod_hidden {
+                                                        &mut mesh_high_res
+                                                    } else {
+                                                        &mut mesh
+                                                    }
+                                                    .consumer(block.color, 0)
+                                                },
+                                                &[],
+                                                |_, _| None,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -1,5 +1,5 @@
 (
-    render_data: Model("arrow"),
+    render_data: Model(model:"arrow"),
     health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
         entries: [

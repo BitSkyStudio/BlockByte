@@ -27,6 +27,7 @@ use block_byte_common::{
         ItemAction, KeyGroup, MachineInstrution, PlantKey, PrefabKey, ResearchKey, ToolData,
         air_block,
     },
+    rotation::BlockRotation,
     scripts::{self, CallbackResult, ExternalScriptByteCode, RunResult, ScriptState, ScriptValue},
     ui::PropertyMap,
     world::{
@@ -527,6 +528,38 @@ pub fn tick_chunk(world: &WorldAccess) {
                                         item.count -= 1;
                                     }
                                     ItemAction::Plant(key) => todo!(),
+                                    ItemAction::RotateBlock => {
+                                        let Some(mut block) = world.get_block(position) else {
+                                            continue;
+                                        };
+                                        let block_data = block.block.data();
+                                        let mut i = block.rotation as usize;
+                                        while i < 48 {
+                                            i += 1;
+                                            let new_rotation: BlockRotation =
+                                                unsafe { std::mem::transmute((i % 24) as u8) };
+                                            if block_data.rotation.get_nearest_valid(new_rotation)
+                                                == new_rotation
+                                            {
+                                                if let Some(hanging) = block_data.hanging {
+                                                    let hanging_face =
+                                                        new_rotation.rotate_face(hanging);
+                                                    let Some(support_block) = world.get_block(
+                                                        hanging_face.get_block_offset() + position,
+                                                    ) else {
+                                                        continue;
+                                                    };
+                                                    if !support_block.supports(hanging.opposite()) {
+                                                        continue;
+                                                    }
+                                                }
+                                                //todo: check collisions?
+                                                block.rotation = new_rotation;
+                                                world.replace_block(position, block).unwrap();
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
                                 if item.count == 0 {
                                     *item_stack = None;

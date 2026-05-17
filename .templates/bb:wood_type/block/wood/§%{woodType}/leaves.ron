@@ -1,6 +1,5 @@
 (
-    render_data: Model("leaves;wood.§%{woodType}_leaves"),
-    render_flags: 1,
+    render_data: Model(model:"leaves;wood.§%{woodType}_leaves",render_flags: 1),
     health: (
         health: 5., 
         health_regen: 0.05, 

@@ -1,5 +1,5 @@
 (
-    render_data: Model("stair;wood.§%{woodType}_plank"),
+    render_data: Model(model:"stair;wood.§%{woodType}_plank"),
     health: (
         health: 5., 
         health_regen: 0.05, 

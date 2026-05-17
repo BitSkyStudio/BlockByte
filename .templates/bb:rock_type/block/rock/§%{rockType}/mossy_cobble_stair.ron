@@ -1,5 +1,5 @@
 (
-    render_data: Model("stair;rock.§%{rockType}_cobble_mossy"),
+    render_data: Model(model:"stair;rock.§%{rockType}_cobble_mossy"),
     health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
         entries: [

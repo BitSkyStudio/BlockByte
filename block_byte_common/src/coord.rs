@@ -651,6 +651,7 @@ impl Face {
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FaceMap<T> {
     pub front: T,
     pub back: T,

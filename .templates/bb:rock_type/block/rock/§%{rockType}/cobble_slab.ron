@@ -1,5 +1,5 @@
 (
-    render_data: Model("slab;rock.§%{rockType}_cobble;rock.§%{rockType}_cobble;rock.§%{rockType}_cobble"),
+    render_data: Model(model:"slab;rock.§%{rockType}_cobble;rock.§%{rockType}_cobble;rock.§%{rockType}_cobble"),
     health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
         entries: [

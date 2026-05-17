@@ -24,8 +24,8 @@ use crate::model::Model;
 use crate::net::PropertyModifyMode;
 use crate::rotation::BlockRotation;
 use crate::scripts::{
-    CompiledScript, ExternalScriptByteCode, RegisterId, RegisterOrImmediate, ScriptLabel,
-    ScriptParseContext, ScriptParseError, expect_argument_count,
+    CompiledScript, ExternalScriptByteCode, RegisterId, RegisterOrImmediate, ScriptByteCode,
+    ScriptLabel, ScriptParseContext, ScriptParseError, expect_argument_count,
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
@@ -34,10 +34,10 @@ use crate::{
 
 use serde_default_utils::*;
 
-pub struct Key<T>(NonZero<usize>, PhantomData<T>);
+pub struct Key<T>(NonZero<u32>, PhantomData<T>);
 impl<T> Key<T> {
     pub fn numeric_id(self) -> usize {
-        self.0.get() - 1
+        self.0.get() as usize - 1
     }
 }
 impl<T> Clone for Key<T> {
@@ -83,7 +83,7 @@ impl<T> LoadRegistry<T> {
         self.id_list.push(id.clone());
         self.data_list.push(data);
         let key = Key(
-            unsafe { NonZero::new_unchecked(self.id_list.len()) },
+            unsafe { NonZero::new_unchecked(self.id_list.len() as u32) },
             PhantomData,
         );
         self.id_map.insert(id, key);
@@ -127,12 +127,6 @@ macro_rules! create_registries{
                 }
             }
         )*
-        pub trait RegistryConfigLoadable: Sized{
-            fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self>;
-            fn should_skip(path: &Path) -> bool{
-                false
-            }
-        }
         pub fn load_registries(asset_paths: &[&Path]) {
             let mut load_registry = LoadRegistryStorage {
                 $($id: LoadRegistry::default(),)*
@@ -206,8 +200,8 @@ macro_rules! create_registries{
                     let load_registry = &load_registry.$id;
                     let mut data_list = Vec::with_capacity(load_registry.data_list.len());
                     for (i, data) in load_registry.data_list.iter().enumerate(){
-                        match <$type as RegistryConfigLoadable>::registry_load_from_config(&data,Key(unsafe{NonZero::new_unchecked(i+1)}, PhantomData)){
-                            Ok(data) => {data_list.push(data);},
+                        match <$type as RegistryConfigLoadable>::registry_load_from_config(&data,Key(unsafe{NonZero::new_unchecked(i as u32+1)}, PhantomData)){
+                            Ok(mut data) => {data_list.push(data);},
                             Err(error) => {
                                 eprintln!("error loading {} {} - {}", stringify!($id), load_registry.id_list[i], error);
                                 encountered_error = true;
@@ -300,17 +294,30 @@ where
     pub fn entries() -> impl Iterator<Item = Self> {
         let load_registry = LOAD_REGISTRIES.get().unwrap().get_load_registry();
         (0..load_registry.data_list.len())
-            .map(|i| Key(unsafe { NonZero::new_unchecked(i + 1) }, PhantomData))
+            .map(|i| Key(unsafe { NonZero::new_unchecked(i as u32 + 1) }, PhantomData))
     }
 }
 
-impl<T: for<'de> Deserialize<'de>> RegistryConfigLoadable for T {
+pub trait RegistryConfigLoadable: Sized {
+    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self>;
+    fn should_skip(path: &Path) -> bool {
+        false
+    }
+}
+
+pub trait RegistryRonConfigLoadable: for<'a> Deserialize<'a> {
+    fn preload_hook(&mut self) {}
+}
+
+impl<T: RegistryRonConfigLoadable> RegistryConfigLoadable for T {
     fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
         let data = std::fs::read_to_string(config).unwrap();
-        ron::Options::default()
+        let mut data = ron::Options::default()
             .with_default_extension(Extensions::IMPLICIT_SOME)
             .from_str::<T>(&data)
-            .map_err(|error| anyhow::anyhow!("{}", error))
+            .map_err(|error| anyhow::anyhow!("{}", error))?;
+        data.preload_hook();
+        Ok(data)
     }
 }
 
@@ -462,18 +469,20 @@ pub struct ItemData {
     #[serde(default)]
     pub action: ItemAction,
 }
+impl RegistryRonConfigLoadable for ItemData {}
 #[derive(Deserialize)]
 pub enum ItemAction {
     Ignore,
     Place(Vec<ItemBlockPlacement>),
     SpawnEntity(EntityKey),
     Plant(PlantKey),
+    RotateBlock,
 }
 impl ItemAction {
     pub fn variation_count(&self) -> usize {
         match self {
-            ItemAction::Ignore | ItemAction::SpawnEntity(_) | ItemAction::Plant(_) => 1,
             ItemAction::Place(item_block_placements) => item_block_placements.len(),
+            _ => 1,
         }
     }
 }
@@ -537,12 +546,6 @@ pub struct BlockData {
     pub health: BlockHealthData,
     #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
-    #[serde(default)]
-    #[cfg(feature = "client")]
-    pub render_flags: u8,
-    #[serde(default)]
-    #[cfg(feature = "client")]
-    pub lod_hidden: bool,
     #[serde(default = "full_aabb")]
     #[cfg(feature = "client")]
     pub selection: Vec<AABB<f32>>,
@@ -562,6 +565,59 @@ pub struct BlockData {
     #[serde(default = "default_supporting_map")]
     pub supporting: FaceMap<bool>,
 }
+#[derive(Deserialize)]
+pub struct BlockRenderConnection {
+    pub model: ModelInstance,
+    #[serde(default = "default_connection_rotations_all")]
+    pub rotations: Vec<BlockRotation>,
+    pub contain: HashSet<String>,
+    #[serde(default)]
+    pub deny: HashSet<String>,
+    #[serde(default = "default_front_face")]
+    pub offset: Face,
+    #[serde(default = "default_bool::<true>")]
+    pub lod_hidden: bool,
+}
+fn default_connection_rotations_all() -> Vec<BlockRotation> {
+    Face::all()
+        .iter()
+        .map(|face| BlockRotation::looking_to(*face))
+        .collect()
+}
+fn default_front_face() -> Face {
+    Face::Front
+}
+impl RegistryRonConfigLoadable for BlockData {
+    fn preload_hook(&mut self) {
+        match &mut self.render_data {
+            BlockRenderData::Model {
+                render_connectors, ..
+            } => {
+                if let Some(machine) = self.machine.as_mut() {
+                    for face in Face::all() {
+                        let connector = match machine.faces.by_face(face) {
+                            BlockMachineFace::InventoryAccess { input, output } => {
+                                Some("inventory")
+                            }
+                            BlockMachineFace::LogicInput => Some("logic_input"),
+                            BlockMachineFace::LogicOutput => Some("logic_output"),
+                            BlockMachineFace::SignalInput => Some("signal_input"),
+                            BlockMachineFace::SignalOutput => Some("signal_output"),
+                            BlockMachineFace::Empty => None,
+                        };
+                        if let Some(connector) = connector {
+                            render_connectors
+                                .by_face_mut(face)
+                                .insert(connector.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn default_supporting_map() -> FaceMap<bool> {
     FaceMap::init(|_| true)
 }
@@ -693,11 +749,19 @@ impl Default for BlockInteractAction {
         Self::Ignore
     }
 }
+fn machine_default_script() -> CompiledScript<MachineInstrution> {
+    CompiledScript {
+        instructions: vec![ScriptByteCode::External(MachineInstrution::Block)],
+        named_registers: Vec::new(),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct BlockMachineData {
     pub inventory_size: usize,
     #[serde(default)]
     pub faces: FaceMap<BlockMachineFace>,
+    #[serde(default = "machine_default_script")]
     pub script: CompiledScript<MachineInstrution>,
     #[serde(default)]
     pub script_views: Vec<InventoryView>,
@@ -872,8 +936,20 @@ pub enum BlockRenderData {
     Air,
     Full {
         faces: FaceMap<KeyGroup<TextureData>>,
+        #[serde(default)]
+        render_connectors: FaceMap<HashSet<String>>,
     },
-    Model(ModelInstance),
+    Model {
+        model: ModelInstance,
+        #[serde(default)]
+        render_flags: u8,
+        #[serde(default)]
+        lod_hidden: bool,
+        #[serde(default)]
+        render_connectors: FaceMap<HashSet<String>>,
+        #[serde(default)]
+        render_connections: Vec<BlockRenderConnection>,
+    },
 }
 
 pub type BlockKey = Key<BlockData>;
@@ -1144,6 +1220,7 @@ pub struct EntityData {
     #[serde(default)]
     pub ai: Option<MobAI>,
 }
+impl RegistryRonConfigLoadable for EntityData {}
 impl EntityData {
     pub fn jump_velocity(&self) -> f32 {
         //s = 1/2at^2
@@ -1220,6 +1297,7 @@ pub struct PlantData {
     pub break_loot: OwnOrKey<LootTableData>,
     pub allowed_soil: KeyGroup<BlockData>,
 }
+impl RegistryRonConfigLoadable for PlantData {}
 pub type PlantKey = Key<PlantData>;
 
 #[derive(Deserialize)]
@@ -1235,6 +1313,7 @@ pub struct BiomeData {
     pub moisture: BiomeNoiseConfig,
     pub elevation: BiomeNoiseConfig,
 }
+impl RegistryRonConfigLoadable for BiomeData {}
 #[derive(Deserialize)]
 pub struct BiomeNoiseConfig {
     pub target: f32,
@@ -1264,6 +1343,7 @@ pub type BiomeKey = Key<BiomeData>;
 pub struct LootTableData {
     pub entries: Vec<LootTableEntry>,
 }
+impl RegistryRonConfigLoadable for LootTableData {}
 pub type LootTableKey = Key<LootTableData>;
 #[derive(Deserialize)]
 pub struct LootTableEntry {
@@ -1371,6 +1451,7 @@ pub struct RecipeData {
     #[serde(default)]
     pub icon_override: Option<ItemModel>,
 }
+impl RegistryRonConfigLoadable for RecipeData {}
 pub type RecipeKey = Key<RecipeData>;
 fn default_prefab_entry_true_chance() -> f32 {
     1.
@@ -1400,6 +1481,7 @@ pub struct PrefabData {
     #[serde(skip_deserializing, skip_serializing, default)]
     pub bb: OnceLock<AABB<i32>>,
 }
+impl RegistryRonConfigLoadable for PrefabData {}
 impl PrefabData {
     pub fn bounding_box(&self) -> AABB<i32> {
         *self.bb.get_or_init(|| {
@@ -1457,4 +1539,5 @@ pub struct ResearchData {
     pub x: f32,
     pub y: f32,
 }
+impl RegistryRonConfigLoadable for ResearchData {}
 pub type ResearchKey = Key<ResearchData>;
