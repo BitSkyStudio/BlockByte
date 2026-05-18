@@ -6,20 +6,22 @@ use std::{
     path::Path,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU32, AtomicUsize},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
 
 use block_byte_common::{
-    ClientItem, Color, DEFAULT_VIEWSLOT, InventoryView, LookDirection, MoveMode, PlayerAbilities,
-    SERVER_DT, SERVER_TPS,
+    ClientItem, Color, DEFAULT_VIEWSLOT, DamageTable, InventoryView, LookDirection, MoveMode,
+    PlayerAbilities, SERVER_DT, SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockColor, BlockData, BlockEntry, BlockKey, EntityKey, ItemAction, ItemKey,
-        KeyGroup, PrefabData, PrefabEntry, ToolData, air_block, load_registries,
+        self, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
+        EntityInteractAction, EntityKey, ItemAction, ItemKey, KeyGroup, PrefabData, PrefabEntry,
+        ToolData, air_block, load_registries,
     },
+    rotation::BlockRotation,
     scripts::{ScriptState, ScriptValue},
     ui::{PropertyMap, UIScreenKey},
     world::{
@@ -651,6 +653,587 @@ pub struct User {
     hud_sync_items: Mutex<Vec<Option<ClientItem>>>,
     screen: Mutex<Option<UserScreen>>,
     message_queue: Mutex<VecDeque<NetworkMessageC2S>>,
+}
+impl User {
+    pub fn tick_controlling_entity(
+        &self,
+        entity: &mut Entity,
+        controlling_user: UserIndex,
+        world: &WorldAccess,
+    ) {
+        let entity_data = entity.key.data();
+        let mut message_queue = self.message_queue.lock();
+        while let Some(message) = message_queue.pop_back() {
+            match message {
+                NetworkMessageC2S::PlayerPosition {
+                    position,
+                    direction,
+                    teleport_id,
+                    crouching,
+                } => {
+                    if self.teleport_id.load(Ordering::SeqCst) != teleport_id {
+                        continue;
+                    }
+
+                    entity.direction = direction;
+                    entity.crouching = crouching;
+                    match world.teleport_entity(entity, position) {
+                        Ok(_) => {
+                            *self.view_position.lock() = position.to_chunk_pos();
+                        }
+                        Err(_) => {
+                            let teleport_id = self
+                                .teleport_id
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                + 1;
+                            world.send(
+                                controlling_user,
+                                NetworkMessageS2C::TeleportPlayer {
+                                    position: entity.position,
+                                    teleport_id,
+                                },
+                            );
+                        }
+                    }
+                }
+                NetworkMessageC2S::AttackBlock { position, face } => {
+                    let item = &entity.inventory.items[entity.hand_slot];
+                    let tool = item
+                        .as_ref()
+                        .and_then(|item| item.item.data().tool.clone())
+                        .unwrap_or(ToolData::hand());
+                    let quality_multiplier = match item {
+                        Some(item) => item
+                            .components
+                            .get_component::<ItemQuality>()
+                            .map(|quality| quality.factor())
+                            .unwrap_or(1.),
+                        None => 1.,
+                    };
+                    let mut damage_table = DamageTable::default();
+                    damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier);
+                    let (chunk, offset) = position.to_chunk_pos_offset();
+                    let _ = world.schedule_event(
+                        chunk,
+                        WorldEvent::BlockDamage {
+                            block: offset,
+                            damage: damage_table,
+                        },
+                    );
+                }
+                NetworkMessageC2S::PlaceBlock {
+                    position,
+                    face,
+                    variant,
+                } => {
+                    let mut item_stack = &mut entity.inventory.items[entity.hand_slot];
+                    if let Some(item) = &mut item_stack {
+                        match &item.item.data().action {
+                            ItemAction::Ignore => {}
+                            ItemAction::Place(placements) => {
+                                let Some(place) = placements.get(variant) else {
+                                    continue;
+                                };
+                                if item.count < place.use_count {
+                                    continue;
+                                }
+                                if let Some(research) = place.research {
+                                    if !entity.research.contains(&research) {
+                                        continue;
+                                    }
+                                }
+                                let position = position + face.get_block_offset();
+                                let block = BlockEntry {
+                                    block: place.block,
+                                    color: BlockColor::default(),
+                                    rotation: place
+                                        .block
+                                        .data()
+                                        .rotation
+                                        .from_look_direction(entity.direction, face),
+                                };
+                                let entity_collider =
+                                    entity_data.hitbox(entity.crouching).offset(entity.position);
+                                if block.colliders(position).any(|block_collider| {
+                                    block_collider.intersects(entity_collider)
+                                }) {
+                                    continue;
+                                }
+                                let mut blocked = false;
+                                for other_entity in world.iter_entities(&[entity.uuid], false) {
+                                    let entity_collider = other_entity.get_hitbox();
+                                    if block.colliders(position).any(|block_collider| {
+                                        block_collider.intersects(entity_collider)
+                                    }) {
+                                        blocked = true;
+                                        break;
+                                    }
+                                }
+                                if blocked {
+                                    continue;
+                                }
+                                if let Ok(_) = world.place_block(position, block) {
+                                    item.count -= place.use_count;
+                                }
+                            }
+                            ItemAction::SpawnEntity(key) => {
+                                world
+                                    .spawn_entity(Entity::new(
+                                        *key,
+                                        position.to_pos() + Pos::Y * 0.5,
+                                    ))
+                                    .unwrap();
+                                item.count -= 1;
+                            }
+                            ItemAction::Plant(key) => todo!(),
+                            ItemAction::RotateBlock => {
+                                let Some(mut block) = world.get_block(position) else {
+                                    continue;
+                                };
+                                let block_data = block.block.data();
+                                let mut i = block.rotation as usize;
+                                while i < 48 {
+                                    i += 1;
+                                    let new_rotation: BlockRotation =
+                                        unsafe { std::mem::transmute((i % 24) as u8) };
+                                    if block_data.rotation.get_nearest_valid(new_rotation)
+                                        == new_rotation
+                                    {
+                                        if let Some(hanging) = block_data.hanging {
+                                            let hanging_face = new_rotation.rotate_face(hanging);
+                                            let Some(support_block) = world.get_block(
+                                                hanging_face.get_block_offset() + position,
+                                            ) else {
+                                                continue;
+                                            };
+                                            if !support_block.supports(hanging.opposite()) {
+                                                continue;
+                                            }
+                                        }
+                                        //todo: check collisions?
+                                        block.rotation = new_rotation;
+                                        world.replace_block(position, block).unwrap();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if item.count == 0 {
+                            *item_stack = None;
+                        }
+                    }
+                }
+                NetworkMessageC2S::CloseUI => {
+                    if let Some(screen) = self.screen.lock().as_mut() {
+                        screen.state = UserScreenState::Close;
+                    }
+                }
+                NetworkMessageC2S::HotbarSelect { slot } => {
+                    entity.hand_slot = slot;
+                }
+                NetworkMessageC2S::InteractBlock { position } => {
+                    let Some(block) = world.get_block(position) else {
+                        continue;
+                    };
+                    let block_data = block.block.data();
+                    match &block_data.interact_action {
+                        BlockInteractAction::Ignore => {}
+                        BlockInteractAction::OpenInventory {
+                            screen: screen_key,
+                            view,
+                        } => {
+                            self.set_screen(
+                                *screen_key,
+                                vec![
+                                    (
+                                        InventoryProvider::Entity(entity.uuid),
+                                        InventoryView::from_range(0..10),
+                                    ),
+                                    (InventoryProvider::Block(position), view.clone()),
+                                ],
+                            );
+                        }
+                        BlockInteractAction::Pickup => {
+                            let Ok(drops) = world.break_block(position) else {
+                                continue;
+                            };
+                            let view = entity.inventory.full_view();
+                            for item in drops {
+                                if let Some(rest) = entity.inventory.add_item(&view, item) {
+                                    world.drop_items(
+                                        std::iter::once(rest),
+                                        position.to_pos() + Pos::all(0.5),
+                                    );
+                                }
+                            }
+                        }
+                        BlockInteractAction::ModifyProperty {
+                            property,
+                            value,
+                            mode,
+                        } => {
+                            let Some(mut machine) =
+                                world.get_block_component::<BlockMachine>(position)
+                            else {
+                                continue;
+                            };
+                            let machine_data = world
+                                .get_block(position)
+                                .unwrap()
+                                .block
+                                .data()
+                                .machine
+                                .as_ref()
+                                .unwrap();
+                            machine.modify_property(machine_data, &property, *value, *mode);
+                        }
+                    }
+                }
+                NetworkMessageC2S::InteractEntity {
+                    entity: other_entity_uuid,
+                } => {
+                    let Some(mut other_entity) = world.get_entity(other_entity_uuid) else {
+                        continue;
+                    };
+                    let other_entity_data = other_entity.key.data();
+                    match other_entity_data.interact_action {
+                        EntityInteractAction::Ignore => {}
+                        EntityInteractAction::Pickup => {
+                            let mut items_present = false;
+                            let player_view = entity.inventory.full_view();
+                            for slot in &mut other_entity.inventory.items {
+                                if let Some(item) = &slot {
+                                    *slot = entity.inventory.add_item(&player_view, item.clone());
+                                    if slot.is_some() {
+                                        items_present = true;
+                                    }
+                                }
+                            }
+                            if !items_present {
+                                world.remove_entity(other_entity);
+                            }
+                        }
+                    }
+                }
+                NetworkMessageC2S::AttackEntity {
+                    entity: other_entity_id,
+                } => {
+                    let item = &entity.inventory.items[entity.hand_slot];
+                    let tool = item
+                        .as_ref()
+                        .and_then(|item| item.item.data().tool.clone())
+                        .unwrap_or(ToolData::hand());
+                    let quality_multiplier = match item {
+                        Some(item) => item
+                            .components
+                            .get_component::<ItemQuality>()
+                            .map(|quality| quality.factor())
+                            .unwrap_or(1.),
+                        None => 1.,
+                    };
+                    let mut damage_table = DamageTable::default();
+                    damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier);
+                    world
+                        .schedule_event(
+                            world.center_chunk,
+                            WorldEvent::EntityDamage {
+                                entity: other_entity_id,
+                                damage: damage_table,
+                                source_entity: Some(entity.uuid),
+                            },
+                        )
+                        .unwrap();
+                    let knockback_direction = entity.direction.make_front();
+                    world
+                        .schedule_event(
+                            world.center_chunk,
+                            WorldEvent::EntityKnockback {
+                                entity: other_entity_id,
+                                knockback: (knockback_direction + Pos::Y * 0.3)
+                                    * tool.knockback
+                                    * 4.,
+                            },
+                        )
+                        .unwrap();
+                }
+                NetworkMessageC2S::DropItem { stack } => {
+                    let slot = entity.inventory.get_slot_mut_raw(entity.hand_slot);
+                    let drop_item = if let Some(item) = slot {
+                        if item.count == 1 || stack {
+                            slot.take().unwrap()
+                        } else {
+                            item.count -= 1;
+                            item.copy(1)
+                        }
+                    } else {
+                        continue;
+                    };
+                    let mut item_entity =
+                        Entity::new(EntityKey::id("item").unwrap(), entity.get_eye());
+                    item_entity.direction = LookDirection {
+                        pitch: 0.,
+                        yaw: entity.direction.yaw,
+                    };
+                    let throw_force = 10.;
+                    let mut throw_velocity = entity.direction.make_front() * throw_force;
+                    throw_velocity.y = 0.1;
+                    item_entity.character_controller.velocity = throw_velocity;
+                    item_entity.inventory.items[0] = Some(drop_item);
+                    world.spawn_entity(item_entity);
+                }
+                NetworkMessageC2S::MoveItem { from, to, mode } => {
+                    if from == to {
+                        continue;
+                    }
+                    let screen = self.screen.lock();
+                    let Some(screen) = &*screen else {
+                        continue;
+                    };
+                    let Some((from_provider, from_index)) = screen.get_slot(from) else {
+                        continue;
+                    };
+                    let Some((to_provider, to_index)) = screen.get_slot(to) else {
+                        continue;
+                    };
+                    let move_item = |src: &mut Option<ItemStack>, dst: &mut Option<ItemStack>| {
+                        if let Some(source) = src.as_mut() {
+                            let count = mode.get_count(source.count);
+                            if let Some(destination) = dst.as_mut() {
+                                //todo: correct viewslot
+                                if let Some((a, b)) = destination.merge(
+                                    &source.copy(count),
+                                    &block_byte_common::DEFAULT_VIEWSLOT,
+                                ) {
+                                    *destination = a;
+                                    source.count += b.map(|item| item.count).unwrap_or(0);
+                                    source.count -= count;
+                                    if source.count == 0 {
+                                        *src = None;
+                                    }
+                                } else if mode.can_swap() {
+                                    std::mem::swap(source, destination);
+                                }
+                            } else {
+                                if count >= source.count {
+                                    *dst = src.take();
+                                } else {
+                                    let (a, b) = source.split(count);
+                                    *dst = Some(a);
+                                    *source = b;
+                                }
+                            }
+                        }
+                    };
+                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let mut from_provided = ProvidedInventory::lock(
+                        &from_provider,
+                        world,
+                        entity.uuid,
+                        &user_inventory,
+                    )
+                    .unwrap();
+                    if from_provider == to_provider {
+                        let [src, dst] = from_provided
+                            .get_mut()
+                            .items
+                            .get_disjoint_mut([from_index, to_index])
+                            .unwrap();
+                        move_item(src, dst);
+                    } else {
+                        let mut to_provided = ProvidedInventory::lock(
+                            &to_provider,
+                            world,
+                            entity.uuid,
+                            &user_inventory,
+                        )
+                        .unwrap();
+                        move_item(
+                            &mut from_provided.get_mut().items[from_index],
+                            &mut to_provided.get_mut().items[to_index],
+                        );
+                    }
+                }
+                NetworkMessageC2S::Research { research } => {
+                    let screen = self.screen.lock();
+                    let Some(screen) = &*screen else {
+                        continue;
+                    };
+                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let Ok(mut list) = ProvidedInventoryList::lock_screen(
+                        screen,
+                        world,
+                        entity.uuid,
+                        &user_inventory,
+                    ) else {
+                        continue;
+                    };
+                    if entity.research.contains(&research) {
+                        continue;
+                    }
+                    let research_data = research.data();
+                    let mut failed = false;
+                    for dependency in &research_data.dependencies {
+                        if !entity.research.contains(dependency) {
+                            failed = true;
+                            break;
+                        }
+                    }
+                    if failed {
+                        continue;
+                    }
+                    for (req_item, req_count) in &research_data.requirements {
+                        if list.count_item(*req_item) < *req_count {
+                            failed = true;
+                            break;
+                        }
+                    }
+                    if failed {
+                        continue;
+                    }
+                    for (req_item, req_count) in &research_data.requirements {
+                        assert_eq!(list.remove_item(*req_item, *req_count), 0);
+                    }
+                    entity.research.insert(research);
+                    world.send(
+                        controlling_user,
+                        NetworkMessageS2C::UpdateResearch {
+                            research: entity.research.clone(),
+                        },
+                    );
+                }
+                NetworkMessageC2S::Craft { recipe, mut count } => {
+                    let screen = self.screen.lock();
+                    let Some(screen) = &*screen else {
+                        continue;
+                    };
+                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let Ok(mut list) = ProvidedInventoryList::lock_screen(
+                        screen,
+                        world,
+                        entity.uuid,
+                        &user_inventory,
+                    ) else {
+                        continue;
+                    };
+                    let recipe = recipe.data();
+                    for (input_item, input_count) in &recipe.inputs {
+                        count = count.min(list.count_item(*input_item) / *input_count);
+                        if count == 0 {
+                            break;
+                        }
+                    }
+                    if count == 0 {
+                        continue;
+                    }
+                    for (input_item, input_count) in &recipe.inputs {
+                        assert_eq!(list.remove_item(*input_item, *input_count * count), 0);
+                    }
+                    for _ in 0..count {
+                        for item in generate_loot_table(recipe.outputs.data()) {
+                            if let Some(overflow_item) = list.add_item(item) {
+                                world.drop_items(
+                                    std::iter::once(overflow_item),
+                                    entity.position + Pos::Y * entity_data.hitbox_height / 2.,
+                                );
+                            }
+                        }
+                    }
+                }
+                NetworkMessageC2S::OpenPlayerInventory => {
+                    self.set_screen(
+                        Key::id("player_creative").unwrap(),
+                        vec![(
+                            InventoryProvider::Entity(entity.uuid),
+                            InventoryView::from_range(0..10),
+                        )],
+                    );
+                }
+                NetworkMessageC2S::HarvestPlant { position, index } => todo!(),
+                NetworkMessageC2S::UIButtonPress {
+                    property,
+                    value,
+                    modify_mode,
+                } => {
+                    let mut screen_lock = self.screen.lock();
+                    if let Some(screen_lock) = screen_lock.as_ref() {
+                        if !screen_lock
+                            .screen
+                            .data()
+                            .button_properties
+                            .contains(&property)
+                        {
+                            continue;
+                        }
+                        for (provider, _) in &screen_lock.inventories {
+                            match provider {
+                                InventoryProvider::Entity(uuid) => {}
+                                InventoryProvider::Block(position) => {
+                                    let Some(mut machine) =
+                                        world.get_block_component::<BlockMachine>(*position)
+                                    else {
+                                        continue;
+                                    };
+                                    let machine_data = world
+                                        .get_block(*position)
+                                        .unwrap()
+                                        .block
+                                        .data()
+                                        .machine
+                                        .as_ref()
+                                        .unwrap();
+                                    machine.modify_property(
+                                        machine_data,
+                                        &property,
+                                        value,
+                                        modify_mode,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                NetworkMessageC2S::TrashItem { slot, mode } => {
+                    let screen = self.screen.lock();
+                    let Some(screen) = &*screen else {
+                        continue;
+                    };
+                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let Some((provider, index)) = screen.get_slot(slot) else {
+                        continue;
+                    };
+                    let mut provided =
+                        ProvidedInventory::lock(&provider, world, entity.uuid, &user_inventory)
+                            .unwrap();
+                    let mut item_slot = &mut provided.get_mut().items[index];
+                    if let Some(item) = item_slot {
+                        item.count -= mode.get_count(item.count);
+                        if item.count <= 0 {
+                            *item_slot = None;
+                        }
+                    }
+                }
+                NetworkMessageC2S::GiveItem { item, stack } => {
+                    let screen = self.screen.lock();
+                    let Some(screen) = &*screen else {
+                        continue;
+                    };
+                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let Ok(mut list) = ProvidedInventoryList::lock_screen(
+                        screen,
+                        world,
+                        entity.uuid,
+                        &user_inventory,
+                    ) else {
+                        continue;
+                    };
+                    list.add_item(ItemStack::new(
+                        item,
+                        if stack { item.data().stack_size } else { 1 },
+                    ));
+                }
+            }
+        }
+    }
 }
 pub struct UserScreen {
     pub screen: UIScreenKey,

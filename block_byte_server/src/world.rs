@@ -18,7 +18,8 @@ use block_byte_common::{
     CharacterController, Color, DamageTable, DamageType, InventoryView, LookDirection, MoveMode,
     SERVER_DT, SERVER_TPS,
     coord::{
-        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace, Pos,
+        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
+        Pos, Ray,
     },
     net::{NetworkMessageC2S, NetworkMessageS2C, PropertyModifyMode},
     registry::{
@@ -220,17 +221,25 @@ pub fn tick_chunk(world: &WorldAccess) {
                     })
                     .sum::<f32>();
                 if let Some(source_entity) = source_entity {
-                    if let Some(brain) = &mut entity.state.brain {
+                    if let Some(brain) = &mut entity.brain {
                         *brain.received_attacks.entry(source_entity).or_insert(0.) +=
                             received_damage;
                     }
                 }
-                entity.state.health -= received_damage;
-                if entity.state.health <= 0. {
+                entity.health -= received_damage;
+                if entity.health <= 0. {
                     world.remove_entity(entity);
                 }
             }
-            WorldEvent::EntityTeleport { entity, position } => todo!(),
+            WorldEvent::EntityTeleport {
+                entity: entity_id,
+                position,
+            } => {
+                let Some(mut entity) = world.get_entity(entity_id) else {
+                    continue;
+                };
+                world.teleport_entity(&mut *entity, position);
+            }
             WorldEvent::EntityKnockback {
                 entity: entity_id,
                 knockback,
@@ -238,7 +247,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                 let Some(mut entity) = world.get_entity(entity_id) else {
                     continue;
                 };
-                entity.state.character_controller.velocity += knockback;
+                entity.character_controller.velocity += knockback;
             }
         }
     }
@@ -247,10 +256,7 @@ pub fn tick_chunk(world: &WorldAccess) {
         let mut entity = &mut *entity_ref;
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
-            std::mem::swap(
-                &mut velocity,
-                &mut entity.state.character_controller.velocity,
-            );
+            std::mem::swap(&mut velocity, &mut entity.character_controller.velocity);
             if velocity.length_squared() > 0. {
                 world.send(controlling_user, NetworkMessageS2C::Knockback { velocity });
             }
@@ -282,7 +288,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                     world.send(
                         controlling_user,
                         NetworkMessageS2C::HudBarUpdate {
-                            health: entity.state.health,
+                            health: entity.health,
                         },
                     );
                     let mut screen_lock = user.screen.lock();
@@ -399,730 +405,14 @@ pub fn tick_chunk(world: &WorldAccess) {
                         }
                     }
                 }
-                let mut message_queue = user.message_queue.lock();
-                while let Some(message) = message_queue.pop_back() {
-                    match message {
-                        NetworkMessageC2S::PlayerPosition {
-                            position,
-                            direction,
-                            teleport_id,
-                            crouching,
-                        } => {
-                            let user = world.users.get(entity.controlling_user.unwrap()).unwrap();
-                            if user.teleport_id.load(Ordering::SeqCst) != teleport_id {
-                                continue;
-                            }
-
-                            entity.state.direction = direction;
-                            entity.state.crouching = crouching;
-                            match world.teleport_entity(entity, position) {
-                                Ok(_) => {
-                                    *user.view_position.lock() = position.to_chunk_pos();
-                                }
-                                Err(_) => {
-                                    let teleport_id = user
-                                        .teleport_id
-                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                        + 1;
-                                    world.send(
-                                        controlling_user,
-                                        NetworkMessageS2C::TeleportPlayer {
-                                            position: entity.position,
-                                            teleport_id,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::AttackBlock { position, face } => {
-                            let item = &entity.inventory.items[entity.state.hand_slot];
-                            let tool = item
-                                .as_ref()
-                                .and_then(|item| item.item.data().tool.clone())
-                                .unwrap_or(ToolData::hand());
-                            let quality_multiplier = match item {
-                                Some(item) => item
-                                    .components
-                                    .get_component::<ItemQuality>()
-                                    .map(|quality| quality.factor())
-                                    .unwrap_or(1.),
-                                None => 1.,
-                            };
-                            let mut damage_table = DamageTable::default();
-                            damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier);
-                            let (chunk, offset) = position.to_chunk_pos_offset();
-                            let _ = world.schedule_event(
-                                chunk,
-                                WorldEvent::BlockDamage {
-                                    block: offset,
-                                    damage: damage_table,
-                                },
-                            );
-                        }
-                        NetworkMessageC2S::PlaceBlock {
-                            position,
-                            face,
-                            variant,
-                        } => {
-                            let mut item_stack =
-                                &mut entity.inventory.items[entity.state.hand_slot];
-                            if let Some(item) = &mut item_stack {
-                                match &item.item.data().action {
-                                    ItemAction::Ignore => {}
-                                    ItemAction::Place(placements) => {
-                                        let Some(place) = placements.get(variant) else {
-                                            continue;
-                                        };
-                                        if item.count < place.use_count {
-                                            continue;
-                                        }
-                                        if let Some(research) = place.research {
-                                            if !entity.state.research.contains(&research) {
-                                                continue;
-                                            }
-                                        }
-                                        let position = position + face.get_block_offset();
-                                        let block = BlockEntry {
-                                            block: place.block,
-                                            color: BlockColor::default(),
-                                            rotation: place
-                                                .block
-                                                .data()
-                                                .rotation
-                                                .from_look_direction(entity.state.direction, face),
-                                        };
-                                        let entity_collider = entity_data
-                                            .hitbox(entity.state.crouching)
-                                            .offset(entity.position);
-                                        if block.colliders(position).any(|block_collider| {
-                                            block_collider.intersects(entity_collider)
-                                        }) {
-                                            continue;
-                                        }
-                                        let mut blocked = false;
-                                        for other_entity in
-                                            world.iter_entities(&[entity.uuid], false)
-                                        {
-                                            let entity_collider = other_entity.get_hitbox();
-                                            if block.colliders(position).any(|block_collider| {
-                                                block_collider.intersects(entity_collider)
-                                            }) {
-                                                blocked = true;
-                                                break;
-                                            }
-                                        }
-                                        if blocked {
-                                            continue;
-                                        }
-                                        if let Ok(_) = world.place_block(position, block) {
-                                            item.count -= place.use_count;
-                                        }
-                                    }
-                                    ItemAction::SpawnEntity(key) => {
-                                        world
-                                            .spawn_entity(Entity::new(
-                                                *key,
-                                                position.to_pos() + Pos::Y * 0.5,
-                                            ))
-                                            .unwrap();
-                                        item.count -= 1;
-                                    }
-                                    ItemAction::Plant(key) => todo!(),
-                                    ItemAction::RotateBlock => {
-                                        let Some(mut block) = world.get_block(position) else {
-                                            continue;
-                                        };
-                                        let block_data = block.block.data();
-                                        let mut i = block.rotation as usize;
-                                        while i < 48 {
-                                            i += 1;
-                                            let new_rotation: BlockRotation =
-                                                unsafe { std::mem::transmute((i % 24) as u8) };
-                                            if block_data.rotation.get_nearest_valid(new_rotation)
-                                                == new_rotation
-                                            {
-                                                if let Some(hanging) = block_data.hanging {
-                                                    let hanging_face =
-                                                        new_rotation.rotate_face(hanging);
-                                                    let Some(support_block) = world.get_block(
-                                                        hanging_face.get_block_offset() + position,
-                                                    ) else {
-                                                        continue;
-                                                    };
-                                                    if !support_block.supports(hanging.opposite()) {
-                                                        continue;
-                                                    }
-                                                }
-                                                //todo: check collisions?
-                                                block.rotation = new_rotation;
-                                                world.replace_block(position, block).unwrap();
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                if item.count == 0 {
-                                    *item_stack = None;
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::CloseUI => {
-                            if let Some(user) = entity.controlling_user {
-                                let Some(user) = world.users.get(user) else {
-                                    continue;
-                                };
-                                if let Some(screen) = user.screen.lock().as_mut() {
-                                    screen.state = UserScreenState::Close;
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::HotbarSelect { slot } => {
-                            entity.state.hand_slot = slot;
-                        }
-                        NetworkMessageC2S::InteractBlock { position } => {
-                            let Some(block) = world.get_block(position) else {
-                                continue;
-                            };
-                            let block_data = block.block.data();
-                            match &block_data.interact_action {
-                                BlockInteractAction::Ignore => {}
-                                BlockInteractAction::OpenInventory {
-                                    screen: screen_key,
-                                    view,
-                                } => {
-                                    user.set_screen(
-                                        *screen_key,
-                                        vec![
-                                            (
-                                                InventoryProvider::Entity(entity.uuid),
-                                                InventoryView::from_range(0..10),
-                                            ),
-                                            (InventoryProvider::Block(position), view.clone()),
-                                        ],
-                                    );
-                                }
-                                BlockInteractAction::Pickup => {
-                                    let Ok(drops) = world.break_block(position) else {
-                                        continue;
-                                    };
-                                    let view = entity.inventory.full_view();
-                                    for item in drops {
-                                        if let Some(rest) = entity.inventory.add_item(&view, item) {
-                                            world.drop_items(
-                                                std::iter::once(rest),
-                                                position.to_pos() + Pos::all(0.5),
-                                            );
-                                        }
-                                    }
-                                }
-                                BlockInteractAction::ModifyProperty {
-                                    property,
-                                    value,
-                                    mode,
-                                } => {
-                                    let Some(mut machine) =
-                                        world.get_block_component::<BlockMachine>(position)
-                                    else {
-                                        continue;
-                                    };
-                                    let machine_data = world
-                                        .get_block(position)
-                                        .unwrap()
-                                        .block
-                                        .data()
-                                        .machine
-                                        .as_ref()
-                                        .unwrap();
-                                    machine.modify_property(machine_data, &property, *value, *mode);
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::InteractEntity {
-                            entity: other_entity_uuid,
-                        } => {
-                            let Some(mut other_entity) = world.get_entity(other_entity_uuid) else {
-                                continue;
-                            };
-                            let other_entity_data = other_entity.key.data();
-                            match other_entity_data.interact_action {
-                                EntityInteractAction::Ignore => {}
-                                EntityInteractAction::Pickup => {
-                                    let mut items_present = false;
-                                    let player_view = entity.inventory.full_view();
-                                    for slot in &mut other_entity.inventory.items {
-                                        if let Some(item) = &slot {
-                                            *slot = entity
-                                                .inventory
-                                                .add_item(&player_view, item.clone());
-                                            if slot.is_some() {
-                                                items_present = true;
-                                            }
-                                        }
-                                    }
-                                    if !items_present {
-                                        world.remove_entity(other_entity);
-                                    }
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::AttackEntity {
-                            entity: other_entity_id,
-                        } => {
-                            let item = &entity.inventory.items[entity.state.hand_slot];
-                            let tool = item
-                                .as_ref()
-                                .and_then(|item| item.item.data().tool.clone())
-                                .unwrap_or(ToolData::hand());
-                            let quality_multiplier = match item {
-                                Some(item) => item
-                                    .components
-                                    .get_component::<ItemQuality>()
-                                    .map(|quality| quality.factor())
-                                    .unwrap_or(1.),
-                                None => 1.,
-                            };
-                            let mut damage_table = DamageTable::default();
-                            damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier);
-                            world
-                                .schedule_event(
-                                    world.center_chunk,
-                                    WorldEvent::EntityDamage {
-                                        entity: other_entity_id,
-                                        damage: damage_table,
-                                        source_entity: Some(entity.uuid),
-                                    },
-                                )
-                                .unwrap();
-                            let knockback_direction = entity.state.direction.make_front();
-                            world
-                                .schedule_event(
-                                    world.center_chunk,
-                                    WorldEvent::EntityKnockback {
-                                        entity: other_entity_id,
-                                        knockback: (knockback_direction + Pos::Y * 0.3)
-                                            * tool.knockback
-                                            * 4.,
-                                    },
-                                )
-                                .unwrap();
-                        }
-                        NetworkMessageC2S::DropItem { stack } => {
-                            let slot = entity.inventory.get_slot_mut_raw(entity.state.hand_slot);
-                            let drop_item = if let Some(item) = slot {
-                                if item.count == 1 || stack {
-                                    slot.take().unwrap()
-                                } else {
-                                    item.count -= 1;
-                                    item.copy(1)
-                                }
-                            } else {
-                                continue;
-                            };
-                            let mut item_entity =
-                                Entity::new(EntityKey::id("item").unwrap(), entity.get_eye());
-                            item_entity.state.direction = LookDirection {
-                                pitch: 0.,
-                                yaw: entity.state.direction.yaw,
-                            };
-                            let throw_force = 10.;
-                            let mut throw_velocity =
-                                entity.state.direction.make_front() * throw_force;
-                            throw_velocity.y = 0.1;
-                            item_entity.state.character_controller.velocity = throw_velocity;
-                            item_entity.inventory.items[0] = Some(drop_item);
-                            world.spawn_entity(item_entity);
-                        }
-                        NetworkMessageC2S::MoveItem { from, to, mode } => {
-                            if from == to {
-                                continue;
-                            }
-                            let screen = user.screen.lock();
-                            let Some(screen) = &*screen else {
-                                continue;
-                            };
-                            let Some((from_provider, from_index)) = screen.get_slot(from) else {
-                                continue;
-                            };
-                            let Some((to_provider, to_index)) = screen.get_slot(to) else {
-                                continue;
-                            };
-                            let move_item =
-                                |src: &mut Option<ItemStack>, dst: &mut Option<ItemStack>| {
-                                    if let Some(source) = src.as_mut() {
-                                        let count = mode.get_count(source.count);
-                                        if let Some(destination) = dst.as_mut() {
-                                            //todo: correct viewslot
-                                            if let Some((a, b)) = destination.merge(
-                                                &source.copy(count),
-                                                &block_byte_common::DEFAULT_VIEWSLOT,
-                                            ) {
-                                                *destination = a;
-                                                source.count +=
-                                                    b.map(|item| item.count).unwrap_or(0);
-                                                source.count -= count;
-                                                if source.count == 0 {
-                                                    *src = None;
-                                                }
-                                            } else if mode.can_swap() {
-                                                std::mem::swap(source, destination);
-                                            }
-                                        } else {
-                                            if count >= source.count {
-                                                *dst = src.take();
-                                            } else {
-                                                let (a, b) = source.split(count);
-                                                *dst = Some(a);
-                                                *source = b;
-                                            }
-                                        }
-                                    }
-                                };
-                            let mut user_inventory = RefCell::new(&mut entity.inventory);
-                            let mut from_provided = ProvidedInventory::lock(
-                                &from_provider,
-                                world,
-                                entity.uuid,
-                                &user_inventory,
-                            )
-                            .unwrap();
-                            if from_provider == to_provider {
-                                let [src, dst] = from_provided
-                                    .get_mut()
-                                    .items
-                                    .get_disjoint_mut([from_index, to_index])
-                                    .unwrap();
-                                move_item(src, dst);
-                            } else {
-                                let mut to_provided = ProvidedInventory::lock(
-                                    &to_provider,
-                                    world,
-                                    entity.uuid,
-                                    &user_inventory,
-                                )
-                                .unwrap();
-                                move_item(
-                                    &mut from_provided.get_mut().items[from_index],
-                                    &mut to_provided.get_mut().items[to_index],
-                                );
-                            }
-                        }
-                        NetworkMessageC2S::Research { research } => {
-                            let screen = user.screen.lock();
-                            let Some(screen) = &*screen else {
-                                continue;
-                            };
-                            let mut user_inventory = RefCell::new(&mut entity.inventory);
-                            let Ok(mut list) = ProvidedInventoryList::lock_screen(
-                                screen,
-                                world,
-                                entity.uuid,
-                                &user_inventory,
-                            ) else {
-                                continue;
-                            };
-                            if entity.state.research.contains(&research) {
-                                continue;
-                            }
-                            let research_data = research.data();
-                            let mut failed = false;
-                            for dependency in &research_data.dependencies {
-                                if !entity.state.research.contains(dependency) {
-                                    failed = true;
-                                    break;
-                                }
-                            }
-                            if failed {
-                                continue;
-                            }
-                            for (req_item, req_count) in &research_data.requirements {
-                                if list.count_item(*req_item) < *req_count {
-                                    failed = true;
-                                    break;
-                                }
-                            }
-                            if failed {
-                                continue;
-                            }
-                            for (req_item, req_count) in &research_data.requirements {
-                                assert_eq!(list.remove_item(*req_item, *req_count), 0);
-                            }
-                            entity.state.research.insert(research);
-                            world.send(
-                                controlling_user,
-                                NetworkMessageS2C::UpdateResearch {
-                                    research: entity.state.research.clone(),
-                                },
-                            );
-                        }
-                        NetworkMessageC2S::Craft { recipe, mut count } => {
-                            let screen = user.screen.lock();
-                            let Some(screen) = &*screen else {
-                                continue;
-                            };
-                            let mut user_inventory = RefCell::new(&mut entity.inventory);
-                            let Ok(mut list) = ProvidedInventoryList::lock_screen(
-                                screen,
-                                world,
-                                entity.uuid,
-                                &user_inventory,
-                            ) else {
-                                continue;
-                            };
-                            let recipe = recipe.data();
-                            for (input_item, input_count) in &recipe.inputs {
-                                count = count.min(list.count_item(*input_item) / *input_count);
-                                if count == 0 {
-                                    break;
-                                }
-                            }
-                            if count == 0 {
-                                continue;
-                            }
-                            for (input_item, input_count) in &recipe.inputs {
-                                assert_eq!(list.remove_item(*input_item, *input_count * count), 0);
-                            }
-                            for _ in 0..count {
-                                for item in generate_loot_table(recipe.outputs.data()) {
-                                    if let Some(overflow_item) = list.add_item(item) {
-                                        world.drop_items(
-                                            std::iter::once(overflow_item),
-                                            entity.position
-                                                + Pos::Y * entity_data.hitbox_height / 2.,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::OpenPlayerInventory => {
-                            user.set_screen(
-                                Key::id("player_creative").unwrap(),
-                                vec![(
-                                    InventoryProvider::Entity(entity.uuid),
-                                    InventoryView::from_range(0..10),
-                                )],
-                            );
-                        }
-                        NetworkMessageC2S::HarvestPlant { position, index } => todo!(),
-                        NetworkMessageC2S::UIButtonPress {
-                            property,
-                            value,
-                            modify_mode,
-                        } => {
-                            let mut screen_lock = user.screen.lock();
-                            if let Some(screen_lock) = screen_lock.as_ref() {
-                                if !screen_lock
-                                    .screen
-                                    .data()
-                                    .button_properties
-                                    .contains(&property)
-                                {
-                                    continue;
-                                }
-                                for (provider, _) in &screen_lock.inventories {
-                                    match provider {
-                                        InventoryProvider::Entity(uuid) => {}
-                                        InventoryProvider::Block(position) => {
-                                            let Some(mut machine) = world
-                                                .get_block_component::<BlockMachine>(*position)
-                                            else {
-                                                continue;
-                                            };
-                                            let machine_data = world
-                                                .get_block(*position)
-                                                .unwrap()
-                                                .block
-                                                .data()
-                                                .machine
-                                                .as_ref()
-                                                .unwrap();
-                                            machine.modify_property(
-                                                machine_data,
-                                                &property,
-                                                value,
-                                                modify_mode,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::TrashItem { slot, mode } => {
-                            let screen = user.screen.lock();
-                            let Some(screen) = &*screen else {
-                                continue;
-                            };
-                            let mut user_inventory = RefCell::new(&mut entity.inventory);
-                            let Some((provider, index)) = screen.get_slot(slot) else {
-                                continue;
-                            };
-                            let mut provided = ProvidedInventory::lock(
-                                &provider,
-                                world,
-                                entity.uuid,
-                                &user_inventory,
-                            )
-                            .unwrap();
-                            let mut item_slot = &mut provided.get_mut().items[index];
-                            if let Some(item) = item_slot {
-                                item.count -= mode.get_count(item.count);
-                                if item.count <= 0 {
-                                    *item_slot = None;
-                                }
-                            }
-                        }
-                        NetworkMessageC2S::GiveItem { item, stack } => {
-                            let screen = user.screen.lock();
-                            let Some(screen) = &*screen else {
-                                continue;
-                            };
-                            let mut user_inventory = RefCell::new(&mut entity.inventory);
-                            let Ok(mut list) = ProvidedInventoryList::lock_screen(
-                                screen,
-                                world,
-                                entity.uuid,
-                                &user_inventory,
-                            ) else {
-                                continue;
-                            };
-                            list.add_item(ItemStack::new(
-                                item,
-                                if stack { item.data().stack_size } else { 1 },
-                            ));
-                        }
-                    }
-                }
+                user.tick_controlling_entity(entity, controlling_user, world);
             }
         } else {
-            let hitbox = entity_data.hitbox(entity.state.crouching);
+            let hitbox = entity_data.hitbox(entity.crouching);
             let mut move_vector = Pos::ZERO;
-            match &entity_data.ai {
-                Some(ai) => {
-                    let entity_eye_position = entity.get_eye();
-                    let mut brain = entity.state.brain.as_mut().unwrap();
-                    brain.received_attacks.retain(|_, damage| {
-                        *damage -= entity_data.health / 100. * SERVER_DT;
-                        *damage > 0.
-                    });
-                    let target_entity = world
-                        .iter_entities(&[entity.uuid], false)
-                        .filter_map(|target| {
-                            if world.block_ray_test(coord::Ray::new_line(
-                                entity_eye_position,
-                                target.get_eye(),
-                            )) {
-                                return None;
-                            }
-                            let received_damage = brain
-                                .received_attacks
-                                .get(&target.uuid)
-                                .cloned()
-                                .unwrap_or(0.);
-                            if ai.attacks.contains(target.key)
-                                || (ai.self_defends.contains(target.key) && received_damage > 0.)
-                            {
-                                Some((target.uuid, target.position, received_damage))
-                            } else {
-                                None
-                            }
-                        })
-                        .max_by_key(|(id, position, received_damage)| {
-                            ((10. + *received_damage) / (position.distance(*position)) * 1000.)
-                                as u32
-                        });
-                    if let Some((target_id, target_position, _)) = target_entity {
-                        if let Some(goal) = brain.goal {
-                            if goal.to_block_pos() != target_position.to_block_pos() {
-                                brain.path.clear();
-                            }
-                        }
-                        brain.goal = Some(target_position);
-                    } else {
-                        brain.goal = None;
-                        brain.path.clear();
-                    }
-                    if let Some(goal) = brain.goal {
-                        let goal_block = goal.to_block_pos();
-                        if goal_block != entity.position.to_block_pos() && brain.path.is_empty() {
-                            let solution = pathfinding::directed::astar::astar(
-                                &entity.position.to_block_pos(),
-                                |node| {
-                                    let node = *node;
-                                    let entity_block_position = entity.position.to_block_pos();
-                                    HorizontalFace::all().into_iter().filter_map(move |face| {
-                                        let block_position = node + face.get_block_offset();
-                                        if block_position.distance_squared(entity_block_position)
-                                            > (24i32).pow(2)
-                                        {
-                                            return None;
-                                        }
-                                        let is_block_empty =
-                                            |block: BlockPos| match world.get_block(block) {
-                                                Some(block) => block.block == air_block(),
-                                                None => false,
-                                            };
-                                        if !is_block_empty(block_position) {
-                                            if is_block_empty(block_position + BlockPos::Y) {
-                                                return Some((block_position + BlockPos::Y, 1));
-                                            }
-                                        } else {
-                                            if is_block_empty(block_position - BlockPos::Y) {
-                                                if !is_block_empty(block_position - BlockPos::Y * 2)
-                                                {
-                                                    return Some((block_position - BlockPos::Y, 1));
-                                                }
-                                            } else {
-                                                return Some((block_position, 1));
-                                            }
-                                        }
-                                        None
-                                    })
-                                },
-                                |node| node.distance_squared(goal_block),
-                                |node| {
-                                    node.x == goal_block.x
-                                        && node.z == goal_block.z
-                                        && (node.y - goal_block.y).abs() <= 1
-                                },
-                            );
-                            if let Some((solution, _)) = solution {
-                                brain.path = solution
-                                    .into_iter()
-                                    .rev()
-                                    .map(|p| {
-                                        p.to_pos()
-                                            + Pos {
-                                                x: 0.5,
-                                                y: 0.,
-                                                z: 0.5,
-                                            }
-                                    })
-                                    .collect();
-                            }
-                        }
-                    }
-                    if !brain.path.is_empty() {
-                        if brain.path.last().unwrap().to_block_pos()
-                            == entity.position.to_block_pos()
-                        {
-                            brain.path.pop();
-                        } else {
-                            let next_path_point = *brain.path.last().unwrap();
-                            move_vector = next_path_point - entity.position;
-                            if move_vector.y > 0. {
-                                if entity.state.character_controller.on_ground {
-                                    entity.state.character_controller.velocity.y +=
-                                        entity_data.jump_velocity();
-                                }
-                            }
-                            move_vector.y = 0.;
-                            move_vector = move_vector.normalize() * entity_data.speed;
-                        }
-                    }
-                }
-                None => {}
-            }
+            entity.tick(&mut move_vector, world);
             let mut new_position = entity.position;
-            entity.state.character_controller.tick(
+            entity.character_controller.tick(
                 &mut new_position,
                 SERVER_DT,
                 |block| world.get_block(block),
@@ -1141,10 +431,10 @@ pub fn tick_chunk(world: &WorldAccess) {
             let new_hand_item = entity
                 .inventory
                 .items
-                .get(entity.state.hand_slot)
+                .get(entity.hand_slot)
                 .cloned()
                 .flatten();
-            if new_hand_item != entity.state.last_hand_item {
+            if new_hand_item != entity.last_hand_item {
                 world.send_viewers(
                     entity.position.to_chunk_pos(),
                     NetworkMessageS2C::EntityHandItem {
@@ -1152,7 +442,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                         item: new_hand_item.as_ref().map(|item| item.client()),
                     },
                 );
-                entity.state.last_hand_item = new_hand_item;
+                entity.last_hand_item = new_hand_item;
             }
         }
     }
@@ -1160,273 +450,9 @@ pub fn tick_chunk(world: &WorldAccess) {
         for mut machine in world.iter_block_components::<BlockMachine>(&[], true) {
             let block_position = machine.lock_key;
             let block = world.get_block(block_position).unwrap();
-            let block_data = block.block.data();
-            let machine_data = block_data.machine.as_ref().unwrap();
-            let mut needs_animation_sync = false;
-            {
-                let mut machine = &mut *machine;
-                if machine.sleep_cooldown == 0 {
-                    if !machine.blocked {
-                        match machine.script_state.run(
-                            &machine_data.script,
-                            |state, instruction| match instruction {
-                                MachineInstrution::Yield => CallbackResult::Suspend,
-                                MachineInstrution::Sleep { time } => {
-                                    machine.sleep_cooldown =
-                                        (*time * SERVER_TPS as f32).round() as u32;
-                                    CallbackResult::Suspend
-                                }
-                                MachineInstrution::Block => {
-                                    machine.blocked = true;
-                                    CallbackResult::Suspend
-                                }
-                                MachineInstrution::TranferItem {
-                                    self_view: view,
-                                    other: push_offset,
-                                    other_face,
-                                    pull,
-                                    success,
-                                } => {
-                                    let view = &machine_data.script_views[*view];
-                                    let target_position = block_position
-                                        + block.rotation.rotate_block_pos(*push_offset);
-                                    let Some(target_block) = world.get_block(target_position)
-                                    else {
-                                        return CallbackResult::Continue;
-                                    };
-                                    let target_block_data = target_block.block.data();
-                                    if let Some(target_machine_data) = &target_block_data.machine {
-                                        let mut target_machine = world
-                                            .get_block_component::<BlockMachine>(target_position)
-                                            .unwrap();
-                                        let face_rotated =
-                                            target_block.rotation.inverse_rotate_face(
-                                                block.rotation.rotate_face(*other_face),
-                                            );
-                                        let face_data =
-                                            target_machine_data.faces.by_face(face_rotated);
-                                        match face_data {
-                                            BlockMachineFace::InventoryAccess { input, output } => {
-                                                let other_view = if *pull { output } else { input };
-                                                let mut first_inventory = &mut machine.inventory;
-                                                let mut second_inventory =
-                                                    &mut target_machine.inventory;
-                                                if *pull {
-                                                    std::mem::swap(
-                                                        &mut first_inventory,
-                                                        &mut second_inventory,
-                                                    );
-                                                }
-                                                let mut exit = false;
-                                                for slot in &view.slots {
-                                                    if let Some(item) =
-                                                        first_inventory.get_slot_mut_raw(slot.slot)
-                                                    {
-                                                        if second_inventory
-                                                            .add_item(other_view, item.copy(1))
-                                                            .is_none()
-                                                        {
-                                                            let (target_chunk, target_offset) =
-                                                                target_position
-                                                                    .to_chunk_pos_offset();
-                                                            world.schedule_event(
-                                                                target_chunk,
-                                                                WorldEvent::BlockWakeup {
-                                                                    block: target_offset,
-                                                                    inventory_updated: true,
-                                                                },
-                                                            );
-                                                            item.count -= 1;
-                                                            if item.count == 0 {
-                                                                first_inventory.items[slot.slot] =
-                                                                    None;
-                                                            }
-                                                            state.pc = *success;
-                                                            return CallbackResult::Continue;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::ReadSignal {
-                                    face,
-                                    register,
-                                    success,
-                                } => {
-                                    match machine.logic_state.by_face_mut(*face).take() {
-                                        Some(value) => {
-                                            state.registers[*register] = value;
-                                            state.pc = *success;
-                                        }
-                                        None => {}
-                                    }
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::AddWakeupObserver { other } => {
-                                    let target_position =
-                                        block_position + block.rotation.rotate_block_pos(*other);
-                                    let Some(mut other_machine) =
-                                        world.get_block_component::<BlockMachine>(target_position)
-                                    else {
-                                        return CallbackResult::Continue;
-                                    };
-                                    other_machine.inventory_observers.push(block_position);
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::ReadLogic { face, register } => {
-                                    state.registers[*register] =
-                                        machine.logic_state.by_face(*face).unwrap_or(0);
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::WriteSignal { face, value } => {
-                                    let value = state.resolve_value(value);
-                                    let world_face = block.rotation.rotate_face(*face);
-                                    let target_position =
-                                        block_position + world_face.get_block_offset();
-                                    let (target_chunk, target_offset) =
-                                        target_position.to_chunk_pos_offset();
-                                    world.schedule_event(
-                                        target_chunk,
-                                        WorldEvent::BlockLogicSignal {
-                                            block: target_offset,
-                                            value,
-                                            world_face: world_face.opposite(),
-                                        },
-                                    );
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::WriteLogic { face, value } => {
-                                    let value = state.resolve_value(value);
-                                    let mut logic_state = machine.logic_state.by_face_mut(*face);
-                                    if let Some(previous) = logic_state {
-                                        if *previous == value {
-                                            return CallbackResult::Continue;
-                                        }
-                                    }
-                                    *logic_state = Some(value);
-                                    let world_face = block.rotation.rotate_face(*face);
-                                    let target_position =
-                                        block_position + world_face.get_block_offset();
-                                    let (target_chunk, target_offset) =
-                                        target_position.to_chunk_pos_offset();
-                                    world.schedule_event(
-                                        target_chunk,
-                                        WorldEvent::BlockLogicState {
-                                            block: target_offset,
-                                            value,
-                                            world_face: world_face.opposite(),
-                                        },
-                                    );
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::GetSlotItemCount { slot, register } => {
-                                    if let Some(item) = machine
-                                        .inventory
-                                        .items
-                                        .get(state.resolve_value(slot) as usize)
-                                    {
-                                        state.registers[*register] =
-                                            item.as_ref().map(|item| item.count).unwrap_or(0);
-                                    }
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::MoveItem {
-                                    from_view,
-                                    to_view,
-                                    success,
-                                } => {
-                                    let from_view = &machine_data.script_views[*from_view];
-                                    let to_view = &machine_data.script_views[*to_view];
-                                    for slot in &from_view.slots {
-                                        if let Some(item) = machine.inventory.items[slot.slot]
-                                            .as_ref()
-                                            .map(|item| item.copy(1))
-                                        {
-                                            if machine.inventory.add_item(to_view, item).is_none() {
-                                                let item = machine
-                                                    .inventory
-                                                    .get_slot_mut_raw(slot.slot)
-                                                    .as_mut()
-                                                    .unwrap();
-                                                item.count -= 1;
-                                                if item.count == 0 {
-                                                    machine.inventory.items[slot.slot] = None;
-                                                }
-                                                state.pc = *success;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::Craft {
-                                    recipes,
-                                    input_view,
-                                    output_view,
-                                    speed,
-                                    success,
-                                } => {
-                                    let input_view = &machine_data.script_views[*input_view];
-                                    let output_view = &machine_data.script_views[*output_view];
-                                    for recipe in recipes.list() {
-                                        let recipe = recipe.data();
-                                        let mut failed = false;
-                                        for (input, count) in &recipe.inputs {
-                                            if machine.inventory.count_item(input_view, *input)
-                                                < *count
-                                            {
-                                                failed = true;
-                                                break;
-                                            }
-                                        }
-                                        if failed {
-                                            continue;
-                                        }
-                                        for (input, count) in &recipe.inputs {
-                                            machine
-                                                .inventory
-                                                .remove_item(input_view, *input, *count);
-                                        }
-                                        for output in generate_loot_table(recipe.outputs.data()) {
-                                            machine.inventory.add_item(output_view, output);
-                                        }
-                                        machine.sleep_cooldown =
-                                            (recipe.craft_time * speed * SERVER_TPS as f32).round()
-                                                as u32;
-                                        state.pc = *success;
-                                        return CallbackResult::Suspend;
-                                    }
-                                    CallbackResult::Continue
-                                }
-                                MachineInstrution::PlayAnimation { animation } => {
-                                    machine.current_animation = machine_data
-                                        .model_animations
-                                        .iter()
-                                        .position(|a| a == animation)
-                                        .unwrap()
-                                        as u16;
-                                    machine.animation_start_time = world.ticks_passed;
-                                    needs_animation_sync = true;
-                                    CallbackResult::Continue
-                                }
-                            },
-                            1000,
-                        ) {
-                            RunResult::Suspended => {}
-                            RunResult::TimedOut => {
-                                println!("timed out");
-                            }
-                        }
-                    }
-                } else {
-                    machine.sleep_cooldown -= 1;
-                }
-            }
-            if needs_animation_sync {
+            let machine_data = block.block.data().machine.as_ref().unwrap();
+            machine.tick(block_position, block, machine_data, world);
+            if machine.animation_start_time == world.ticks_passed {
                 world.sync_block_component(&machine);
             }
         }
@@ -1548,12 +574,7 @@ pub struct Entity {
     pub inventory: Inventory,
     #[serde(default, skip_serializing, skip_deserializing)]
     pub controlling_user: Option<UserIndex>,
-    pub state: InternalEntityState,
-}
-#[derive(Serialize, Deserialize)]
-pub struct InternalEntityState {
     pub character_controller: CharacterController,
-    pub teleport: Option<Pos>,
     pub hand_slot: usize,
     #[serde(skip_serializing, skip_deserializing)]
     pub last_hand_item: Option<ItemStack>,
@@ -1577,6 +598,90 @@ impl MobBrain {
             received_attacks: HashMap::new(),
         }
     }
+    pub fn recalculate_path(&mut self, position: Pos, world: &WorldAccess) {
+        if let Some(goal) = self.goal {
+            let goal_block = goal.to_block_pos();
+            if goal_block != position.to_block_pos() {
+                let solution = pathfinding::directed::astar::astar(
+                    &position.to_block_pos(),
+                    |node| {
+                        let node = *node;
+                        let entity_block_position = position.to_block_pos();
+                        HorizontalFace::all().into_iter().filter_map(move |face| {
+                            let block_position = node + face.get_block_offset();
+                            if block_position.distance_squared(entity_block_position)
+                                > (24i32).pow(2)
+                            {
+                                return None;
+                            }
+                            let is_block_empty = |block: BlockPos| match world.get_block(block) {
+                                Some(block) => block.block.data().collision.is_empty(),
+                                None => false,
+                            };
+                            if !is_block_empty(block_position) {
+                                if is_block_empty(block_position + BlockPos::Y) {
+                                    return Some((block_position + BlockPos::Y, 1));
+                                }
+                            } else {
+                                if is_block_empty(block_position - BlockPos::Y) {
+                                    if !is_block_empty(block_position - BlockPos::Y * 2) {
+                                        return Some((block_position - BlockPos::Y, 1));
+                                    }
+                                } else {
+                                    return Some((block_position, 1));
+                                }
+                            }
+                            None
+                        })
+                    },
+                    |node| node.distance_squared(goal_block),
+                    |node| {
+                        node.x == goal_block.x
+                            && node.z == goal_block.z
+                            && (node.y - goal_block.y).abs() <= 1
+                    },
+                );
+                if let Some((solution, _)) = solution {
+                    self.path = solution
+                        .into_iter()
+                        .rev()
+                        .map(|p| {
+                            p.to_pos()
+                                + Pos {
+                                    x: 0.5,
+                                    y: 0.,
+                                    z: 0.5,
+                                }
+                        })
+                        .collect();
+                    self.path[0].x = goal.x;
+                    self.path[0].z = goal.z;
+                    let mut i = 0;
+                    while i + 2 < self.path.len() {
+                        let first = self.path[i];
+                        let third = self.path[i + 2];
+                        if Ray::new_line(first, third)
+                            .block_raycast(|block, _, _| match world.get_block(block) {
+                                Some(block) => {
+                                    if block.block.data().collision.is_empty() {
+                                        None
+                                    } else {
+                                        Some(())
+                                    }
+                                }
+                                None => Some(()),
+                            })
+                            .is_none()
+                        {
+                            self.path.remove(i + 1);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 impl Entity {
     pub fn new(key: EntityKey, position: Pos) -> Entity {
@@ -1587,20 +692,17 @@ impl Entity {
             position,
             inventory: Inventory::new(entity_data.inventory_size),
             controlling_user: None,
-            state: InternalEntityState {
-                character_controller: CharacterController::new(),
-                teleport: None,
-                hand_slot: 0,
-                last_hand_item: None,
-                health: entity_data.health,
-                research: HashSet::new(),
-                brain: match &entity_data.ai {
-                    Some(_) => Some(MobBrain::new()),
-                    None => None,
-                },
-                direction: LookDirection { pitch: 0., yaw: 0. },
-                crouching: false,
+            character_controller: CharacterController::new(),
+            hand_slot: 0,
+            last_hand_item: None,
+            health: entity_data.health,
+            research: HashSet::new(),
+            brain: match &entity_data.ai {
+                Some(_) => Some(MobBrain::new()),
+                None => None,
             },
+            direction: LookDirection { pitch: 0., yaw: 0. },
+            crouching: false,
         }
     }
     pub fn get_eye(&self) -> Pos {
@@ -1609,9 +711,75 @@ impl Entity {
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
         let entity_data = self.key.data();
-        entity_data
-            .hitbox(self.state.crouching)
-            .offset(self.position)
+        entity_data.hitbox(self.crouching).offset(self.position)
+    }
+    pub fn tick(&mut self, move_vector: &mut Pos, world: &WorldAccess) {
+        let entity_data = self.key.data();
+        match &entity_data.ai {
+            Some(ai) => {
+                let entity_eye_position = self.get_eye();
+                let mut brain = self.brain.as_mut().unwrap();
+                brain.received_attacks.retain(|_, damage| {
+                    *damage -= entity_data.health / 100. * SERVER_DT;
+                    *damage > 0.
+                });
+                let target_entity = world
+                    .iter_entities(&[self.uuid], false)
+                    .filter_map(|target| {
+                        if world.block_ray_test(coord::Ray::new_line(
+                            entity_eye_position,
+                            target.get_eye(),
+                        )) {
+                            return None;
+                        }
+                        let received_damage = brain
+                            .received_attacks
+                            .get(&target.uuid)
+                            .cloned()
+                            .unwrap_or(0.);
+                        if ai.attacks.contains(target.key)
+                            || (ai.self_defends.contains(target.key) && received_damage > 0.)
+                        {
+                            Some((target.uuid, target.position, received_damage))
+                        } else {
+                            None
+                        }
+                    })
+                    .max_by_key(|(id, position, received_damage)| {
+                        ((10. + *received_damage) / (position.distance(*position)) * 1000.) as u32
+                    });
+                if let Some((target_id, target_position, _)) = target_entity {
+                    brain.goal = Some(target_position);
+                } else {
+                    brain.goal = None;
+                    brain.path.clear();
+                }
+
+                if (self.uuid.as_u64_pair().0 + world.ticks_passed) % (SERVER_TPS as u64 / 2) == 0 {
+                    brain.recalculate_path(self.position, world);
+                }
+
+                if !brain.path.is_empty() {
+                    if brain.path.last().unwrap().to_block_pos() == self.position.to_block_pos() {
+                        brain.path.pop();
+                    } else {
+                        let next_path_point = *brain.path.last().unwrap();
+                        *move_vector = next_path_point - self.position;
+                        if move_vector.y > 0. {
+                            if self.character_controller.on_ground {
+                                self.character_controller.velocity.y += entity_data.jump_velocity();
+                            }
+                        }
+                        move_vector.y = 0.;
+                        *move_vector = move_vector.normalize() * entity_data.speed;
+                    }
+                }
+            }
+            None => {}
+        }
+        if move_vector.length_squared() > 0. {
+            self.direction.yaw = -move_vector.x.atan2(move_vector.z) + std::f32::consts::PI;
+        }
     }
 }
 impl Entity {
@@ -1620,12 +788,12 @@ impl Entity {
             uuid: self.uuid,
             key: self.key,
             position: self.position,
-            direction: self.state.direction,
-            crouching: self.state.crouching,
+            direction: self.direction,
+            crouching: self.crouching,
             hand_item: self
                 .inventory
                 .items
-                .get(self.state.hand_slot)
+                .get(self.hand_slot)
                 .cloned()
                 .flatten()
                 .map(|item| item.client()),
@@ -1635,8 +803,8 @@ impl Entity {
         NetworkMessageS2C::MoveEntity {
             uuid: self.uuid,
             position: self.position,
-            direction: self.state.direction,
-            crouching: self.state.crouching,
+            direction: self.direction,
+            crouching: self.crouching,
         }
     }
     pub fn create_remove_message(&self) -> NetworkMessageS2C {
@@ -1810,6 +978,257 @@ pub struct BlockMachine {
     pub animation_start_time: u64,
 }
 impl BlockMachine {
+    pub fn tick(
+        &mut self,
+        block_position: BlockPos,
+        block: BlockEntry,
+        machine_data: &BlockMachineData,
+        world: &WorldAccess,
+    ) {
+        if self.sleep_cooldown == 0 {
+            if !self.blocked {
+                match self.script_state.run(
+                    &machine_data.script,
+                    |state, instruction| match instruction {
+                        MachineInstrution::Yield => CallbackResult::Suspend,
+                        MachineInstrution::Sleep { time } => {
+                            self.sleep_cooldown = (*time * SERVER_TPS as f32).round() as u32;
+                            CallbackResult::Suspend
+                        }
+                        MachineInstrution::Block => {
+                            self.blocked = true;
+                            CallbackResult::Suspend
+                        }
+                        MachineInstrution::TranferItem {
+                            self_view: view,
+                            other: push_offset,
+                            other_face,
+                            pull,
+                            success,
+                        } => {
+                            let view = &machine_data.script_views[*view];
+                            let target_position =
+                                block_position + block.rotation.rotate_block_pos(*push_offset);
+                            let Some(target_block) = world.get_block(target_position) else {
+                                return CallbackResult::Continue;
+                            };
+                            let target_block_data = target_block.block.data();
+                            if let Some(target_machine_data) = &target_block_data.machine {
+                                let mut target_machine = world
+                                    .get_block_component::<BlockMachine>(target_position)
+                                    .unwrap();
+                                let face_rotated = target_block
+                                    .rotation
+                                    .inverse_rotate_face(block.rotation.rotate_face(*other_face));
+                                let face_data = target_machine_data.faces.by_face(face_rotated);
+                                match face_data {
+                                    BlockMachineFace::InventoryAccess { input, output } => {
+                                        let other_view = if *pull { output } else { input };
+                                        let mut first_inventory = &mut self.inventory;
+                                        let mut second_inventory = &mut target_machine.inventory;
+                                        if *pull {
+                                            std::mem::swap(
+                                                &mut first_inventory,
+                                                &mut second_inventory,
+                                            );
+                                        }
+                                        let mut exit = false;
+                                        for slot in &view.slots {
+                                            if let Some(item) =
+                                                first_inventory.get_slot_mut_raw(slot.slot)
+                                            {
+                                                if second_inventory
+                                                    .add_item(other_view, item.copy(1))
+                                                    .is_none()
+                                                {
+                                                    let (target_chunk, target_offset) =
+                                                        target_position.to_chunk_pos_offset();
+                                                    world.schedule_event(
+                                                        target_chunk,
+                                                        WorldEvent::BlockWakeup {
+                                                            block: target_offset,
+                                                            inventory_updated: true,
+                                                        },
+                                                    );
+                                                    item.count -= 1;
+                                                    if item.count == 0 {
+                                                        first_inventory.items[slot.slot] = None;
+                                                    }
+                                                    state.pc = *success;
+                                                    return CallbackResult::Continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::ReadSignal {
+                            face,
+                            register,
+                            success,
+                        } => {
+                            match self.logic_state.by_face_mut(*face).take() {
+                                Some(value) => {
+                                    state.registers[*register] = value;
+                                    state.pc = *success;
+                                }
+                                None => {}
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::AddWakeupObserver { other } => {
+                            let target_position =
+                                block_position + block.rotation.rotate_block_pos(*other);
+                            let Some(mut other_machine) =
+                                world.get_block_component::<BlockMachine>(target_position)
+                            else {
+                                return CallbackResult::Continue;
+                            };
+                            other_machine.inventory_observers.push(block_position);
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::ReadLogic { face, register } => {
+                            state.registers[*register] =
+                                self.logic_state.by_face(*face).unwrap_or(0);
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::WriteSignal { face, value } => {
+                            let value = state.resolve_value(value);
+                            let world_face = block.rotation.rotate_face(*face);
+                            let target_position = block_position + world_face.get_block_offset();
+                            let (target_chunk, target_offset) =
+                                target_position.to_chunk_pos_offset();
+                            world.schedule_event(
+                                target_chunk,
+                                WorldEvent::BlockLogicSignal {
+                                    block: target_offset,
+                                    value,
+                                    world_face: world_face.opposite(),
+                                },
+                            );
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::WriteLogic { face, value } => {
+                            let value = state.resolve_value(value);
+                            let mut logic_state = self.logic_state.by_face_mut(*face);
+                            if let Some(previous) = logic_state {
+                                if *previous == value {
+                                    return CallbackResult::Continue;
+                                }
+                            }
+                            *logic_state = Some(value);
+                            let world_face = block.rotation.rotate_face(*face);
+                            let target_position = block_position + world_face.get_block_offset();
+                            let (target_chunk, target_offset) =
+                                target_position.to_chunk_pos_offset();
+                            world.schedule_event(
+                                target_chunk,
+                                WorldEvent::BlockLogicState {
+                                    block: target_offset,
+                                    value,
+                                    world_face: world_face.opposite(),
+                                },
+                            );
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::GetSlotItemCount { slot, register } => {
+                            if let Some(item) =
+                                self.inventory.items.get(state.resolve_value(slot) as usize)
+                            {
+                                state.registers[*register] =
+                                    item.as_ref().map(|item| item.count).unwrap_or(0);
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::MoveItem {
+                            from_view,
+                            to_view,
+                            success,
+                        } => {
+                            let from_view = &machine_data.script_views[*from_view];
+                            let to_view = &machine_data.script_views[*to_view];
+                            for slot in &from_view.slots {
+                                if let Some(item) = self.inventory.items[slot.slot]
+                                    .as_ref()
+                                    .map(|item| item.copy(1))
+                                {
+                                    if self.inventory.add_item(to_view, item).is_none() {
+                                        let item = self
+                                            .inventory
+                                            .get_slot_mut_raw(slot.slot)
+                                            .as_mut()
+                                            .unwrap();
+                                        item.count -= 1;
+                                        if item.count == 0 {
+                                            self.inventory.items[slot.slot] = None;
+                                        }
+                                        state.pc = *success;
+                                        break;
+                                    }
+                                }
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::Craft {
+                            recipes,
+                            input_view,
+                            output_view,
+                            speed,
+                            success,
+                        } => {
+                            let input_view = &machine_data.script_views[*input_view];
+                            let output_view = &machine_data.script_views[*output_view];
+                            for recipe in recipes.list() {
+                                let recipe = recipe.data();
+                                let mut failed = false;
+                                for (input, count) in &recipe.inputs {
+                                    if self.inventory.count_item(input_view, *input) < *count {
+                                        failed = true;
+                                        break;
+                                    }
+                                }
+                                if failed {
+                                    continue;
+                                }
+                                for (input, count) in &recipe.inputs {
+                                    self.inventory.remove_item(input_view, *input, *count);
+                                }
+                                for output in generate_loot_table(recipe.outputs.data()) {
+                                    self.inventory.add_item(output_view, output);
+                                }
+                                self.sleep_cooldown =
+                                    (recipe.craft_time * speed * SERVER_TPS as f32).round() as u32;
+                                state.pc = *success;
+                                return CallbackResult::Suspend;
+                            }
+                            CallbackResult::Continue
+                        }
+                        MachineInstrution::PlayAnimation { animation } => {
+                            self.current_animation = machine_data
+                                .model_animations
+                                .iter()
+                                .position(|a| a == animation)
+                                .unwrap()
+                                as u16;
+                            self.animation_start_time = world.ticks_passed;
+                            CallbackResult::Continue
+                        }
+                    },
+                    1000,
+                ) {
+                    RunResult::Suspended => {}
+                    RunResult::TimedOut => {
+                        println!("timed out");
+                    }
+                }
+            }
+        } else {
+            self.sleep_cooldown -= 1;
+        }
+    }
     pub fn modify_property(
         &mut self,
         machine_data: &BlockMachineData,
@@ -1847,7 +1266,7 @@ impl Into<ClientBlockMachine> for &BlockMachine {
 }
 pub struct WorldAccess<'a> {
     ticks_passed: u64,
-    center_chunk: ChunkPos,
+    pub center_chunk: ChunkPos,
     grid: [Option<&'a mut Chunk>; 27],
     users: &'a SlotMap<UserIndex, User>,
     message_queue: &'a MessageQueue,
@@ -2113,6 +1532,9 @@ impl WorldAccess<'_> {
         ChunkBlockComponentsAccess: ComponentTypeAccess<C, Item = WorldAccessComponentStorage<C>>,
         C: BlockComponentUpdater,
     {
+        if self.grid[self.get_grid_index(position.to_chunk_pos()).ok_or(())?].is_none() {
+            return Err(());
+        }
         if let Some(component) = self.get_block_component::<C>(position) {
             return Ok(component);
         }
@@ -2224,7 +1646,7 @@ impl WorldAccess<'_> {
         let hitbox = entity
             .key
             .data()
-            .hitbox(entity.state.crouching)
+            .hitbox(entity.crouching)
             .offset(new_position);
         for block_position in hitbox.to_block() {
             let Some(block) = self.get_block(block_position) else {
@@ -2291,7 +1713,7 @@ impl WorldAccess<'_> {
             for _ in 0..item.count {
                 let mut item_entity = Entity::new(item_entity_key, position);
                 let angle = rand::random::<f32>() * 2. * std::f32::consts::PI;
-                item_entity.state.character_controller.velocity = Pos {
+                item_entity.character_controller.velocity = Pos {
                     x: angle.cos(),
                     y: rand::random::<f32>() / 2.,
                     z: angle.sin(),

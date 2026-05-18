@@ -827,6 +827,13 @@ impl Ray {
         let origin = self.position;
         let dir = self.direction;
 
+        if aabb.contains(origin) {
+            return Some(AABBRaycastResult {
+                position: origin,
+                face: Face::Up,
+            });
+        }
+
         // Max ray length comes from direction magnitude
         let max_dist = dir.length();
         if max_dist == 0.0 {
