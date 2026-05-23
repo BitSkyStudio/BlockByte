@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ClientItem, ItemMoveMode, LookDirection, PlayerAbilities,
+    ClientItem, EntityStats, ItemMoveMode, LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{
         BlockEntry, BlockKey, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey, ToolData,
@@ -136,8 +136,8 @@ pub enum NetworkMessageS2C {
         position: Pos,
         teleport_id: u32,
     },
-    PlayerAbilities {
-        abilities: PlayerAbilities,
+    UpdatePlayerStats {
+        stats: EntityStats,
     },
     UIOpen {
         screen: UIScreenKey,

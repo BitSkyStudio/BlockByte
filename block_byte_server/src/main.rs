@@ -12,8 +12,8 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, Color, DEFAULT_VIEWSLOT, DamageTable, InventoryView, LookDirection, MoveMode,
-    PlayerAbilities, SERVER_DT, SERVER_TPS,
+    ClientItem, Color, DEFAULT_VIEWSLOT, DamageTable, EntityStats, InventoryView, LookDirection,
+    MoveMode, SERVER_DT, SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -226,12 +226,8 @@ fn main() {
             );
             server.message_queue.send_message(
                 std::iter::once(user),
-                NetworkMessageS2C::PlayerAbilities {
-                    abilities: PlayerAbilities {
-                        move_mode: MoveMode::Normal,
-                        speed: 1.,
-                        max_stamina: 100.,
-                    },
+                NetworkMessageS2C::UpdatePlayerStats {
+                    stats: EntityStats::default(),
                 },
             );
             server.message_queue.send_message(
@@ -710,8 +706,10 @@ impl User {
                             .unwrap_or(1.),
                         None => 1.,
                     };
+                    let strength_multiplier = entity.current_stats().strength() / 100.;
                     let mut damage_table = DamageTable::default();
-                    damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier);
+                    damage_table[tool.damage_type] =
+                        Some(tool.damage * quality_multiplier * strength_multiplier);
                     let (chunk, offset) = position.to_chunk_pos_offset();
                     let _ = world.schedule_event(
                         chunk,
@@ -931,8 +929,10 @@ impl User {
                             .unwrap_or(1.),
                         None => 1.,
                     };
+                    let strength_multiplier = entity.current_stats().strength() / 100.;
                     let mut damage_table = DamageTable::default();
-                    damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier);
+                    damage_table[tool.damage_type] =
+                        Some(tool.damage * quality_multiplier * strength_multiplier);
                     world
                         .schedule_event(
                             world.center_chunk,

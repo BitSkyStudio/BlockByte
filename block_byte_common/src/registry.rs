@@ -29,7 +29,8 @@ use crate::scripts::{
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
-    Color, DamageTable, DamageType, GRAVITY_ACCELERATION, InventoryView, LookDirection, ViewSlot,
+    Color, DamageTable, DamageType, EntityStats, GRAVITY_ACCELERATION, InventoryView,
+    LookDirection, ViewSlot,
 };
 
 use serde_default_utils::*;
@@ -1193,9 +1194,6 @@ impl ComposedTexture {
         })
     }
 }
-fn default_acceleration_coefficient() -> f32 {
-    8.
-}
 #[derive(Deserialize)]
 pub struct EntityData {
     #[cfg(feature = "server")]
@@ -1205,30 +1203,18 @@ pub struct EntityData {
     #[serde(default)]
     pub eye_height: f32,
     #[serde(default)]
-    pub jump_height: f32,
-    pub speed: f32,
-    #[serde(default = "default_acceleration_coefficient")]
-    pub acceleration_coefficient: f32,
-    #[serde(default)]
     pub crouch_height_difference: f32,
     pub model: ModelInstance,
     #[serde(default)]
     pub interact_action: EntityInteractAction,
-    pub health: f32,
     #[serde(default)]
     pub damage_table: DamageTable,
     #[serde(default)]
     pub ai: Option<MobAI>,
+    #[serde(default)]
+    pub base_stats: EntityStats,
 }
 impl RegistryRonConfigLoadable for EntityData {}
-impl EntityData {
-    pub fn jump_velocity(&self) -> f32 {
-        //s = 1/2at^2
-        let t = (2. * self.jump_height / GRAVITY_ACCELERATION).sqrt();
-        //v = a*t
-        GRAVITY_ACCELERATION * t
-    }
-}
 #[derive(Deserialize)]
 pub struct MobAI {
     #[serde(default)]

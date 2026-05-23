@@ -15,8 +15,8 @@ use std::{
 };
 
 use block_byte_common::{
-    CharacterController, Color, DamageTable, DamageType, InventoryView, LookDirection, MoveMode,
-    SERVER_DT, SERVER_TPS,
+    ACCELERATION_COEFFICIENT, CharacterController, Color, DamageTable, DamageType, EntityStats,
+    InventoryView, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
@@ -213,6 +213,10 @@ pub fn tick_chunk(world: &WorldAccess) {
                 let Some(mut entity) = world.get_entity(entity_id) else {
                     continue;
                 };
+                //todo: better formula, maybe log?
+                if rand::random_bool(entity.current_stats().evasion() as f64 / 100.) {
+                    continue;
+                }
                 let entity_data = entity.key.data();
                 let received_damage = damage
                     .iter()
@@ -220,6 +224,9 @@ pub fn tick_chunk(world: &WorldAccess) {
                         damage * entity_data.damage_table[damage_type].unwrap_or(1.)
                     })
                     .sum::<f32>();
+                let received_damage = received_damage
+                    * (entity.current_stats().vulnerability() / 100.)
+                    / (1. + entity.current_stats().armor() / 100.);
                 if let Some(source_entity) = source_entity {
                     if let Some(brain) = &mut entity.brain {
                         *brain.received_attacks.entry(source_entity).or_insert(0.) +=
@@ -254,6 +261,15 @@ pub fn tick_chunk(world: &WorldAccess) {
     for mut entity_ref in world.iter_entities(&[], true) {
         let entity_data = entity_ref.key.data();
         let mut entity = &mut *entity_ref;
+        entity.effects.retain_mut(|effect| {
+            if effect.timer <= 1 {
+                entity.cached_stats = None;
+                false
+            } else {
+                effect.timer -= 1;
+                true
+            }
+        });
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
             std::mem::swap(&mut velocity, &mut entity.character_controller.velocity);
@@ -419,7 +435,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                 move_vector,
                 MoveMode::Normal,
                 hitbox,
-                entity_data.acceleration_coefficient * entity_data.speed,
+                ACCELERATION_COEFFICIENT * entity_data.base_stats.speed() / 100. * NORMAL_SPEED,
                 0.5,
                 false,
             );
@@ -583,6 +599,27 @@ pub struct Entity {
     pub brain: Option<MobBrain>,
     pub direction: LookDirection,
     pub crouching: bool,
+    pub effects: Vec<ActiveEffect>,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub cached_stats: Option<EntityStats>,
+}
+impl Entity {
+    pub fn current_stats<'a>(&'a mut self) -> &'a EntityStats {
+        self.cached_stats.get_or_insert_with(|| {
+            let mut stats = self.key.data().base_stats.clone();
+            for effect in &self.effects {
+                stats.apply(&effect.stats);
+            }
+            //todo: equipment
+            //todo: if controlled send to player
+            stats
+        })
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub struct ActiveEffect {
+    pub stats: EntityStats,
+    pub timer: u32,
 }
 #[derive(Serialize, Deserialize)]
 pub struct MobBrain {
@@ -660,19 +697,7 @@ impl MobBrain {
                     while i + 2 < self.path.len() {
                         let first = self.path[i];
                         let third = self.path[i + 2];
-                        if Ray::new_line(first, third)
-                            .block_raycast(|block, _, _| match world.get_block(block) {
-                                Some(block) => {
-                                    if block.block.data().collision.is_empty() {
-                                        None
-                                    } else {
-                                        Some(())
-                                    }
-                                }
-                                None => Some(()),
-                            })
-                            .is_none()
-                        {
+                        if !world.block_ray_test(Ray::new_line(first, third)) {
                             self.path.remove(i + 1);
                         } else {
                             i += 1;
@@ -695,7 +720,7 @@ impl Entity {
             character_controller: CharacterController::new(),
             hand_slot: 0,
             last_hand_item: None,
-            health: entity_data.health,
+            health: entity_data.base_stats.vitality(),
             research: HashSet::new(),
             brain: match &entity_data.ai {
                 Some(_) => Some(MobBrain::new()),
@@ -703,6 +728,8 @@ impl Entity {
             },
             direction: LookDirection { pitch: 0., yaw: 0. },
             crouching: false,
+            effects: Vec::new(),
+            cached_stats: None,
         }
     }
     pub fn get_eye(&self) -> Pos {
@@ -718,9 +745,10 @@ impl Entity {
         match &entity_data.ai {
             Some(ai) => {
                 let entity_eye_position = self.get_eye();
+                let current_health_regen = self.current_stats().regen();
                 let mut brain = self.brain.as_mut().unwrap();
                 brain.received_attacks.retain(|_, damage| {
-                    *damage -= entity_data.health / 100. * SERVER_DT;
+                    *damage -= current_health_regen * SERVER_DT;
                     *damage > 0.
                 });
                 let target_entity = world
@@ -767,11 +795,14 @@ impl Entity {
                         *move_vector = next_path_point - self.position;
                         if move_vector.y > 0. {
                             if self.character_controller.on_ground {
-                                self.character_controller.velocity.y += entity_data.jump_velocity();
+                                self.character_controller.velocity.y +=
+                                    entity_data.base_stats.jump_velocity();
                             }
                         }
                         move_vector.y = 0.;
-                        *move_vector = move_vector.normalize() * entity_data.speed;
+                        *move_vector = move_vector.normalize() * entity_data.base_stats.speed()
+                            / 100.
+                            * NORMAL_SPEED;
                     }
                 }
             }

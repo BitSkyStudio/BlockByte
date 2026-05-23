@@ -18,18 +18,14 @@ pub mod world;
 pub const SERVER_TPS: u32 = 40;
 pub const SERVER_DT: f32 = 1. / (SERVER_TPS as f32);
 pub const GRAVITY_ACCELERATION: f32 = 25.;
+pub const NORMAL_SPEED: f32 = 5.;
+pub const ACCELERATION_COEFFICIENT: f32 = 8.;
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum MoveMode {
     Normal,
     Fly,
     NoClip,
-}
-#[derive(Copy, Clone, Serialize, Deserialize)]
-pub struct PlayerAbilities {
-    pub move_mode: MoveMode,
-    pub speed: f32,
-    pub max_stamina: f32,
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClientItem {
@@ -231,6 +227,59 @@ macro_rules! create_damage_types {
     };
 }
 create_damage_types!(Blunt, Pierce, Slash, Cut);
+
+macro_rules! create_entity_stats {
+    ($($id:ident : $default_val:literal),*) => {
+        fn default_mul_identity() -> f32{1.}
+        paste::paste! {
+        #[derive(Clone, Serialize, Deserialize)]
+        pub struct EntityStats{
+            $(
+                #[serde(default)]
+                [<$id _add>]: f32,
+                #[serde(default = "default_mul_identity")]
+                [<$id _mul>]: f32,
+            )*
+        }
+        }
+        impl Default for EntityStats{
+            fn default() -> Self{
+                paste::paste! {
+                Self{
+                    $(
+                        [<$id _add>]: 0.,
+                        [<$id _mul>]: 1.,
+                    )*
+                }
+            }
+            }
+        }
+        impl EntityStats {
+            pub fn apply(&mut self, other: &EntityStats){
+                $(
+                    paste::paste! {
+                    self.[<$id _add>] += other.[<$id _add>];
+                    self.[<$id _mul>] *= other.[<$id _mul>];
+                    }
+                )*
+            }
+            $(
+                pub fn $id(&self) -> f32{
+                    paste::paste! {($default_val + self.[<$id _add>]) * self.[<$id _mul>]}
+                }
+            )*
+        }
+    };
+}
+impl EntityStats {
+    pub fn jump_velocity(&self) -> f32 {
+        //s = 1/2at^2
+        let t = (2. * self.jump_height() / GRAVITY_ACCELERATION).sqrt();
+        //v = a*t
+        GRAVITY_ACCELERATION * t
+    }
+}
+create_entity_stats!(strength: 100., speed: 100., haste: 100., evasion: 0., vitality: 100., regen: 5., mana: 100., mana_regen: 5., stamina: 100., stamina_regen: 10., vulnerability: 100., jump_height: 1.3, armor: 0.);
 
 #[derive(Serialize, Deserialize)]
 pub struct CharacterController {

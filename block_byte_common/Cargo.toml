@@ -26,6 +26,7 @@ smallvec = { version = "1.15.1", features = ["serde"] }
 rand = "0.9.3"
 rand_seeder = "0.4.0"
 rand_xoshiro = "0.7.0"
+paste = "1.0.15"
 
 [features]
 client = ["dep:image"]

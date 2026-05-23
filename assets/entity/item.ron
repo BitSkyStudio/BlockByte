@@ -3,10 +3,11 @@
     hitbox_size: 0.3,
     hitbox_height: 0.2,
     eye_height: 0.2,
-    speed: 3.,
-    acceleration_coefficient: 6.,
     model: "item",
     interact_action: Pickup,
-    health: 20.,
     damage_table: (),
+    base_stats: (
+        vitality_mul: 0.2,
+        speed_mul: 0.5,
+    )
 )

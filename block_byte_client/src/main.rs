@@ -22,8 +22,8 @@ use std::{
 use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    CharacterController, ClientItem, Color, ItemMoveMode, LookDirection, MoveMode, PlayerAbilities,
-    SERVER_DT, TexCoords,
+    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityStats, ItemMoveMode,
+    LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, ModelGeometry, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
@@ -103,11 +103,6 @@ fn main() {
             connection,
             teleport_id: 0,
             last_update: Instant::now(),
-            player_abilities: PlayerAbilities {
-                move_mode: MoveMode::Normal,
-                speed: 1.,
-                max_stamina: 100.,
-            },
             mspt: 0.,
             delta_time_average: 0.,
         })
@@ -119,7 +114,6 @@ struct App {
     game: ClientGame,
     camera: ClientPlayer,
     connection: ClientConnection,
-    player_abilities: PlayerAbilities,
     last_update: Instant,
     teleport_id: u32,
     mspt: f32,
@@ -366,10 +360,10 @@ impl ApplicationHandler for App {
 
                 self.game.hud.properties.0.insert(
                     "stamina_action".to_string(),
-                    match self.game.hit_timer {
+                    match &self.game.hit_timer {
                         Some(hit_timer) => {
                             let tool_data = self.game.active_tool();
-                            let progress = hit_timer / tool_data.swing_time;
+                            let progress = hit_timer.progress();
                             tool_data.stamina * (1. - progress)
                         }
                         None => 0.,
@@ -381,7 +375,6 @@ impl ApplicationHandler for App {
                     .properties
                     .0
                     .insert("stamina".to_string(), self.game.stamina);
-                self.game.stamina = self.game.stamina.min(self.player_abilities.max_stamina);
 
                 self.render_state
                     .as_ref()
@@ -712,11 +705,14 @@ impl ApplicationHandler for App {
                         let stamina_cost = self.game.active_tool().stamina;
                         if self.game.stamina >= stamina_cost {
                             self.game.stamina -= stamina_cost;
-                            self.game.hit_timer = Some(0.);
+                            self.game.hit_timer = Some(HitTimer {
+                                current_time: 0.,
+                                swing_time: self.game.active_tool().swing_time
+                                    * (self.game.player_stats.haste() / 100.),
+                            });
                         }
                     }
-                    self.camera
-                        .update_position(dt, &mut self.game, &self.player_abilities);
+                    self.camera.update_position(dt, &mut self.game);
                     self.game.player_position = self.camera.position;
                     self.send_message(NetworkMessageC2S::PlayerPosition {
                         position: self.camera.position,
@@ -724,11 +720,11 @@ impl ApplicationHandler for App {
                         direction: self.camera.direction,
                         crouching: self.camera.crouching,
                     });
-                    if let Some(hit_timer) = self.game.hit_timer {
-                        let new_hit_timer = hit_timer + dt;
-                        let active_tool = self.game.active_tool();
-                        if hit_timer < active_tool.swing_time * 0.5
-                            && new_hit_timer >= active_tool.swing_time * 0.5
+                    if let Some(hit_timer) = &mut self.game.hit_timer {
+                        let old_hit_timer = hit_timer.current_time;
+                        hit_timer.current_time += dt;
+                        if old_hit_timer < hit_timer.swing_time * 0.5
+                            && hit_timer.current_time >= hit_timer.swing_time * 0.5
                         {
                             match self.camera.raycast(&self.game, true) {
                                 RayCastResult::Block(position, face) => {
@@ -749,10 +745,10 @@ impl ApplicationHandler for App {
                                     });*/
                                 }
                             }
-                        }
-                        self.game.hit_timer = Some(new_hit_timer);
-                        if new_hit_timer > active_tool.swing_time {
-                            self.game.hit_timer = None;
+                        } else {
+                            if hit_timer.current_time >= hit_timer.swing_time {
+                                self.game.hit_timer = None;
+                            }
                         }
                     }
                     while let Ok((mut message, time)) = self.connection.rx.try_recv() {
@@ -893,8 +889,8 @@ impl ApplicationHandler for App {
                                 self.camera.height_animation = position.y;
                                 self.teleport_id = teleport_id;
                             }
-                            NetworkMessageS2C::PlayerAbilities { abilities } => {
-                                self.player_abilities = abilities;
+                            NetworkMessageS2C::UpdatePlayerStats { stats } => {
+                                self.game.player_stats = stats;
                             }
                             NetworkMessageS2C::UIOpen {
                                 screen,
@@ -1434,12 +1430,8 @@ impl ClientPlayer {
         }
         raycast_result
     }
-    pub fn update_position(
-        &mut self,
-        delta_time: f32,
-        game: &mut ClientGame,
-        abilities: &PlayerAbilities,
-    ) {
+    pub fn update_position(&mut self, delta_time: f32, game: &mut ClientGame) {
+        let move_mode = MoveMode::Normal;
         self.height_animation = number_approach_smooth(
             self.height_animation,
             self.position.y
@@ -1487,8 +1479,8 @@ impl ClientPlayer {
             move_vector.x /= xz_mag;
             move_vector.z /= xz_mag;
         }
-        move_vector *= abilities.speed;
-        move_vector *= player_entity_data.speed;
+        move_vector *= game.player_stats.speed() / 100. * NORMAL_SPEED;
+        //move_vector *= player_entity_data.speed;
         self.running = game.keys.is_down(KeyCode::ControlLeft);
         if move_vector.length_squared() == 0. {
             self.running = false;
@@ -1502,7 +1494,7 @@ impl ClientPlayer {
         }
         move_vector *= if self.running { 1.35 } else { 1. };
         self.crouching = game.keys.is_down(KeyCode::ShiftLeft);
-        match abilities.move_mode {
+        match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
                 if !self.crouching
                     && CharacterController::collides_at(
@@ -1517,13 +1509,13 @@ impl ClientPlayer {
             }
             MoveMode::NoClip => {}
         }
-        match abilities.move_mode {
+        match move_mode {
             MoveMode::Normal => {
                 if self.crouching {
                     move_vector /= 2.;
                 }
                 if game.keys.is_down(KeyCode::Space) && self.controller.on_ground {
-                    self.controller.velocity.y += player_entity_data.jump_velocity();
+                    self.controller.velocity.y += player_entity_data.base_stats.jump_velocity();
                 }
             }
             MoveMode::Fly | MoveMode::NoClip => {}
@@ -1533,11 +1525,9 @@ impl ClientPlayer {
             delta_time,
             |block| game.get_block(block),
             move_vector,
-            abilities.move_mode,
+            move_mode,
             player_entity_data.hitbox(self.crouching),
-            player_entity_data.acceleration_coefficient
-                * player_entity_data.speed
-                * abilities.speed,
+            ACCELERATION_COEFFICIENT * game.player_stats.speed() / 100. * NORMAL_SPEED,
             0.5,
             game.keys.is_down(KeyCode::ShiftLeft),
         );
@@ -1588,6 +1578,7 @@ impl PartialOrd for ModifiedChunkEntry {
     }
 }
 pub struct ClientGame {
+    pub player_stats: EntityStats,
     pub player_position: Pos,
     pub chunks: AHashMap<ChunkPos, ClientChunk>,
     pub modified_chunks: BinaryHeap<ModifiedChunkEntry>,
@@ -1595,7 +1586,7 @@ pub struct ClientGame {
     pub player_entity: Option<Uuid>,
     pub screen: Option<ScreenData>,
     pub hud: ScreenData,
-    pub hit_timer: Option<f32>,
+    pub hit_timer: Option<HitTimer>,
     pub keys: InputContainer<KeyCode>,
     pub buttons: InputContainer<MouseButton>,
     pub cursor_position: PhysicalPosition<f64>,
@@ -1718,6 +1709,7 @@ impl ChunkBufferPool {
 impl Default for ClientGame {
     fn default() -> Self {
         Self {
+            player_stats: EntityStats::default(),
             player_position: Pos::ZERO,
             chunks: AHashMap::with_capacity(1000), //capacity
             modified_chunks: Default::default(),
@@ -1811,15 +1803,14 @@ impl ClientGame {
             self.viewmodel_player.trigger("run");
         }
         let (mut animation, observers) = self.viewmodel_player.evaluate(viewmodel_graph(), dt);
-        if let Some(hit_timer) = self.hit_timer {
-            let time = hit_timer / self.active_tool().swing_time;
-            let weight = (((time - 0.5) * 2.).abs() - 0.6).max(0.) * 1.5;
+        if let Some(hit_timer) = &self.hit_timer {
+            let weight = (((hit_timer.progress() - 0.5) * 2.).abs() - 0.6).max(0.) * 1.5;
             animation.iter_mut().for_each(|a| {
                 a.weight *= weight;
             });
             animation.push(DrawAnimation {
                 animation: "hit",
-                time: time / 2.,
+                time: hit_timer.progress() / 2.,
                 weight: 1. - weight,
             });
         }
@@ -2184,7 +2175,8 @@ impl ClientGame {
     }
     pub fn tick_server(&mut self) {
         let dt = SERVER_DT;
-        self.stamina += dt * 10.;
+        self.stamina += dt * self.player_stats.stamina_regen();
+        self.stamina = self.stamina.min(self.player_stats.stamina());
         for (_, chunk) in &mut self.chunks {
             let blocks = chunk.mesh_build_data.blocks.read();
             for (offset, health) in chunk.mesh_build_data.components.write().damage.iter_mut() {
@@ -2195,6 +2187,15 @@ impl ClientGame {
     }
     pub fn get_player_data(&self) -> Option<&'static EntityData> {
         Some(self.entities.get(&self.player_entity?)?.key.data())
+    }
+}
+pub struct HitTimer {
+    pub current_time: f32,
+    pub swing_time: f32,
+}
+impl HitTimer {
+    pub fn progress(&self) -> f32 {
+        self.current_time / self.swing_time
     }
 }
 pub struct ClientEntity {

@@ -235,6 +235,7 @@ dependencies = [
  "image-overlay",
  "num-integer",
  "palettevec",
+ "paste",
  "rand 0.9.4",
  "rand_seeder",
  "rand_xoshiro",
