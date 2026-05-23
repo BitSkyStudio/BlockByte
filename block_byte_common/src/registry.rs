@@ -469,6 +469,8 @@ pub struct ItemData {
     pub tool: Option<ToolData>,
     #[serde(default)]
     pub action: ItemAction,
+    #[serde(default)]
+    pub equip_stats: EntityStats,
 }
 impl RegistryRonConfigLoadable for ItemData {}
 #[derive(Deserialize)]
@@ -1198,6 +1200,8 @@ impl ComposedTexture {
 pub struct EntityData {
     #[cfg(feature = "server")]
     pub inventory_size: usize,
+    #[serde(default)]
+    pub equipment_slots: std::ops::Range<usize>,
     pub hitbox_size: f32,
     pub hitbox_height: f32,
     #[serde(default)]

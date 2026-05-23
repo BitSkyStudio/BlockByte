@@ -22,8 +22,8 @@ use std::{
 use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityStats, ItemMoveMode,
-    LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
+    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityStats, HitTimer,
+    ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, ModelGeometry, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
@@ -721,11 +721,7 @@ impl ApplicationHandler for App {
                         crouching: self.camera.crouching,
                     });
                     if let Some(hit_timer) = &mut self.game.hit_timer {
-                        let old_hit_timer = hit_timer.current_time;
-                        hit_timer.current_time += dt;
-                        if old_hit_timer < hit_timer.swing_time * 0.5
-                            && hit_timer.current_time >= hit_timer.swing_time * 0.5
-                        {
+                        if hit_timer.tick(dt) {
                             match self.camera.raycast(&self.game, true) {
                                 RayCastResult::Block(position, face) => {
                                     self.send_message(NetworkMessageC2S::AttackBlock {
@@ -746,7 +742,7 @@ impl ApplicationHandler for App {
                                 }
                             }
                         } else {
-                            if hit_timer.current_time >= hit_timer.swing_time {
+                            if hit_timer.is_finished() {
                                 self.game.hit_timer = None;
                             }
                         }
@@ -2187,15 +2183,6 @@ impl ClientGame {
     }
     pub fn get_player_data(&self) -> Option<&'static EntityData> {
         Some(self.entities.get(&self.player_entity?)?.key.data())
-    }
-}
-pub struct HitTimer {
-    pub current_time: f32,
-    pub swing_time: f32,
-}
-impl HitTimer {
-    pub fn progress(&self) -> f32 {
-        self.current_time / self.swing_time
     }
 }
 pub struct ClientEntity {

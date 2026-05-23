@@ -52,7 +52,7 @@ use crate::{
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
         BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity, WorldAccess,
-        WorldAccessCell, WorldAccessRef, WorldEvent, tick_chunk,
+        WorldAccessCell, WorldAccessRef, WorldEvent, compute_tool_damage, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -222,12 +222,6 @@ fn main() {
                 std::iter::once(user),
                 NetworkMessageS2C::SetPlayerEntity {
                     uuid: Some(player_uuid),
-                },
-            );
-            server.message_queue.send_message(
-                std::iter::once(user),
-                NetworkMessageS2C::UpdatePlayerStats {
-                    stats: EntityStats::default(),
                 },
             );
             server.message_queue.send_message(
@@ -693,23 +687,10 @@ impl User {
                     }
                 }
                 NetworkMessageC2S::AttackBlock { position, face } => {
-                    let item = &entity.inventory.items[entity.hand_slot];
-                    let tool = item
-                        .as_ref()
-                        .and_then(|item| item.item.data().tool.clone())
-                        .unwrap_or(ToolData::hand());
-                    let quality_multiplier = match item {
-                        Some(item) => item
-                            .components
-                            .get_component::<ItemQuality>()
-                            .map(|quality| quality.factor())
-                            .unwrap_or(1.),
-                        None => 1.,
-                    };
-                    let strength_multiplier = entity.current_stats().strength() / 100.;
-                    let mut damage_table = DamageTable::default();
-                    damage_table[tool.damage_type] =
-                        Some(tool.damage * quality_multiplier * strength_multiplier);
+                    let damage_table = compute_tool_damage(
+                        entity.inventory.get_raw(entity.hand_slot),
+                        &entity.current_stats,
+                    );
                     let (chunk, offset) = position.to_chunk_pos_offset();
                     let _ = world.schedule_event(
                         chunk,
@@ -828,6 +809,7 @@ impl User {
                 }
                 NetworkMessageC2S::HotbarSelect { slot } => {
                     entity.hand_slot = slot;
+                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::InteractBlock { position } => {
                     let Some(block) = world.get_block(position) else {
@@ -864,6 +846,7 @@ impl User {
                                     );
                                 }
                             }
+                            entity.current_stats_dirty = true;
                         }
                         BlockInteractAction::ModifyProperty {
                             property,
@@ -898,7 +881,10 @@ impl User {
                         EntityInteractAction::Ignore => {}
                         EntityInteractAction::Pickup => {
                             let mut items_present = false;
-                            let player_view = entity.inventory.full_view();
+                            let mut player_view = entity.inventory.full_view();
+                            player_view.slots.retain(|slot| {
+                                !entity.key.data().equipment_slots.contains(&slot.slot)
+                            });
                             for slot in &mut other_entity.inventory.items {
                                 if let Some(item) = &slot {
                                     *slot = entity.inventory.add_item(&player_view, item.clone());
@@ -907,6 +893,7 @@ impl User {
                                     }
                                 }
                             }
+                            entity.current_stats_dirty = true;
                             if !items_present {
                                 world.remove_entity(other_entity);
                             }
@@ -916,23 +903,10 @@ impl User {
                 NetworkMessageC2S::AttackEntity {
                     entity: other_entity_id,
                 } => {
-                    let item = &entity.inventory.items[entity.hand_slot];
-                    let tool = item
-                        .as_ref()
-                        .and_then(|item| item.item.data().tool.clone())
-                        .unwrap_or(ToolData::hand());
-                    let quality_multiplier = match item {
-                        Some(item) => item
-                            .components
-                            .get_component::<ItemQuality>()
-                            .map(|quality| quality.factor())
-                            .unwrap_or(1.),
-                        None => 1.,
-                    };
-                    let strength_multiplier = entity.current_stats().strength() / 100.;
-                    let mut damage_table = DamageTable::default();
-                    damage_table[tool.damage_type] =
-                        Some(tool.damage * quality_multiplier * strength_multiplier);
+                    let damage_table = compute_tool_damage(
+                        entity.inventory.get_raw(entity.hand_slot),
+                        &entity.current_stats,
+                    );
                     world
                         .schedule_event(
                             world.center_chunk,
@@ -950,7 +924,8 @@ impl User {
                             WorldEvent::EntityKnockback {
                                 entity: other_entity_id,
                                 knockback: (knockback_direction + Pos::Y * 0.3)
-                                    * tool.knockback
+                                //todo: handle knockback
+                                    //* tool.knockback
                                     * 4.,
                             },
                         )
@@ -968,6 +943,7 @@ impl User {
                     } else {
                         continue;
                     };
+                    entity.current_stats_dirty = true;
                     let mut item_entity =
                         Entity::new(EntityKey::id("item").unwrap(), entity.get_eye());
                     item_entity.direction = LookDirection {
@@ -1052,6 +1028,7 @@ impl User {
                             &mut to_provided.get_mut().items[to_index],
                         );
                     }
+                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::Research { research } => {
                     let screen = self.screen.lock();
@@ -1100,6 +1077,7 @@ impl User {
                             research: entity.research.clone(),
                         },
                     );
+                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::Craft { recipe, mut count } => {
                     let screen = self.screen.lock();
@@ -1138,6 +1116,7 @@ impl User {
                             }
                         }
                     }
+                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::OpenPlayerInventory => {
                     self.set_screen(
@@ -1211,6 +1190,7 @@ impl User {
                             *item_slot = None;
                         }
                     }
+                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::GiveItem { item, stack } => {
                     let screen = self.screen.lock();
@@ -1230,6 +1210,7 @@ impl User {
                         item,
                         if stack { item.data().stack_size } else { 1 },
                     ));
+                    entity.current_stats_dirty = true;
                 }
             }
         }

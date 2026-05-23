@@ -16,7 +16,7 @@ use std::{
 
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, CharacterController, Color, DamageTable, DamageType, EntityStats,
-    InventoryView, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
+    HitTimer, InventoryView, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
@@ -42,6 +42,7 @@ use parking_lot::{Mutex, RwLock};
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use rand_seeder::Seeder;
 use serde::{Deserialize, Serialize};
+use serde_default_utils::default_bool;
 use slotmap::{SlotMap, new_key_type};
 use smallvec::SmallVec;
 use splines::{Interpolation, Spline};
@@ -50,7 +51,9 @@ use uuid::Uuid;
 use crate::{
     InventoryProvider, MessageQueue, ProvidedInventory, ProvidedInventoryList, Server, User,
     UserIndex, UserScreenState,
-    inventory::{Inventory, ItemQuality, ItemStack, generate_loot_table, lock_inventories},
+    inventory::{
+        Inventory, ItemCraftStats, ItemQuality, ItemStack, generate_loot_table, lock_inventories,
+    },
     registry::{Key, RegistryConfigLoadable},
 };
 #[derive(Serialize, Deserialize)]
@@ -213,8 +216,10 @@ pub fn tick_chunk(world: &WorldAccess) {
                 let Some(mut entity) = world.get_entity(entity_id) else {
                     continue;
                 };
-                //todo: better formula, maybe log?
-                if rand::random_bool(entity.current_stats().evasion() as f64 / 100.) {
+                //todo: better formula?
+                if rand::random_bool(
+                    1. - 1. / (entity.current_stats.evasion().max(0.) as f64 / 100. + 2.).log2(),
+                ) {
                     continue;
                 }
                 let entity_data = entity.key.data();
@@ -225,8 +230,8 @@ pub fn tick_chunk(world: &WorldAccess) {
                     })
                     .sum::<f32>();
                 let received_damage = received_damage
-                    * (entity.current_stats().vulnerability() / 100.)
-                    / (1. + entity.current_stats().armor() / 100.);
+                    * (entity.current_stats.vulnerability() / 100.)
+                    / (1. + entity.current_stats.armor().max(0.) / 100.);
                 if let Some(source_entity) = source_entity {
                     if let Some(brain) = &mut entity.brain {
                         *brain.received_attacks.entry(source_entity).or_insert(0.) +=
@@ -263,13 +268,43 @@ pub fn tick_chunk(world: &WorldAccess) {
         let mut entity = &mut *entity_ref;
         entity.effects.retain_mut(|effect| {
             if effect.timer <= 1 {
-                entity.cached_stats = None;
+                entity.current_stats_dirty = true;
                 false
             } else {
                 effect.timer -= 1;
                 true
             }
         });
+        if entity.current_stats_dirty {
+            entity.current_stats_dirty = false;
+            let mut stats = entity.key.data().base_stats.clone();
+            for effect in &entity.effects {
+                stats.apply(&effect.stats);
+            }
+            let mut apply_item = |item: &ItemStack| {
+                stats.apply(&item.item.data().equip_stats);
+                if let Some(craft_stats) = item.components.get_component::<ItemCraftStats>() {
+                    stats.apply(&craft_stats.0);
+                }
+            };
+            for equipment in entity.key.data().equipment_slots.clone() {
+                if let Some(item) = &entity.inventory.get_raw(equipment) {
+                    apply_item(item);
+                }
+            }
+            if let Some(item) = &entity.inventory.get_raw(entity.hand_slot) {
+                apply_item(item);
+            }
+            if let Some(controlling_user) = entity.controlling_user {
+                world.send(
+                    controlling_user,
+                    NetworkMessageS2C::UpdatePlayerStats {
+                        stats: stats.clone(),
+                    },
+                );
+            }
+            entity.current_stats = stats;
+        }
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
             std::mem::swap(&mut velocity, &mut entity.character_controller.velocity);
@@ -314,11 +349,12 @@ pub fn tick_chunk(world: &WorldAccess) {
                         let mut properties = PropertyMap(HashMap::new());
                         let screen_data = screen.screen.data();
                         for (inventory, view) in &screen.inventories {
-                            let mut load_inventory = |inventory: &Inventory| {
-                                items.extend(view.slots.iter().map(|i| {
-                                    inventory.items[i.slot].as_ref().map(|item| item.client())
-                                }));
-                            };
+                            let mut load_inventory =
+                                |inventory: &Inventory| {
+                                    items.extend(view.slots.iter().map(|i| {
+                                        inventory.get_raw(i.slot).map(|item| item.client())
+                                    }));
+                                };
                             match inventory {
                                 InventoryProvider::Entity(uuid) => {
                                     if *uuid == entity.uuid {
@@ -600,21 +636,10 @@ pub struct Entity {
     pub direction: LookDirection,
     pub crouching: bool,
     pub effects: Vec<ActiveEffect>,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub cached_stats: Option<EntityStats>,
-}
-impl Entity {
-    pub fn current_stats<'a>(&'a mut self) -> &'a EntityStats {
-        self.cached_stats.get_or_insert_with(|| {
-            let mut stats = self.key.data().base_stats.clone();
-            for effect in &self.effects {
-                stats.apply(&effect.stats);
-            }
-            //todo: equipment
-            //todo: if controlled send to player
-            stats
-        })
-    }
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub current_stats: EntityStats,
+    #[serde(skip_serializing, skip_deserializing, default = "default_bool::<true>")]
+    pub current_stats_dirty: bool,
 }
 #[derive(Serialize, Deserialize)]
 pub struct ActiveEffect {
@@ -626,6 +651,7 @@ pub struct MobBrain {
     pub goal: Option<Pos>,
     pub path: Vec<Pos>,
     pub received_attacks: HashMap<Uuid, f32>,
+    pub hit_timer: Option<HitTimer>,
 }
 impl MobBrain {
     pub fn new() -> Self {
@@ -633,6 +659,7 @@ impl MobBrain {
             goal: None,
             path: Vec::new(),
             received_attacks: HashMap::new(),
+            hit_timer: None,
         }
     }
     pub fn recalculate_path(&mut self, position: Pos, world: &WorldAccess) {
@@ -729,7 +756,8 @@ impl Entity {
             direction: LookDirection { pitch: 0., yaw: 0. },
             crouching: false,
             effects: Vec::new(),
-            cached_stats: None,
+            current_stats: EntityStats::default(),
+            current_stats_dirty: false,
         }
     }
     pub fn get_eye(&self) -> Pos {
@@ -745,7 +773,7 @@ impl Entity {
         match &entity_data.ai {
             Some(ai) => {
                 let entity_eye_position = self.get_eye();
-                let current_health_regen = self.current_stats().regen();
+                let current_health_regen = self.current_stats.regen();
                 let mut brain = self.brain.as_mut().unwrap();
                 brain.received_attacks.retain(|_, damage| {
                     *damage -= current_health_regen * SERVER_DT;
@@ -778,9 +806,49 @@ impl Entity {
                     });
                 if let Some((target_id, target_position, _)) = target_entity {
                     brain.goal = Some(target_position);
+                    let hand_item = self.inventory.get_raw(self.hand_slot);
+                    let tool = hand_item
+                        .and_then(|item| item.item.data().tool)
+                        .unwrap_or(ToolData::hand());
+                    //todo: should be eye position
+                    if target_position.distance(self.position) <= tool.reach {
+                        if let Some(timer) = &mut brain.hit_timer {
+                            if timer.tick(SERVER_DT) {
+                                let damage_table =
+                                    compute_tool_damage(hand_item, &self.current_stats);
+                                world.schedule_event(
+                                    target_position.to_chunk_pos(),
+                                    WorldEvent::EntityDamage {
+                                        entity: target_id,
+                                        damage: damage_table,
+                                        source_entity: Some(self.uuid),
+                                    },
+                                );
+                                world
+                                    .schedule_event(
+                                        world.center_chunk,
+                                        WorldEvent::EntityKnockback {
+                                            entity: target_id,
+                                            knockback: (self.direction.make_front() + Pos::Y * 0.3)
+                                                * 4.,
+                                        },
+                                    )
+                                    .unwrap();
+                            }
+                            if timer.is_finished() {
+                                brain.hit_timer = None;
+                            }
+                        } else {
+                            brain.hit_timer = Some(HitTimer {
+                                current_time: 0.,
+                                swing_time: tool.swing_time,
+                            });
+                        }
+                    }
                 } else {
                     brain.goal = None;
                     brain.path.clear();
+                    brain.hit_timer = None;
                 }
 
                 if (self.uuid.as_u64_pair().0 + world.ticks_passed) % (SERVER_TPS as u64 / 2) == 0 {
@@ -1937,4 +2005,23 @@ impl<T, L: PartialEq> std::ops::DerefMut for WorldAccessRef<'_, T, L> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.value.as_mut() }
     }
+}
+
+pub fn compute_tool_damage(item: Option<&ItemStack>, stats: &EntityStats) -> DamageTable {
+    let tool = item
+        .as_ref()
+        .and_then(|item| item.item.data().tool.clone())
+        .unwrap_or(ToolData::hand());
+    let quality_multiplier = match item {
+        Some(item) => item
+            .components
+            .get_component::<ItemQuality>()
+            .map(|quality| quality.factor())
+            .unwrap_or(1.),
+        None => 1.,
+    };
+    let strength_multiplier = stats.strength() / 100.;
+    let mut damage_table = DamageTable::default();
+    damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier * strength_multiplier);
+    damage_table
 }

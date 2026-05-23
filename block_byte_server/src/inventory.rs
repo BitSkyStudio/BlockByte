@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use block_byte_common::{
-    ClientItem, InventoryView, ViewSlot,
+    ClientItem, EntityStats, InventoryView, ViewSlot,
     registry::{
         ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierInteger, LootTableData,
         LootTableKey,
@@ -276,7 +276,7 @@ macro_rules! create_component_enum{
     }
 }
 
-create_component_enum!(ItemDurability, ItemMana, ItemQuality);
+create_component_enum!(ItemDurability, ItemMana, ItemQuality, ItemCraftStats);
 
 pub trait ItemComponentManipulation: Sized {
     fn merge(&self, other: &Self) -> Option<Self>;
@@ -355,6 +355,19 @@ impl ItemComponentManipulation for ItemQuality {
         format!("Quality: {:?}", self)
     }
 }
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ItemCraftStats(pub Box<EntityStats>);
+impl ItemComponentManipulation for ItemCraftStats {
+    fn merge(&self, other: &Self) -> Option<Self> {
+        None
+    }
+    fn split(&self, first_count: ItemCount, second_count: ItemCount) -> (Self, Self) {
+        (self.clone(), self.clone())
+    }
+    fn description(&self) -> String {
+        "todo".to_string()
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Inventory {
@@ -368,6 +381,12 @@ impl Inventory {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         }
+    }
+    pub fn get_raw<'a>(&'a self, slot: usize) -> Option<&'a ItemStack> {
+        if slot >= self.items.len() {
+            return None;
+        }
+        self.items[slot].as_ref()
     }
     pub fn full_view(&self) -> InventoryView {
         InventoryView::from_range(0..self.items.len())

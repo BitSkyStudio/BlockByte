@@ -241,6 +241,17 @@ macro_rules! create_entity_stats {
                 [<$id _mul>]: f32,
             )*
         }
+        impl PartialEq for EntityStats{
+            fn eq(&self, other: &Self) -> bool{
+                $(
+                    if self.[<$id _add>] != other.[<$id _add>] || self.[<$id _mul>] != other.[<$id _mul>] {
+                        return false;
+                    }
+                )*
+                true
+            }
+        }
+        impl Eq for EntityStats{}
         }
         impl Default for EntityStats{
             fn default() -> Self{
@@ -495,4 +506,22 @@ pub fn number_approach_smooth(
         return target;
     }
     current + step
+}
+#[derive(Serialize, Deserialize)]
+pub struct HitTimer {
+    pub current_time: f32,
+    pub swing_time: f32,
+}
+impl HitTimer {
+    pub fn tick(&mut self, dt: f32) -> bool {
+        let old_hit_timer = self.current_time;
+        self.current_time += dt;
+        old_hit_timer < self.swing_time * 0.5 && self.current_time >= self.swing_time * 0.5
+    }
+    pub fn is_finished(&self) -> bool {
+        self.current_time >= self.swing_time
+    }
+    pub fn progress(&self) -> f32 {
+        self.current_time / self.swing_time
+    }
 }
