@@ -199,178 +199,44 @@ fn render_element(
             background.border as f32 / bg_texture_data.width() as f32,
             background.border as f32 / bg_texture_data.height() as f32,
         );
-        //println!("{}", bg_context.content.size.x);
-        //todo: draw borders
-        let inside_width = layout.size.width - layout.border.right - layout.border.left;
-        let inside_height = layout.size.height - layout.border.top - layout.border.bottom;
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos::all(0.),
-                size: UIPos {
-                    x: layout.border.left,
-                    y: layout.border.top,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: 0.,
-                v1: 0.,
-                u2: border_u,
-                v2: border_v,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: layout.border.left,
-                    y: 0.,
-                },
-                size: UIPos {
-                    x: inside_width,
-                    y: layout.border.top,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: border_u,
-                v1: 0.,
-                u2: 1. - border_u,
-                v2: border_v,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: layout.size.width - layout.border.right,
-                    y: 0.,
-                },
-                size: UIPos {
-                    x: layout.border.right,
-                    y: layout.border.top,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: 1. - border_u,
-                v1: 0.,
-                u2: 1.,
-                v2: border_v,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: 0.,
-                    y: layout.border.top,
-                },
-                size: UIPos {
-                    x: layout.border.left,
-                    y: inside_height,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: 0.,
-                v1: border_v,
-                u2: border_u,
-                v2: 1. - border_v,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: 0.,
-                    y: layout.border.top + inside_height,
-                },
-                size: UIPos {
-                    x: layout.border.left,
-                    y: layout.border.bottom,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: 0.,
-                v1: 1. - border_v,
-                u2: border_u,
-                v2: 1.,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: layout.border.left + inside_width,
-                    y: layout.border.top,
-                },
-                size: UIPos {
-                    x: layout.border.left,
-                    y: inside_height,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: 1. - border_u,
-                v1: border_v,
-                u2: 1.,
-                v2: 1. - border_v,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: layout.border.left + inside_width,
-                    y: layout.border.top + inside_height,
-                },
-                size: UIPos {
-                    x: layout.border.left,
-                    y: layout.border.bottom,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: 1. - border_u,
-                v1: 1. - border_v,
-                u2: 1.,
-                v2: 1.,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: layout.border.left,
-                    y: layout.border.top + inside_height,
-                },
-                size: UIPos {
-                    x: inside_width,
-                    y: layout.border.bottom,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: border_u,
-                v1: 1. - border_v,
-                u2: 1. - border_u,
-                v2: 1.,
-            }),
-            Color::WHITE,
-        );
-        bg_context.draw_quad(
-            UIRect {
-                pos: UIPos {
-                    x: layout.border.left,
-                    y: layout.border.top,
-                },
-                size: UIPos {
-                    x: inside_width,
-                    y: inside_height,
-                },
-            },
-            texture.map_sub(TexCoords {
-                u1: border_u,
-                v1: border_v,
-                u2: 1. - border_u,
-                v2: 1. - border_v,
-            }),
-            Color::WHITE,
-        );
+        let grid_pos_x = [
+            0.,
+            layout.border.left,
+            layout.size.width - layout.border.right,
+            layout.size.width,
+        ];
+        let grid_pos_y = [
+            0.,
+            layout.border.top,
+            layout.size.height - layout.border.bottom,
+            layout.size.height,
+        ];
+        let grid_uv_x = [0., border_u, 1. - border_u, 1.];
+        let grid_uv_y = [0., border_v, 1. - border_v, 1.];
+        for x in 0..3 {
+            for y in 0..3 {
+                let x1 = grid_pos_x[x];
+                let x2 = grid_pos_x[x + 1];
+                let y1 = grid_pos_y[y];
+                let y2 = grid_pos_y[y + 1];
+                bg_context.draw_quad(
+                    UIRect {
+                        pos: UIPos { x: x1, y: y1 },
+                        size: UIPos {
+                            x: x2 - x1,
+                            y: y2 - y1,
+                        },
+                    },
+                    texture.map_sub(TexCoords {
+                        u1: grid_uv_x[x],
+                        v1: grid_uv_y[y],
+                        u2: grid_uv_x[x + 1],
+                        v2: grid_uv_y[y + 1],
+                    }),
+                    Color::WHITE,
+                );
+            }
+        }
     }
     let mut context = UIElementRenderContext {
         aspect_ratio,
