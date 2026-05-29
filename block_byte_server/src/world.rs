@@ -30,6 +30,7 @@ use block_byte_common::{
     },
     rotation::BlockRotation,
     scripts::{self, CallbackResult, ExternalScriptByteCode, RunResult, ScriptState, ScriptValue},
+    time_to_ticks,
     ui::PropertyMap,
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockMachine,
@@ -279,12 +280,17 @@ pub fn tick_chunk(world: &WorldAccess) {
             entity.current_stats_dirty = false;
             let mut stats = entity.key.data().base_stats.clone();
             for effect in &entity.effects {
-                stats.apply(&effect.stats);
+                stats.apply(&effect.stats, 1.);
             }
             let mut apply_item = |item: &ItemStack| {
-                stats.apply(&item.item.data().equip_stats);
+                let quality_multiplier = item
+                    .components
+                    .get_component::<ItemQuality>()
+                    .map(|quality| quality.factor())
+                    .unwrap_or(1.);
+                stats.apply(&item.item.data().equip_stats, quality_multiplier);
                 if let Some(craft_stats) = item.components.get_component::<ItemCraftStats>() {
-                    stats.apply(&craft_stats.0);
+                    stats.apply(&craft_stats.0, quality_multiplier);
                 }
             };
             for equipment in entity.key.data().equipment_slots.clone() {
@@ -1091,7 +1097,7 @@ impl BlockMachine {
                     |state, instruction| match instruction {
                         MachineInstrution::Yield => CallbackResult::Suspend,
                         MachineInstrution::Sleep { time } => {
-                            self.sleep_cooldown = (*time * SERVER_TPS as f32).round() as u32;
+                            self.sleep_cooldown = time_to_ticks(*time);
                             CallbackResult::Suspend
                         }
                         MachineInstrution::Block => {
@@ -1298,8 +1304,7 @@ impl BlockMachine {
                                 for output in generate_loot_table(recipe.outputs.data()) {
                                     self.inventory.add_item(output_view, output);
                                 }
-                                self.sleep_cooldown =
-                                    (recipe.craft_time * speed * SERVER_TPS as f32).round() as u32;
+                                self.sleep_cooldown = time_to_ticks(recipe.craft_time * speed);
                                 state.pc = *success;
                                 return CallbackResult::Suspend;
                             }

@@ -21,6 +21,10 @@ pub const GRAVITY_ACCELERATION: f32 = 25.;
 pub const NORMAL_SPEED: f32 = 5.;
 pub const ACCELERATION_COEFFICIENT: f32 = 8.;
 
+pub const fn time_to_ticks(time: f32) -> u32 {
+    (time * SERVER_TPS as f32).round() as u32
+}
+
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum MoveMode {
     Normal,
@@ -266,11 +270,11 @@ macro_rules! create_entity_stats {
             }
         }
         impl EntityStats {
-            pub fn apply(&mut self, other: &EntityStats){
+            pub fn apply(&mut self, other: &EntityStats, quality: f32){
                 $(
                     paste::paste! {
-                    self.[<$id _add>] += other.[<$id _add>];
-                    self.[<$id _mul>] *= other.[<$id _mul>];
+                    self.[<$id _add>] += other.[<$id _add>] * quality;
+                    self.[<$id _mul>] *= (other.[<$id _mul>] - 1.) * quality + 1.;
                     }
                 )*
             }

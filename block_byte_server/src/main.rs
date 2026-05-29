@@ -23,6 +23,7 @@ use block_byte_common::{
     },
     rotation::BlockRotation,
     scripts::{ScriptState, ScriptValue},
+    time_to_ticks,
     ui::{PropertyMap, UIScreenKey},
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
@@ -51,8 +52,9 @@ use crate::{
     },
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
-        BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData, Entity, WorldAccess,
-        WorldAccessCell, WorldAccessRef, WorldEvent, compute_tool_damage, tick_chunk,
+        ActiveEffect, BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData,
+        Entity, WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent, compute_tool_damage,
+        tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -796,6 +798,16 @@ impl User {
                                     }
                                 }
                             }
+                            ItemAction::Consume {
+                                effects,
+                                effect_duration,
+                            } => {
+                                entity.effects.push(ActiveEffect {
+                                    stats: effects.clone(),
+                                    timer: time_to_ticks(*effect_duration),
+                                });
+                                item.count -= 1;
+                            }
                         }
                         if item.count == 0 {
                             *item_stack = None;
@@ -1376,8 +1388,6 @@ pub struct ServerConfig {
     view_distance: i16,
     #[serde(default = "default_i16::<12>")]
     world_chunk_height: i16,
-    #[serde(skip_deserializing, default)]
-    is_structure_creation_world: bool,
 }
 static SERVER_CONFIG_INSTANCE: OnceLock<ServerConfig> = OnceLock::new();
 impl ServerConfig {

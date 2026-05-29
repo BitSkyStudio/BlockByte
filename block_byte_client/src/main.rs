@@ -70,7 +70,7 @@ use crate::{
         GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, SurfaceError,
         Vertex, draw_model, get_block_matrix,
     },
-    ui::{HoveredElement, ScreenData, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
+    ui::{ScreenData, TextRenderer, UIInput, UIPos, UIRect, render_screen, text_renderer},
 };
 
 static START_TIMER: OnceLock<Instant> = OnceLock::new();
@@ -296,7 +296,9 @@ impl ApplicationHandler for App {
                 delta,
                 phase,
             } => match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, scroll) => {
+                winit::event::MouseScrollDelta::LineDelta(scroll_x, scroll_y) => {
+                    self.game.wheel_scroll_delta.x += scroll_x;
+                    self.game.wheel_scroll_delta.y += scroll_y;
                     if self.game.screen.is_none() {
                         if self.game.keys.is_down(KeyCode::KeyG) {
                             if let Some(held_item) = self.game.held_item() {
@@ -309,7 +311,7 @@ impl ApplicationHandler for App {
                                         .get(&held_item.item)
                                         .unwrap_or(&0)
                                         as isize;
-                                    new_variant -= scroll as isize;
+                                    new_variant -= scroll_y as isize;
                                     new_variant = ((new_variant % variation_count)
                                         + variation_count)
                                         % variation_count;
@@ -321,7 +323,7 @@ impl ApplicationHandler for App {
                             }
                         } else {
                             let mut new_slot = self.game.hotbar_slot as isize;
-                            new_slot += -scroll as isize;
+                            new_slot += -scroll_y as isize;
                             new_slot = ((new_slot % 10) + 10) % 10;
                             self.game.hotbar_slot = new_slot as usize;
                             self.send_message(NetworkMessageC2S::HotbarSelect {
@@ -450,130 +452,43 @@ impl ApplicationHandler for App {
                     .properties
                     .0
                     .insert("hotbar_slot".to_string(), self.game.hotbar_slot as f32);
+                let mut message_queue = Vec::new();
                 render_screen(
-                    &self.game.hud,
+                    &mut self.game.hud,
+                    None,
                     render_state.size(),
-                    self.game.cursor_position,
                     &mut gui_mesh,
-                    false,
                     dt,
+                    &mut message_queue,
                 );
 
                 if let Some(screen) = &mut self.game.screen {
-                    if let Some(hovered) = render_screen(
+                    render_screen(
                         screen,
-                        render_state.size(),
-                        self.game.cursor_position,
-                        &mut gui_mesh,
-                        true,
-                        dt,
-                    ) {
-                        match hovered {
-                            HoveredElement::Slot(target_slot) => match screen.selected_slot {
-                                Some((slot, button)) => {
-                                    let move_mode = match button {
-                                        MouseButton::Left => {
-                                            if self.game.buttons.is_just_up(MouseButton::Left) {
-                                                Some(ItemMoveMode::Stack)
-                                            } else if self
-                                                .game
-                                                .buttons
-                                                .is_just_down(MouseButton::Right)
-                                            {
-                                                Some(ItemMoveMode::Single)
-                                            } else {
-                                                None
-                                            }
-                                        }
-                                        MouseButton::Right => {
-                                            if self.game.buttons.is_just_up(MouseButton::Right) {
-                                                Some(ItemMoveMode::Half)
-                                            } else {
-                                                None
-                                            }
-                                        }
-                                        _ => unreachable!(),
-                                    };
-                                    if let Some(mode) = move_mode {
-                                        match target_slot {
-                                            SlotId::Id(target_slot) => {
-                                                self.connection.tx.send(
-                                                    NetworkMessageC2S::MoveItem {
-                                                        from: slot,
-                                                        to: target_slot,
-                                                        mode,
-                                                    },
-                                                );
-                                            }
-                                            SlotId::Trash => {
-                                                self.connection.tx.send(
-                                                    NetworkMessageC2S::TrashItem { slot, mode },
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                None => match target_slot {
-                                    SlotId::Id(target_slot) => {
-                                        for button in [MouseButton::Left, MouseButton::Right] {
-                                            if self.game.buttons.is_just_down(button) {
-                                                screen.selected_slot = Some((target_slot, button));
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    SlotId::Trash => {}
+                        Some(
+                            &(UIInput {
+                                mouse_position: UIPos {
+                                    x: self.game.cursor_position.x as f32,
+                                    y: self.game.cursor_position.y as f32,
                                 },
-                            },
-                            HoveredElement::Craft(key) => {
-                                for (button, count) in
-                                    [(MouseButton::Left, 1), (MouseButton::Right, 5)]
-                                {
-                                    if self.game.buttons.is_just_down(button) {
-                                        self.connection
-                                            .tx
-                                            .send(NetworkMessageC2S::Craft { recipe: key, count });
-                                    }
-                                }
-                            }
-                            HoveredElement::Research(key) => {
-                                if self.game.buttons.is_just_down(MouseButton::Left) {
-                                    self.connection
-                                        .tx
-                                        .send(NetworkMessageC2S::Research { research: key });
-                                }
-                            }
-                            HoveredElement::Button {
-                                property,
-                                value,
-                                modify_mode,
-                            } => {
-                                if self.game.buttons.is_just_down(MouseButton::Left) {
-                                    self.connection.tx.send(NetworkMessageC2S::UIButtonPress {
-                                        property,
-                                        value,
-                                        modify_mode,
-                                    });
-                                }
-                            }
-                            HoveredElement::CheatGive(item) => {
-                                for (button, stack) in
-                                    [(MouseButton::Left, false), (MouseButton::Right, true)]
-                                {
-                                    if self.game.buttons.is_just_down(button) {
-                                        self.connection
-                                            .tx
-                                            .send(NetworkMessageC2S::GiveItem { item, stack });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Some((_, button)) = screen.selected_slot.as_ref() {
-                        if !self.game.buttons.is_down(*button) {
-                            screen.selected_slot = None;
-                        }
-                    }
+                                last_mouse_position: UIPos {
+                                    x: self.game.last_cursor_position.x as f32,
+                                    y: self.game.last_cursor_position.y as f32,
+                                },
+                                last_scroll: self.game.wheel_scroll_delta,
+                                buttons: &self.game.buttons,
+                                keys: &self.game.keys,
+                            }),
+                        ),
+                        render_state.size(),
+                        &mut gui_mesh,
+                        dt,
+                        &mut message_queue,
+                    );
+                }
+
+                for message in message_queue {
+                    self.send_message(message);
                 }
 
                 if self.game.buttons.is_just_down(MouseButton::Right) && self.game.screen.is_none()
@@ -898,7 +813,7 @@ impl ApplicationHandler for App {
                                     slots,
                                     properties,
                                     selected_slot: None,
-                                    slot_action_prediction: RefCell::new(HashMap::new()),
+                                    slot_action_prediction: HashMap::new(),
                                 });
                                 let render_state = self.render_state.as_ref().unwrap();
                                 render_state.window().set_cursor_visible(true);
@@ -914,7 +829,7 @@ impl ApplicationHandler for App {
                                 if let Some(screen) = &mut self.game.screen {
                                     if slot < screen.slots.len() {
                                         screen.slots[slot] = item;
-                                        screen.slot_action_prediction.borrow_mut().remove(&slot);
+                                        screen.slot_action_prediction.remove(&slot);
                                     }
                                 }
                             }
@@ -973,6 +888,8 @@ impl ApplicationHandler for App {
 
                 self.game.buttons.frame_clear(dt);
                 self.game.keys.frame_clear(dt);
+                self.game.last_cursor_position = self.game.cursor_position;
+                self.game.wheel_scroll_delta = UIPos { x: 0., y: 0. };
 
                 let profiler_data = profiler::profiler_consume();
                 if self.last_update.elapsed().as_millis() > 18 && false {
@@ -1586,6 +1503,8 @@ pub struct ClientGame {
     pub keys: InputContainer<KeyCode>,
     pub buttons: InputContainer<MouseButton>,
     pub cursor_position: PhysicalPosition<f64>,
+    pub last_cursor_position: PhysicalPosition<f64>,
+    pub wheel_scroll_delta: UIPos,
     pub hotbar_slot: usize,
     pub item_variation: HashMap<ItemKey, usize>,
     pub viewmodel_player: AnimationPlayer,
@@ -1717,12 +1636,14 @@ impl Default for ClientGame {
                 slots: vec![None; 10],
                 properties: PropertyMap(HashMap::new()),
                 selected_slot: None,
-                slot_action_prediction: RefCell::new(HashMap::new()),
+                slot_action_prediction: HashMap::new(),
             },
             hit_timer: None,
             keys: InputContainer::default(),
             buttons: InputContainer::default(),
             cursor_position: PhysicalPosition::new(0., 0.),
+            last_cursor_position: PhysicalPosition::new(0., 0.),
+            wheel_scroll_delta: UIPos { x: 0., y: 0. },
             hotbar_slot: 0,
             item_variation: HashMap::new(),
             chunk_mesh_channels: std::sync::mpsc::channel(),

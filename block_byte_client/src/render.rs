@@ -966,9 +966,9 @@ impl CameraUniform {
         };
         self.direction = dir.normalize().into();
         let eye = Point3 {
-            x: player_pos.x,
-            y: player_pos.y + 0.,
-            z: player_pos.z,
+            x: player_pos.x.floor(),
+            y: player_pos.y.floor() + 0.,
+            z: player_pos.z.floor(),
         } + dir * 4.;
         let shadow_size = 160.;
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX

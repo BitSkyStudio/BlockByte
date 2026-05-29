@@ -11,6 +11,7 @@ use taffy::{
     AlignContent, AlignItems, AlignSelf, Dimension, Display, FlexDirection, FlexWrap,
     JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Size,
 };
+use uuid::Uuid;
 
 use crate::{
     net::PropertyModifyMode,
@@ -160,6 +161,7 @@ pub struct UIElement {
     pub element_type: UIElementType,
     pub style: UIStyleList,
     pub style_classes: Vec<UIStyleListKey>,
+    pub uuid: Uuid,
 }
 impl UIElement {
     pub fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
@@ -184,6 +186,7 @@ impl UIElement {
                     .collect(),
                 None => Vec::new(),
             },
+            uuid: Uuid::new_v4(),
         })
     }
 }

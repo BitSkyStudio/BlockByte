@@ -480,6 +480,10 @@ pub enum ItemAction {
     SpawnEntity(EntityKey),
     Plant(PlantKey),
     RotateBlock,
+    Consume {
+        effects: EntityStats,
+        effect_duration: f32,
+    },
 }
 impl ItemAction {
     pub fn variation_count(&self) -> usize {

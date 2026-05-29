@@ -1,9 +1,9 @@
 use std::{cell::RefCell, collections::HashMap, sync::OnceLock, u32};
 
 use block_byte_common::{
-    ClientItem, Color, TexCoords,
+    ClientItem, Color, ItemMoveMode, TexCoords,
     coord::Pos,
-    net::PropertyModifyMode,
+    net::{NetworkMessageC2S, PropertyModifyMode},
     registry::{BlockRenderData, ItemKey, ItemModel, Key, RecipeKey, ResearchKey, TextureKey},
     scripts::ScriptValue,
     ui::{
@@ -19,10 +19,12 @@ use taffy::{
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::MouseButton,
+    keyboard::KeyCode,
 };
 
 use crate::{
-    ClientGame, ClientPlayer, GUIMesh, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt,
+    ClientGame, ClientPlayer, GUIMesh, InputContainer, TEXTURE_ATLAS, TexCoordsExt,
+    TexCoordsIndexExt,
     render::{CameraUniform, GUIVertex, MeshVertexConsumer, item_model_icon_view},
     translate,
 };
@@ -32,41 +34,40 @@ pub struct ScreenData {
     pub slots: Vec<Option<ClientItem>>,
     pub properties: PropertyMap,
     pub selected_slot: Option<(usize, MouseButton)>,
-    pub slot_action_prediction: RefCell<HashMap<usize, (MouseButton, f32)>>,
+    pub slot_action_prediction: HashMap<usize, (MouseButton, f32)>,
 }
-
-pub enum HoveredElement {
-    Slot(SlotId),
-    Craft(RecipeKey),
-    Research(ResearchKey),
-    Button {
-        property: String,
-        value: ScriptValue,
-        modify_mode: PropertyModifyMode,
-    },
-    CheatGive(ItemKey),
+pub struct UIInput<'a> {
+    pub mouse_position: UIPos,
+    pub last_mouse_position: UIPos,
+    pub last_scroll: UIPos,
+    pub buttons: &'a InputContainer<MouseButton>,
+    pub keys: &'a InputContainer<KeyCode>,
+}
+impl UIInput<'_> {
+    pub fn mouse_delta(&self) -> UIPos {
+        UIPos {
+            x: self.mouse_position.x - self.last_mouse_position.x,
+            y: self.mouse_position.y - self.last_mouse_position.y,
+        }
+    }
 }
 pub fn render_screen(
-    screen_data: &ScreenData,
+    screen_data: &mut ScreenData,
+    input: Option<&UIInput>,
     size: PhysicalSize<u32>,
-    cursor_position: PhysicalPosition<f64>,
     mesh: &mut GUIMesh,
-    enable_hovering: bool,
     dt: f32,
-) -> Option<HoveredElement> {
+    message_queue: &mut Vec<NetworkMessageC2S>,
+) {
     if let Some(selected_slot) = screen_data.selected_slot {
         screen_data
             .slot_action_prediction
-            .borrow_mut()
             .insert(selected_slot.0, (selected_slot.1, 0.1));
     }
-    screen_data
-        .slot_action_prediction
-        .borrow_mut()
-        .retain(|_, (_, time)| {
-            *time -= dt;
-            *time > 0.
-        });
+    screen_data.slot_action_prediction.retain(|_, (_, time)| {
+        *time -= dt;
+        *time > 0.
+    });
     let screen = screen_data.screen.data();
     let mut taffy: TaffyTree<&UIElement> = TaffyTree::new();
     let root = add_element_to_taffy(&screen.root, &mut taffy, &screen_data.properties);
@@ -96,28 +97,25 @@ pub fn render_screen(
         )
         .unwrap();
     let mut overlay_mesh = GUIMesh::default();
-    let mouse_position = UIPos {
-        x: cursor_position.x as f32,
-        y: cursor_position.y as f32,
-    };
-    let mut hovered = None;
     render_element(
         root,
         &taffy,
         size,
         UIPos::all(0.),
-        &screen_data,
+        screen_data,
         mesh,
         &mut overlay_mesh,
-        mouse_position,
-        &mut hovered,
+        input,
+        message_queue,
     );
-    if enable_hovering {
-        mesh.append_mesh(overlay_mesh);
-    } else {
-        hovered = None;
+    mesh.append_mesh(overlay_mesh);
+    if let Some(input) = input {
+        if let Some((_, button)) = screen_data.selected_slot.as_ref() {
+            if !input.buttons.is_down(*button) {
+                screen_data.selected_slot = None;
+            }
+        }
     }
-    hovered
 }
 pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::Size<f32> {
     let style = get_element_style(element, properties);
@@ -169,11 +167,11 @@ fn render_element(
     taffy: &TaffyTree<&UIElement>,
     size: PhysicalSize<u32>,
     parent_offset: UIPos,
-    data: &ScreenData,
+    data: &mut ScreenData,
     mesh: &mut GUIMesh,
     overlay_mesh: &mut GUIMesh,
-    mouse_position: UIPos,
-    out_hovered: &mut Option<HoveredElement>,
+    input: Option<&UIInput>,
+    message_queue: &mut Vec<NetworkMessageC2S>,
 ) {
     let layout = taffy.layout(node).unwrap();
     let element = *taffy.get_node_context(node).unwrap();
@@ -416,8 +414,8 @@ fn render_element(
                     data,
                     mesh,
                     overlay_mesh,
-                    mouse_position,
-                    out_hovered,
+                    input,
+                    message_queue,
                 );
             }
         }
@@ -443,17 +441,70 @@ fn render_element(
             );
         }
         UIElementType::ItemSlot { slot } => {
-            if context.content.contains(mouse_position) {
-                *out_hovered = Some(HoveredElement::Slot(*slot));
+            if let Some(input) = input {
+                if context.content.contains(input.mouse_position) {
+                    let target_slot = *slot;
+                    match data.selected_slot {
+                        Some((slot, button)) => {
+                            let move_mode = match button {
+                                MouseButton::Left => {
+                                    if input.buttons.is_just_up(MouseButton::Left) {
+                                        Some(ItemMoveMode::Stack)
+                                    } else if input.buttons.is_just_down(MouseButton::Right) {
+                                        Some(ItemMoveMode::Single)
+                                    } else {
+                                        None
+                                    }
+                                }
+                                MouseButton::Right => {
+                                    if input.buttons.is_just_up(MouseButton::Right) {
+                                        Some(ItemMoveMode::Half)
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => unreachable!(),
+                            };
+                            if let Some(mode) = move_mode {
+                                match target_slot {
+                                    SlotId::Id(target_slot) => {
+                                        message_queue.push(NetworkMessageC2S::MoveItem {
+                                            from: slot,
+                                            to: target_slot,
+                                            mode,
+                                        });
+                                    }
+                                    SlotId::Trash => {
+                                        message_queue
+                                            .push(NetworkMessageC2S::TrashItem { slot, mode });
+                                    }
+                                }
+                            }
+                        }
+                        None => match target_slot {
+                            SlotId::Id(target_slot) => {
+                                for button in [MouseButton::Left, MouseButton::Right] {
+                                    if input.buttons.is_just_down(button) {
+                                        data.selected_slot = Some((target_slot, button));
+                                        break;
+                                    }
+                                }
+                            }
+                            SlotId::Trash => {}
+                        },
+                    }
+                }
             }
             match slot {
                 SlotId::Id(slot) => {
                     if let Some(item) = data.slots.get(*slot).cloned().flatten() {
-                        if context.content.contains(mouse_position) && data.selected_slot.is_none()
+                        if let Some(input) = input
+                            && context.content.contains(input.mouse_position)
+                            && data.selected_slot.is_none()
                         {
                             let mut shift = overlay_context
                                 .draw_text(
-                                    mouse_position,
+                                    input.mouse_position,
                                     translate(format!("item.{}", item.item.text_id()).as_str()),
                                     40.,
                                     Color::WHITE,
@@ -463,8 +514,8 @@ fn render_element(
                                 shift += overlay_context
                                     .draw_text(
                                         UIPos {
-                                            x: mouse_position.x,
-                                            y: mouse_position.y + shift,
+                                            x: input.mouse_position.x,
+                                            y: input.mouse_position.y + shift,
                                         },
                                         line,
                                         40.,
@@ -502,37 +553,37 @@ fn render_element(
                                 );
                             };
 
-                        if let Some((selected_button, _)) =
-                            data.slot_action_prediction.borrow().get(slot)
-                        {
-                            match selected_button {
-                                MouseButton::Left => {
-                                    draw_slot(
-                                        &mut overlay_context,
-                                        UIPos {
-                                            x: mouse_position.x + border - 25.,
-                                            y: mouse_position.y + border - 25.,
-                                        },
-                                        item.count,
-                                    );
+                        if let Some((selected_button, _)) = data.slot_action_prediction.get(slot) {
+                            if let Some(input) = input {
+                                match selected_button {
+                                    MouseButton::Left => {
+                                        draw_slot(
+                                            &mut overlay_context,
+                                            UIPos {
+                                                x: input.mouse_position.x + border - 25.,
+                                                y: input.mouse_position.y + border - 25.,
+                                            },
+                                            item.count,
+                                        );
+                                    }
+                                    MouseButton::Right => {
+                                        let move_count = item.count.div_ceil(2);
+                                        draw_slot(
+                                            &mut context,
+                                            UIPos::all(border),
+                                            item.count - move_count,
+                                        );
+                                        draw_slot(
+                                            &mut overlay_context,
+                                            UIPos {
+                                                x: input.mouse_position.x + border - 25.,
+                                                y: input.mouse_position.y + border - 25.,
+                                            },
+                                            move_count,
+                                        );
+                                    }
+                                    _ => unreachable!(),
                                 }
-                                MouseButton::Right => {
-                                    let move_count = item.count.div_ceil(2);
-                                    draw_slot(
-                                        &mut context,
-                                        UIPos::all(border),
-                                        item.count - move_count,
-                                    );
-                                    draw_slot(
-                                        &mut overlay_context,
-                                        UIPos {
-                                            x: mouse_position.x + border - 25.,
-                                            y: mouse_position.y + border - 25.,
-                                        },
-                                        move_count,
-                                    );
-                                }
-                                _ => unreachable!(),
                             }
                         } else {
                             draw_slot(&mut context, UIPos::all(border), item.count);
@@ -559,23 +610,32 @@ fn render_element(
                             size: UIPos::all(craft_size),
                         };
                         context.draw_icon(area, &item_data.model);
-                        if (UIRect {
-                            pos: UIPos {
-                                x: area.pos.x + context.content.pos.x,
-                                y: area.pos.y + context.content.pos.y,
-                            },
-                            size: UIPos::all(craft_size),
-                        })
-                        .contains(mouse_position)
-                            && data.selected_slot.is_none()
-                        {
-                            overlay_context.draw_text(
-                                mouse_position,
-                                translate(format!("item.{}", item.text_id()).as_str()),
-                                40.,
-                                Color::WHITE,
-                            );
-                            *out_hovered = Some(HoveredElement::CheatGive(item));
+                        if let Some(input) = input {
+                            if (UIRect {
+                                pos: UIPos {
+                                    x: area.pos.x + context.content.pos.x,
+                                    y: area.pos.y + context.content.pos.y,
+                                },
+                                size: UIPos::all(craft_size),
+                            })
+                            .contains(input.mouse_position)
+                                && data.selected_slot.is_none()
+                            {
+                                overlay_context.draw_text(
+                                    input.mouse_position,
+                                    translate(format!("item.{}", item.text_id()).as_str()),
+                                    40.,
+                                    Color::WHITE,
+                                );
+                                for (button, stack) in
+                                    [(MouseButton::Left, false), (MouseButton::Right, true)]
+                                {
+                                    if input.buttons.is_just_down(button) {
+                                        message_queue
+                                            .push(NetworkMessageC2S::GiveItem { item, stack });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -596,46 +656,57 @@ fn render_element(
                                 None => &recipe_data.outputs.data().entries[0].item.data().model,
                             },
                         );
-                        if (UIRect {
-                            pos: UIPos {
-                                x: area.pos.x + context.content.pos.x,
-                                y: area.pos.y + context.content.pos.y,
-                            },
-                            size: UIPos::all(craft_size),
-                        })
-                        .contains(mouse_position)
-                            && data.selected_slot.is_none()
-                        {
-                            let mut text =
-                                translate(format!("recipe.{}", recipe.text_id()).as_str())
-                                    .to_string();
-                            for (input_item, input_count) in &recipe_data.inputs {
-                                text += format!(
-                                    "\n-{}x{}",
-                                    *input_count,
-                                    translate(format!("item.{}", input_item.text_id()).as_str())
-                                )
-                                .as_str();
-                            }
-                            for loot_entry in &recipe_data.outputs.data().entries {
-                                //todo: somehow do modifiers
-                                text += format!(
-                                    "\n+{}% {}",
-                                    loot_entry.chance * 100.,
-                                    translate(
-                                        format!("item.{}", loot_entry.item.text_id()).as_str()
+                        if let Some(input) = input {
+                            if (UIRect {
+                                pos: UIPos {
+                                    x: area.pos.x + context.content.pos.x,
+                                    y: area.pos.y + context.content.pos.y,
+                                },
+                                size: UIPos::all(craft_size),
+                            })
+                            .contains(input.mouse_position)
+                            {
+                                let mut text =
+                                    translate(format!("recipe.{}", recipe.text_id()).as_str())
+                                        .to_string();
+                                for (input_item, input_count) in &recipe_data.inputs {
+                                    text += format!(
+                                        "\n-{}x{}",
+                                        *input_count,
+                                        translate(
+                                            format!("item.{}", input_item.text_id()).as_str()
+                                        )
                                     )
-                                )
-                                .as_str();
+                                    .as_str();
+                                }
+                                for loot_entry in &recipe_data.outputs.data().entries {
+                                    //todo: somehow do modifiers
+                                    text += format!(
+                                        "\n+{}% {}",
+                                        loot_entry.chance * 100.,
+                                        translate(
+                                            format!("item.{}", loot_entry.item.text_id()).as_str()
+                                        )
+                                    )
+                                    .as_str();
+                                }
+                                overlay_context.draw_multiline_text(
+                                    input.mouse_position,
+                                    text.as_str(),
+                                    40.,
+                                    Color::WHITE,
+                                );
+                                for (button, count) in
+                                    [(MouseButton::Left, 1), (MouseButton::Right, 5)]
+                                {
+                                    if input.buttons.is_just_down(button) {
+                                        message_queue.push(NetworkMessageC2S::Craft {
+                                            recipe: *recipe,
+                                            count,
+                                        });
+                                    }
+                                }
                             }
-
-                            overlay_context.draw_multiline_text(
-                                mouse_position,
-                                text.as_str(),
-                                40.,
-                                Color::WHITE,
-                            );
-                            *out_hovered = Some(HoveredElement::Craft(*recipe));
                         }
                     }
                 }
@@ -643,8 +714,6 @@ fn render_element(
         }
         UIElementType::ResearchTree { research } => {
             let research_size = 50.;
-            let mouse_inside =
-                context.content.contains(mouse_position) && data.selected_slot.is_none();
             for research in research.list() {
                 let research_data = research.data();
                 let area = UIRect {
@@ -655,23 +724,28 @@ fn render_element(
                     size: UIPos::all(research_size),
                 };
                 context.draw_icon(area, &research_data.icon);
-                if (UIRect {
-                    pos: UIPos {
-                        x: area.pos.x + context.content.pos.x,
-                        y: area.pos.y + context.content.pos.y,
-                    },
-                    size: UIPos::all(research_size),
-                })
-                .contains(mouse_position)
-                    && mouse_inside
-                {
-                    overlay_context.draw_text(
-                        mouse_position,
-                        translate(format!("research.{}", research.text_id()).as_str()),
-                        40.,
-                        Color::WHITE,
-                    );
-                    *out_hovered = Some(HoveredElement::Research(*research));
+                if let Some(input) = input {
+                    if (UIRect {
+                        pos: UIPos {
+                            x: area.pos.x + context.content.pos.x,
+                            y: area.pos.y + context.content.pos.y,
+                        },
+                        size: UIPos::all(research_size),
+                    })
+                    .contains(input.mouse_position)
+                    {
+                        overlay_context.draw_text(
+                            input.mouse_position,
+                            translate(format!("research.{}", research.text_id()).as_str()),
+                            40.,
+                            Color::WHITE,
+                        );
+                        if input.buttons.is_just_down(MouseButton::Left) {
+                            message_queue.push(NetworkMessageC2S::Research {
+                                research: *research,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -687,12 +761,16 @@ fn render_element(
                 20.,
                 Color::WHITE,
             );
-            if context.content.contains(mouse_position) {
-                *out_hovered = Some(HoveredElement::Button {
-                    property: property.clone(),
-                    value: *value,
-                    modify_mode: *modify_mode,
-                });
+            if let Some(input) = input
+                && context.content.contains(input.mouse_position)
+            {
+                if input.buttons.is_just_down(MouseButton::Left) {
+                    message_queue.push(NetworkMessageC2S::UIButtonPress {
+                        property: property.clone(),
+                        value: *value,
+                        modify_mode: *modify_mode,
+                    });
+                }
             }
         }
     }
