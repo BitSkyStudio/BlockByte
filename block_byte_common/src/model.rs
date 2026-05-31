@@ -1,6 +1,6 @@
 use cgmath::{
-    Deg, ElementWise, EuclideanSpace, Euler, Matrix4, Point3, SquareMatrix, Transform, Vector2,
-    Vector3, VectorSpace, Zero,
+    Deg, ElementWise, EuclideanSpace, Euler, InnerSpace, Matrix4, Point3, SquareMatrix, Transform,
+    Vector2, Vector3, VectorSpace, Zero,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -202,6 +202,12 @@ impl Bone {
     ) {
         let world = parent * self.animation_transform(animations);
 
+        for v in [world.x, world.y, world.z] {
+            if v.truncate().magnitude2() <= 0.1 {
+                return;
+            }
+        }
+
         for elem in &self.elements {
             match elem {
                 Element::Cube {
@@ -253,22 +259,19 @@ impl Bone {
                 } => {
                     let o = Matrix4::from_translation(Vector3::from(origin.into_array()));
                     let world = world * o * Matrix4::from(*rotation);
-                    /*for face in faces {
-                        for (vertex_pos, uv) in &face.vertices {
-                            let point = Point3::from_vec(*vertex_pos);
-                            let point = world.transform_point(point);
-                            geometry_consumer(
-                                Pos {
-                                    x: point.x,
-                                    y: point.y,
-                                    z: point.z,
-                                },
-                                Pos::ZERO,
-                                *uv,
-                                face.texture,
-                            );
-                        }
-                    }*/
+                    for face in faces {
+                        geometry_consumer(ModelGeometry::Quad(
+                            std::array::from_fn(|i| {
+                                let (position, uv) = &face.vertices[i];
+                                ModelVertex {
+                                    position: position.multiply_point(world),
+                                    normal: Pos::Y,
+                                    uv: *uv,
+                                }
+                            }),
+                            face.texture,
+                        ));
+                    }
                 }
             }
         }

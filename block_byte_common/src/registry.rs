@@ -526,7 +526,7 @@ impl ToolData {
             damage: 1.,
             swing_time: 0.5,
             damage_type: DamageType::Blunt,
-            reach: 7.,
+            reach: 5.,
             knockback: 2.,
             stamina: 10.,
         }
@@ -1042,7 +1042,7 @@ impl RegistryConfigLoadable for TextureData {
                     let texture = ron::from_str::<ComposedTexture>(
                         std::fs::read_to_string(path).unwrap().as_str(),
                     )
-                    .unwrap();
+                    .map_err(|error| anyhow!("{:?}", error))?;
                     texture.resolve(load_texture_type)
                 }
                 _ => panic!(),

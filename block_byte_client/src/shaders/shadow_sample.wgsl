@@ -7,7 +7,7 @@ fn sample_shadow(world_position: vec3<f32>, normal: vec3<f32>) -> f32{
 
     let dark_color = min(length(shadow_projection.xy)/10., 0.25) + 0.75;
 
-    if dot(normal, shadow_camera.direction) < 0.{
+    if dot(normal, shadow_camera.direction) <= 0.{
         return dark_color;
     }
 

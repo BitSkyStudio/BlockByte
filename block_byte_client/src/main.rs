@@ -501,6 +501,7 @@ impl ApplicationHandler for App {
                                 match &hand_item.data().action {
                                     ItemAction::Ignore => {}
                                     _ => {
+                                        //todo: validate placement
                                         self.game.viewmodel_player.trigger("build");
                                         self.send_message(NetworkMessageC2S::PlaceBlock {
                                             position,
@@ -523,6 +524,12 @@ impl ApplicationHandler for App {
                 let render_state = self.render_state.as_mut().unwrap();
 
                 if self.game.screen.is_none() {
+                    let crosshair_color = match self.camera.raycast(&self.game, true) {
+                        RayCastResult::Empty => Color::grayscale(200),
+                        RayCastResult::Block(_, _) => Color::grayscale(255),
+                        RayCastResult::Entity(_) => Color::grayscale(255),
+                        RayCastResult::Plant(_, _) => unreachable!(),
+                    };
                     let crosshair_texture = TextureKey::id("crosshair").unwrap();
                     let crosshair_data = &*crosshair_texture.data().texture;
                     let crosshair_size = 2.;
@@ -542,7 +549,7 @@ impl ApplicationHandler for App {
                             size: crosshair_size,
                         },
                         crosshair_texture.tex_coords(),
-                        Color::WHITE,
+                        crosshair_color,
                     );
 
                     if let Some(tooltip) = match self.camera.raycast(&self.game, false) {
@@ -2687,7 +2694,7 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                     inverted: false,
                     reset: true,
                     to: "place".to_string(),
-                    time: 0.05,
+                    time: 0.,
                 }],
                 observers: vec![
                     //(0.1, "place".to_string()),

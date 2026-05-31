@@ -2,7 +2,7 @@
     top_block: "nature.grass",
     middle_block: "nature.dirt",
     bottom_block: "nature.dirt",
-    debug_color: (r: 0, g: 255, b: 0),
+    debug_color: "00ff00",
     temperature: (target: 0.3, weight: 1.2),
     moisture: (target: 0.5, weight: 1.2),
     elevation: (target: 0, weight: 0.5),

@@ -65,13 +65,68 @@ impl TexCoords {
     }
 }
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
     pub b: u8,
-    #[serde(default = "default_u8::<255>")]
     pub a: u8,
+}
+impl Serialize for Color {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut buffer = [0u8; 8];
+        let mut buffer_slice = &mut buffer[..];
+        use std::io::Write;
+        write!(buffer_slice, "{:2x}{:2x}{:2x}", self.r, self.g, self.b);
+        let buf_len = if self.a != 255 {
+            write!(buffer_slice, "{:2x}", self.a);
+            8
+        } else {
+            6
+        };
+        serializer.serialize_str(std::str::from_utf8(&buffer[0..buf_len]).unwrap())
+    }
+}
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ColorVisitor;
+        use serde::de::Visitor;
+        impl<'de> Visitor<'de> for ColorVisitor {
+            type Value = Color;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("valid hex color")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                use serde::de::Error;
+                if v.len() != 6 && v.len() != 8 {
+                    return Err(Error::custom("length of color string must be 6 or 8"));
+                }
+                let r = u8::from_str_radix(&v[0..2], 16)
+                    .map_err(|_| Error::custom("not valid hex integer"))?;
+                let g = u8::from_str_radix(&v[2..4], 16)
+                    .map_err(|_| Error::custom("not valid hex integer"))?;
+                let b = u8::from_str_radix(&v[4..6], 16)
+                    .map_err(|_| Error::custom("not valid hex integer"))?;
+                let a = if v.len() == 8 {
+                    u8::from_str_radix(&v[6..8], 16)
+                        .map_err(|_| Error::custom("not valid hex integer"))?
+                } else {
+                    255
+                };
+                Ok(Color { r, g, b, a })
+            }
+        }
+        deserializer.deserialize_str(ColorVisitor)
+    }
 }
 impl Color {
     pub const WHITE: Color = Self::grayscale(255);

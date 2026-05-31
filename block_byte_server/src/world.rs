@@ -816,6 +816,7 @@ impl Entity {
                     let tool = hand_item
                         .and_then(|item| item.item.data().tool)
                         .unwrap_or(ToolData::hand());
+                    let reach_distance = tool.reach / 3. * 2.;
                     //todo: should be eye position
                     if target_position.distance(self.position) <= tool.reach {
                         if let Some(timer) = &mut brain.hit_timer {
