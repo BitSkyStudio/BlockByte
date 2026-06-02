@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     coord::{AABB, BlockPos, Pos},
-    registry::{BlockEntry, ItemData, ItemKey, KeyGroup},
+    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup},
 };
 use serde_default_utils::*;
 
@@ -585,11 +585,23 @@ impl HitTimer {
     }
 }
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntityPose {
     Stand,
     Walk,
     Run,
     Crouch,
     CrouchWalk,
+    Slide,
+}
+impl EntityPose {
+    pub fn height(self, data: &EntityData) -> f32 {
+        data.hitbox_height
+            - (match self {
+                EntityPose::Stand | EntityPose::Walk | EntityPose::Run => 0.,
+                EntityPose::Crouch | EntityPose::CrouchWalk | EntityPose::Slide => {
+                    data.crouch_height_difference
+                }
+            })
+    }
 }

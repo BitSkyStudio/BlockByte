@@ -15,8 +15,9 @@ use std::{
 };
 
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, Color, DamageTable, DamageType, EntityStats,
-    HitTimer, InventoryView, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
+    ACCELERATION_COEFFICIENT, CharacterController, Color, DamageTable, DamageType, EntityPose,
+    EntityStats, HitTimer, InventoryView, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
+    SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
@@ -466,7 +467,6 @@ pub fn tick_chunk(world: &WorldAccess) {
                 user.tick_controlling_entity(entity, controlling_user, world);
             }
         } else {
-            let hitbox = entity_data.hitbox(entity.crouching);
             let mut move_vector = Pos::ZERO;
             entity.tick(&mut move_vector, world);
             let mut new_position = entity.position;
@@ -476,7 +476,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                 |block| world.get_block(block),
                 move_vector,
                 MoveMode::Normal,
-                hitbox,
+                entity_data.hitbox(entity.pose),
                 ACCELERATION_COEFFICIENT * entity_data.base_stats.speed() / 100. * NORMAL_SPEED,
                 0.5,
                 false,
@@ -640,7 +640,7 @@ pub struct Entity {
     pub research: HashSet<ResearchKey>,
     pub brain: Option<MobBrain>,
     pub direction: LookDirection,
-    pub crouching: bool,
+    pub pose: EntityPose,
     pub effects: Vec<ActiveEffect>,
     #[serde(skip_serializing, skip_deserializing, default)]
     pub current_stats: EntityStats,
@@ -760,7 +760,7 @@ impl Entity {
                 None => None,
             },
             direction: LookDirection { pitch: 0., yaw: 0. },
-            crouching: false,
+            pose: EntityPose::Stand,
             effects: Vec::new(),
             current_stats: EntityStats::default(),
             current_stats_dirty: false,
@@ -771,8 +771,7 @@ impl Entity {
         self.position + Pos::Y * entity_data.eye_height
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
-        let entity_data = self.key.data();
-        entity_data.hitbox(self.crouching).offset(self.position)
+        self.key.data().hitbox(self.pose).offset(self.position)
     }
     pub fn tick(&mut self, move_vector: &mut Pos, world: &WorldAccess) {
         let entity_data = self.key.data();
@@ -895,7 +894,7 @@ impl Entity {
             key: self.key,
             position: self.position,
             direction: self.direction,
-            crouching: self.crouching,
+            pose: self.pose,
             hand_item: self
                 .inventory
                 .items
@@ -910,7 +909,7 @@ impl Entity {
             uuid: self.uuid,
             position: self.position,
             direction: self.direction,
-            crouching: self.crouching,
+            pose: self.pose,
         }
     }
     pub fn create_remove_message(&self) -> NetworkMessageS2C {
@@ -1748,11 +1747,7 @@ impl WorldAccess<'_> {
         if self.grid[chunk].is_none() {
             return Err(());
         }
-        let hitbox = entity
-            .key
-            .data()
-            .hitbox(entity.crouching)
-            .offset(new_position);
+        let hitbox = entity.key.data().hitbox(entity.pose).offset(new_position);
         for block_position in hitbox.to_block() {
             let Some(block) = self.get_block(block_position) else {
                 return Err(());

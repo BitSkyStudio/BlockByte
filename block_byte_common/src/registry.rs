@@ -29,7 +29,7 @@ use crate::scripts::{
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
-    Color, DamageTable, DamageType, EntityStats, GRAVITY_ACCELERATION, InventoryView,
+    Color, DamageTable, DamageType, EntityPose, EntityStats, GRAVITY_ACCELERATION, InventoryView,
     LookDirection, ViewSlot,
 };
 
@@ -1261,7 +1261,7 @@ impl Default for EntityInteractAction {
     }
 }
 impl EntityData {
-    pub fn hitbox(&self, crouching: bool) -> AABB<f32> {
+    pub fn hitbox(&self, pose: EntityPose) -> AABB<f32> {
         AABB {
             min: Pos {
                 x: -self.hitbox_size,
@@ -1270,12 +1270,7 @@ impl EntityData {
             },
             max: Pos {
                 x: self.hitbox_size,
-                y: self.hitbox_height
-                    - if crouching {
-                        self.crouch_height_difference
-                    } else {
-                        0.
-                    },
+                y: pose.height(self),
                 z: self.hitbox_size,
             },
         }

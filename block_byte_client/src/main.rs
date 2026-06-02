@@ -22,8 +22,8 @@ use std::{
 use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityStats, HitTimer,
-    ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
+    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityPose, EntityStats,
+    HitTimer, ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, ModelGeometry, ModelTexture},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
@@ -492,36 +492,6 @@ impl ApplicationHandler for App {
                     self.send_message(message);
                 }
 
-                if self.game.buttons.is_just_down(MouseButton::Right) && self.game.screen.is_none()
-                {
-                    match self.camera.raycast(&self.game, true) {
-                        RayCastResult::Block(position, face) => {
-                            if let Some(hand_item) =
-                                self.game.held_item().as_ref().map(|item| item.item)
-                            {
-                                match &hand_item.data().action {
-                                    ItemAction::Ignore => {}
-                                    _ => {
-                                        //todo: validate placement
-                                        self.game.viewmodel_player.trigger("build");
-                                        self.send_message(NetworkMessageC2S::PlaceBlock {
-                                            position,
-                                            face,
-                                            variant: self
-                                                .game
-                                                .item_variation
-                                                .get(&hand_item)
-                                                .cloned()
-                                                .unwrap_or(0),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
                 let render_state = self.render_state.as_mut().unwrap();
 
                 if self.game.screen.is_none() {
@@ -642,6 +612,8 @@ impl ApplicationHandler for App {
                         teleport_id: self.teleport_id,
                         direction: self.camera.direction,
                         crouching: self.camera.crouching,
+                        walking: self.camera.walking,
+                        running: self.camera.running,
                     });
                     if let Some(hit_timer) = &mut self.game.hit_timer {
                         if hit_timer.tick(dt) {
@@ -745,7 +717,7 @@ impl ApplicationHandler for App {
                                 position,
                                 direction,
                                 hand_item,
-                                crouching,
+                                pose,
                             } => {
                                 self.game.entities.insert(
                                     uuid,
@@ -757,7 +729,7 @@ impl ApplicationHandler for App {
                                         previous_direction: direction,
                                         update_timestamp: Instant::now(),
                                         hand_item,
-                                        crouching,
+                                        pose,
                                     },
                                 );
                             }
@@ -765,7 +737,7 @@ impl ApplicationHandler for App {
                                 uuid,
                                 position,
                                 direction,
-                                crouching,
+                                pose,
                             } => {
                                 if let Some(entity) = self.game.entities.get_mut(&uuid) {
                                     entity.previous_position = entity.position;
@@ -773,7 +745,7 @@ impl ApplicationHandler for App {
                                     entity.update_timestamp = time;
                                     entity.position = position;
                                     entity.direction = direction;
-                                    entity.crouching = crouching;
+                                    entity.pose = pose;
                                 }
                             }
                             NetworkMessageS2C::RemoveEntity { uuid } => {
@@ -1220,6 +1192,7 @@ pub struct ClientPlayer {
     pub direction: LookDirection,
     pub controller: CharacterController,
     pub running: bool,
+    pub walking: bool,
     pub crouching: bool,
     pub height_animation: f32,
 }
@@ -1229,6 +1202,7 @@ impl Default for ClientPlayer {
             position: Pos::ZERO,
             direction: LookDirection { pitch: 0., yaw: 0. },
             running: false,
+            walking: false,
             controller: CharacterController::new(),
             crouching: false,
             height_animation: 0.,
@@ -1289,7 +1263,7 @@ impl ClientPlayer {
             }
             let entity_data = entity.key.data();
             if let Some(result) =
-                ray.aabb_raycast(entity_data.hitbox(entity.crouching).offset(entity.position))
+                ray.aabb_raycast(entity_data.hitbox(entity.pose).offset(entity.position))
             {
                 let distance = result.position.distance(ray.position);
                 if distance < min_distance {
@@ -1400,6 +1374,7 @@ impl ClientPlayer {
         move_vector *= game.player_stats.speed() / 100. * NORMAL_SPEED;
         //move_vector *= player_entity_data.speed;
         self.running = game.keys.is_down(KeyCode::ControlLeft);
+        self.walking = move_vector.length_squared() > 0.;
         if move_vector.length_squared() == 0. {
             self.running = false;
         }
@@ -1418,7 +1393,7 @@ impl ClientPlayer {
                     && CharacterController::collides_at(
                         self.position,
                         &|block| game.get_block(block),
-                        player_entity_data.hitbox(false),
+                        player_entity_data.hitbox(EntityPose::Stand),
                     )
                     .is_some()
                 {
@@ -1444,7 +1419,11 @@ impl ClientPlayer {
             |block| game.get_block(block),
             move_vector,
             move_mode,
-            player_entity_data.hitbox(self.crouching),
+            player_entity_data.hitbox(if self.crouching {
+                EntityPose::Crouch
+            } else {
+                EntityPose::Stand
+            }),
             ACCELERATION_COEFFICIENT * game.player_stats.speed() / 100. * NORMAL_SPEED,
             0.5,
             game.keys.is_down(KeyCode::ShiftLeft),
@@ -2007,65 +1986,65 @@ impl ClientGame {
         ps.end();
 
         if let Some(held_item) = self.held_item() {
-            if self.keys.is_down(KeyCode::AltLeft) {
-                match &held_item.item.data().action {
-                    ItemAction::Place(place_block) => match camera.raycast(self, true) {
-                        RayCastResult::Block(position, face) => {
-                            let place_block = &place_block[self
-                                .item_variation
-                                .get(&held_item.item)
-                                .cloned()
-                                .unwrap_or(0)];
-                            let block_position = position + face.get_block_offset();
-                            let block_data = place_block.block.data();
-                            let mut blocked = place_block.use_count > held_item.count;
-                            let rotation = block_data
-                                .rotation
-                                .from_look_direction(camera.direction, face);
-                            let fake_block_entry = BlockEntry {
-                                block: place_block.block,
-                                rotation,
-                                color: BlockColor::default(),
-                            };
-                            for entity in self.entities.values() {
-                                let entity_hitbox = entity
-                                    .key
-                                    .data()
-                                    .hitbox(entity.crouching)
-                                    .offset(entity.position);
-                                if fake_block_entry
-                                    .colliders(block_position)
-                                    .any(|collider| entity_hitbox.intersects(collider))
-                                {
-                                    blocked = true;
-                                    break;
-                                }
+            match &held_item.item.data().action {
+                ItemAction::Place(place_block) => match camera.raycast(self, true) {
+                    RayCastResult::Block(position, face) => {
+                        let variant_id = self
+                            .item_variation
+                            .get(&held_item.item)
+                            .cloned()
+                            .unwrap_or(0);
+                        let place_block = &place_block[variant_id];
+                        let block_position = position + face.get_block_offset();
+                        let block_data = place_block.block.data();
+                        let mut blocked = place_block.use_count > held_item.count;
+                        let rotation = block_data
+                            .rotation
+                            .from_look_direction(camera.direction, face);
+                        let fake_block_entry = BlockEntry {
+                            block: place_block.block,
+                            rotation,
+                            color: BlockColor::default(),
+                        };
+                        for entity in self.entities.values() {
+                            let entity_hitbox = entity
+                                .key
+                                .data()
+                                .hitbox(entity.pose)
+                                .offset(entity.position);
+                            if fake_block_entry
+                                .colliders(block_position)
+                                .any(|collider| entity_hitbox.intersects(collider))
+                            {
+                                blocked = true;
+                                break;
                             }
-                            if let Some(hanging) = block_data.hanging {
-                                let world_hanging = rotation.rotate_face(hanging);
-                                match self
-                                    .get_block(block_position + world_hanging.get_block_offset())
-                                {
-                                    Some(hanging_block) => {
-                                        if !hanging_block.supports(world_hanging.opposite()) {
-                                            blocked = true;
-                                        }
-                                    }
-                                    None => {
+                        }
+                        if let Some(hanging) = block_data.hanging {
+                            let world_hanging = rotation.rotate_face(hanging);
+                            match self.get_block(block_position + world_hanging.get_block_offset())
+                            {
+                                Some(hanging_block) => {
+                                    if !hanging_block.supports(world_hanging.opposite()) {
                                         blocked = true;
                                     }
                                 }
+                                None => {
+                                    blocked = true;
+                                }
                             }
-                            let (chunk, offset) = block_position.to_chunk_pos_offset();
-                            if let Some(chunk) = self.chunks.get(&chunk) {
-                                let block = chunk
-                                    .mesh_build_data
-                                    .blocks
-                                    .read()
-                                    .get(offset.index())
-                                    .unwrap()
-                                    .block;
-                                if block == air_block() {
+                        }
+                        let (chunk, offset) = block_position.to_chunk_pos_offset();
+                        if let Some(chunk) = self.chunks.get(&chunk) {
+                            let block = chunk
+                                .mesh_build_data
+                                .blocks
+                                .read()
+                                .get(offset.index())
+                                .unwrap()
+                                .block;
+                            if block == air_block() {
+                                if self.keys.is_down(KeyCode::AltLeft) {
                                     render::draw_block_model(
                                         place_block.block,
                                         get_block_matrix(block_position, rotation),
@@ -2086,12 +2065,23 @@ impl ClientGame {
                                         }),
                                     );
                                 }
+                                if self.buttons.is_just_down(MouseButton::Right)
+                                    && self.screen.is_none()
+                                    && !blocked
+                                {
+                                    self.viewmodel_player.trigger("build");
+                                    connection.tx.send(NetworkMessageC2S::PlaceBlock {
+                                        position,
+                                        face,
+                                        variant: variant_id,
+                                    });
+                                }
                             }
                         }
-                        _ => {}
-                    },
+                    }
                     _ => {}
-                }
+                },
+                _ => {}
             }
         }
     }
@@ -2119,7 +2109,7 @@ pub struct ClientEntity {
     previous_direction: LookDirection,
     update_timestamp: Instant,
     hand_item: Option<ClientItem>,
-    crouching: bool,
+    pose: EntityPose,
 }
 struct ChunkMeshBuildData {
     pub blocks: RwLock<BlockPalette>,

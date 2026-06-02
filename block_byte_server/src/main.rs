@@ -12,8 +12,8 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, Color, DEFAULT_VIEWSLOT, DamageTable, EntityStats, InventoryView, LookDirection,
-    MoveMode, SERVER_DT, SERVER_TPS,
+    ClientItem, Color, DEFAULT_VIEWSLOT, DamageTable, EntityPose, EntityStats, InventoryView,
+    LookDirection, MoveMode, SERVER_DT, SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -662,13 +662,21 @@ impl User {
                     direction,
                     teleport_id,
                     crouching,
+                    walking,
+                    running,
                 } => {
                     if self.teleport_id.load(Ordering::SeqCst) != teleport_id {
                         continue;
                     }
 
                     entity.direction = direction;
-                    entity.crouching = crouching;
+                    entity.pose = match (crouching, walking, running) {
+                        (false, _, true) => EntityPose::Run,
+                        (false, true, _) => EntityPose::Walk,
+                        (false, false, _) => EntityPose::Stand,
+                        (true, true, _) => EntityPose::CrouchWalk,
+                        (true, false, _) => EntityPose::Crouch,
+                    };
                     match world.teleport_entity(entity, position) {
                         Ok(_) => {
                             *self.view_position.lock() = position.to_chunk_pos();
@@ -734,7 +742,7 @@ impl User {
                                         .from_look_direction(entity.direction, face),
                                 };
                                 let entity_collider =
-                                    entity_data.hitbox(entity.crouching).offset(entity.position);
+                                    entity_data.hitbox(entity.pose).offset(entity.position);
                                 if block.colliders(position).any(|block_collider| {
                                     block_collider.intersects(entity_collider)
                                 }) {

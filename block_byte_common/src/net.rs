@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ClientItem, EntityStats, ItemMoveMode, LookDirection,
+    ClientItem, EntityPose, EntityStats, ItemMoveMode, LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{
         BlockEntry, BlockKey, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey, ToolData,
@@ -23,6 +23,8 @@ pub enum NetworkMessageC2S {
         direction: LookDirection,
         teleport_id: u32,
         crouching: bool,
+        walking: bool,
+        running: bool,
     },
     AttackBlock {
         position: BlockPos,
@@ -114,13 +116,13 @@ pub enum NetworkMessageS2C {
         position: Pos,
         direction: LookDirection,
         hand_item: Option<ClientItem>,
-        crouching: bool,
+        pose: EntityPose,
     },
     MoveEntity {
         uuid: Uuid,
         position: Pos,
         direction: LookDirection,
-        crouching: bool,
+        pose: EntityPose,
     },
     RemoveEntity {
         uuid: Uuid,
