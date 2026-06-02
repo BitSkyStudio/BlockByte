@@ -156,8 +156,8 @@ macro_rules! create_registries{
                                         .to_string_lossy()
                                         .replace("/", ".")
                                         .replace("\\", ".");
-                                    if id.starts_with("#"){
-                                        *groups.entry(id[1..].to_string()).or_insert_with(||String::new()) += format!("\n{}", std::fs::read_to_string(entry.into_path()).unwrap()).as_str();
+                                    if id.split(".").last().unwrap().starts_with("#"){
+                                        *groups.entry(id.replace("#", "")).or_insert_with(||String::new()) += format!("\n{}", std::fs::read_to_string(entry.into_path()).unwrap()).as_str();
                                     } else {
                                         load_registry.$id.register(id, entry.into_path());
                                     }
@@ -359,6 +359,9 @@ where
     RegistryStorage: RegistryProvider<T>,
 {
     pub fn parse(id: &str) -> Option<Self> {
+        if id.is_empty() {
+            return Some(KeyGroup::Empty);
+        }
         if id.starts_with("#") {
             LOAD_REGISTRIES
                 .get()
@@ -677,7 +680,14 @@ impl BlockRotationMode {
                     Face::Back | Face::Right | Face::Up => face,
                     Face::Front | Face::Left | Face::Down => face.opposite(),
                 };
-                BlockRotation::looking_to(face)
+                BlockRotation::new(
+                    match face {
+                        Face::Front | Face::Back => Face::Up,
+                        _ => Face::Front,
+                    },
+                    face,
+                )
+                .unwrap()
             }
         }
     }
@@ -1463,6 +1473,8 @@ pub struct PrefabEntry {
     pub chance: f32,
     #[serde(default = "default_prefab_replace", skip_serializing)]
     pub replace: KeyGroup<BlockData>,
+    #[serde(default, skip_serializing)]
+    pub replace_inverted: bool,
     pub block: BlockKey,
     #[serde(default)]
     pub rotation: BlockRotation,
@@ -1492,7 +1504,7 @@ impl PrefabData {
         position: BlockPos,
         rotation: HorizontalFace,
         seed: u64,
-        mut callback: impl FnMut(BlockPos, BlockEntry, KeyGroup<BlockData>),
+        mut callback: impl FnMut(BlockPos, BlockEntry, KeyGroup<BlockData>, bool),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
@@ -1517,6 +1529,7 @@ impl PrefabData {
                             .get_nearest_valid(rotation.compose(entry.rotation)),
                     },
                     entry.replace,
+                    entry.replace_inverted,
                 );
             }
         }

@@ -536,12 +536,13 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     block_position,
                     placed_decoration.rotation,
                     placed_decoration.seed,
-                    |place_position, block, replace_list| {
+                    |place_position, block, replace_list, replace_inverted| {
                         let (place_chunk, place_chunk_offset) =
                             place_position.to_chunk_pos_offset();
                         if place_chunk == position {
                             if replace_list
                                 .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
+                                ^ replace_inverted
                             {
                                 blocks.set(place_chunk_offset.index(), &block);
                             }
@@ -565,11 +566,12 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 placement.position,
                 placement.rotation,
                 placement.seed as u64,
-                |place_position, block, replace_list| {
+                |place_position, block, replace_list, replace_inverted| {
                     let (place_chunk, place_chunk_offset) = place_position.to_chunk_pos_offset();
                     if place_chunk == position {
                         if replace_list
                             .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
+                            ^ replace_inverted
                         {
                             blocks.set(place_chunk_offset.index(), &block);
                         }

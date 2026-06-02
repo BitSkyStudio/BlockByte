@@ -7,7 +7,7 @@ use std::{
     cell::RefCell,
     collections::{BinaryHeap, HashMap, HashSet},
     fmt::format,
-    hash::Hash,
+    hash::{Hash, Hasher},
     net::{SocketAddr, UdpSocket},
     ops::ControlFlow,
     path::Path,
@@ -34,6 +34,7 @@ use block_byte_common::{
         ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData, TextureKey,
         ToolData, TranslationLanguageData, air_block, load_registries,
     },
+    rotation::BlockRotation,
     ui::{PropertyMap, SlotId},
     world::{self, ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
@@ -1021,12 +1022,9 @@ impl TextureAtlas {
             );
             packer.pack_own(key, new_image);
         };
-        let skip_list = KeyGroup::<TextureData>::parse("#skip");
         for (i, texture) in TextureKey::entries().enumerate() {
-            if let Some(skip_list) = &skip_list {
-                if skip_list.contains(texture) {
-                    continue;
-                }
+            if texture.text_id().ends_with("!") {
+                continue;
             }
             let texture = texture.data();
             add_texture(TextureAtlasKey::Texture(i), &*texture.texture);
@@ -2297,33 +2295,89 @@ impl ClientChunk {
                                 y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32,
                                 z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32,
                             };
-                            for face in Face::all() {
-                                let neighbor_position = BlockPos {
-                                    x: x as i32,
-                                    y: y as i32,
-                                    z: z as i32,
-                                } + face.get_block_offset();
-                                if let Some(neighbor_block) = get_neighbor(neighbor_position) {
-                                    let neighbor_block_data = neighbor_block.block.data();
-                                    match &neighbor_block_data.render_data {
-                                        BlockRenderData::Air | BlockRenderData::Model { .. } => {}
-                                        BlockRenderData::Full { faces, .. } => {
-                                            continue;
+                            if block.rotation != BlockRotation::default() {
+                                let matrix = get_block_matrix(
+                                    position.to_block_pos()
+                                        + BlockPos {
+                                            x: x as i32,
+                                            y: y as i32,
+                                            z: z as i32,
+                                        },
+                                    block.rotation,
+                                );
+                                for face in Face::all() {
+                                    let neighbor_position =
+                                        BlockPos {
+                                            x: x as i32,
+                                            y: y as i32,
+                                            z: z as i32,
+                                        } + block.rotation.rotate_face(face).get_block_offset();
+                                    if let Some(neighbor_block) = get_neighbor(neighbor_position) {
+                                        let neighbor_block_data = neighbor_block.block.data();
+                                        match &neighbor_block_data.render_data {
+                                            BlockRenderData::Air
+                                            | BlockRenderData::Model { .. } => {}
+                                            BlockRenderData::Full { faces, .. } => {
+                                                continue;
+                                            }
                                         }
                                     }
+                                    //todo: proper tex index
+                                    let texture = faces.by_face(face).tex_coords(0 as usize);
+                                    mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
+                                        |(position, uv)| MeshVertex {
+                                            position: {
+                                                let position = cgmath::Point3::new(
+                                                    position.x - 0.5,
+                                                    position.y,
+                                                    position.z - 0.5,
+                                                );
+                                                let rotated = matrix.transform_point(position);
+                                                Pos {
+                                                    x: rotated.x,
+                                                    y: rotated.y,
+                                                    z: rotated.z,
+                                                }
+                                            },
+                                            normal: face.get_offset(),
+                                            uv,
+                                        },
+                                    ));
                                 }
-                                let texture = faces
-                                    .by_face(face)
-                                    .tex_coords(f32::to_bits(
-                                        base_position.x * base_position.y * base_position.z,
-                                    ) as usize);
-                                mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
-                                    |(position, uv)| MeshVertex {
-                                        position: base_position + position,
-                                        normal: face.get_offset(),
-                                        uv,
-                                    },
-                                ));
+                            } else {
+                                for face in Face::all() {
+                                    let neighbor_position = BlockPos {
+                                        x: x as i32,
+                                        y: y as i32,
+                                        z: z as i32,
+                                    } + face.get_block_offset();
+                                    if let Some(neighbor_block) = get_neighbor(neighbor_position) {
+                                        let neighbor_block_data = neighbor_block.block.data();
+                                        match &neighbor_block_data.render_data {
+                                            BlockRenderData::Air
+                                            | BlockRenderData::Model { .. } => {}
+                                            BlockRenderData::Full { faces, .. } => {
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    //todo: proper tex index
+                                    let texture = faces.by_face(face).tex_coords(0 as usize);
+                                    let base_position = position.to_block_pos().to_pos()
+                                        + (BlockPos {
+                                            x: x as i32,
+                                            y: y as i32,
+                                            z: z as i32,
+                                        })
+                                        .to_pos();
+                                    mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
+                                        |(position, uv)| MeshVertex {
+                                            position: position + base_position,
+                                            normal: face.get_offset(),
+                                            uv,
+                                        },
+                                    ));
+                                }
                             }
                         }
                         BlockRenderData::Model {

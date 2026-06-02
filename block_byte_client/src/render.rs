@@ -1245,8 +1245,8 @@ pub fn draw_block_model(
         BlockRenderData::Full { faces, .. } => {
             for face in Face::all() {
                 vertex_consumer.add_quad(
-                    face.get_vertices(faces.by_face(face).tex_coords(0), 0).map(
-                        |(position, uv)| {
+                    face.get_vertices(faces.by_face(face).tex_coords(face as usize), 0)
+                        .map(|(position, uv)| {
                             let position = position
                                 - Pos {
                                     x: 0.5,
@@ -1258,8 +1258,7 @@ pub fn draw_block_model(
                                 normal: face.get_offset().multiply_vector(matrix).normalize(),
                                 uv,
                             }
-                        },
-                    ),
+                        }),
                 );
             }
         }

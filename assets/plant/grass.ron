@@ -1,5 +1,5 @@
 (
-    stages: ["short_grass_0","short_grass_1","short_grass_2","short_grass_3"],
+    stages: ["plant.grass.0","plant.grass.1","plant.grass.2","plant.grass.3"],
     size: 1.4,
     height: 1.,
     blades: 3,

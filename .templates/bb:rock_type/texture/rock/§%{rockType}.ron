@@ -1,4 +1,4 @@
 Color(
-    base: Image("rock.rock"),
+    base: Image("rock.rock!"),
     color: "§%{rockColor}",
 )

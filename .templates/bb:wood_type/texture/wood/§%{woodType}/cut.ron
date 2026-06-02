@@ -1,0 +1,7 @@
+Overlay(
+    base: Image("wood.§%{woodType}.bark"),
+    overlay: Color(
+        base: Image("wood.cut!"),
+        color: "§%{woodColor}",
+    ),
+)

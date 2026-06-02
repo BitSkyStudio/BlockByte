@@ -1,4 +1,0 @@
-Overlay(
-    base: Image("dirt_0"),
-    overlay: Image("grass_block_side_overlay"),
-)

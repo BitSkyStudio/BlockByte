@@ -17,7 +17,7 @@ def generate_tag(name, content):
     with open(os.path.join(asset_dir, *name.split(".")) + ".txt", "w") as f:
         f.write("\n".join(content))
 
-wood_types = [{"woodType": "oak"}]
+wood_types = [{"woodType": "oak", "barkColor": "48341d", "woodColor": "8c6d47"}]
 for data in wood_types:
     generate("bb:wood_type", data)
 generate_tag("#sticks", ["wood." + data["woodType"] + ".stick" for data in wood_types])
@@ -41,6 +41,7 @@ for data in rock_types:
 
 ore_types = [{"oreType": "magnetite", "oreColor": "646464"}]
 for ore_data in ore_types:
+    break
     generate("bb:ore_type", ore_data)
     for rock_data in rock_types:
         data = dict(ore_data)

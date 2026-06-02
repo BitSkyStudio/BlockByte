@@ -1,0 +1,4 @@
+Color(
+    base: Image("wood.bark!"),
+    color: "§%{barkColor}",
+)

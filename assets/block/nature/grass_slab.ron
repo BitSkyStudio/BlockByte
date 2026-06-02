@@ -1,5 +1,5 @@
 (
-    render_data: Model(model:"slab;grass_block_side_slab;dirt_0;grass_top_0"),
+    render_data: Model(model:"slab;dirt.grass_block_side;dirt.dirt;dirt.grass"),
     health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
         entries: [

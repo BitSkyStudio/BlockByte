@@ -1,12 +1,12 @@
 (
     render_data: Full(
         faces: (
-            front: "wood.§%{woodType}_plank",
-            back: "wood.§%{woodType}_plank",
-            left: "wood.§%{woodType}_plank",
-            right: "wood.§%{woodType}_plank",
-            down: "wood.§%{woodType}_plank",
-            up: "wood.§%{woodType}_plank",
+            front: "wood.§%{woodType}.plank",
+            back: "wood.§%{woodType}.plank",
+            left: "wood.§%{woodType}.plank",
+            right: "wood.§%{woodType}.plank",
+            down: "wood.§%{woodType}.plank",
+            up: "wood.§%{woodType}.plank",
         ),
     ),
     health: (

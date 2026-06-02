@@ -1,4 +1,7 @@
 Overlay(
     base: Image("rock.§%{rockType}"),
-    overlay: Image("rock.rock_bricks_overlay"),
+    overlay: Color(
+        base:Image("rock.rock_bricks_overlay!"),
+        color: "§%{rockColor}",
+    ),
 )

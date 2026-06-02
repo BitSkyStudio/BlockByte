@@ -584,3 +584,12 @@ impl HitTimer {
         self.current_time / self.swing_time
     }
 }
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+pub enum EntityPose {
+    Stand,
+    Walk,
+    Run,
+    Crouch,
+    CrouchWalk,
+}

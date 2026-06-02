@@ -1,0 +1,4 @@
+Overlay(
+    base: Image("dirt.dirt"),
+    overlay: Image("dirt.rocks3!"),
+)

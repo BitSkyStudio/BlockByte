@@ -1,4 +1,10 @@
 Overlay(
     base: Image("rock.§%{rockType}"),
-    overlay: Image("rock.rock_cobble_overlay"),
+    overlay: Color(
+        base: Color(
+            base: Image("rock.rock_cobble_overlay!"),
+            color: "§%{rockColor}",
+        ),
+        color: "e0e0e0",
+    )    
 )

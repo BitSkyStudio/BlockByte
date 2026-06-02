@@ -1,5 +1,5 @@
 (
-    render_data: Model(model:"slab;dirt_0;dirt_0;dirt_0"),
+    render_data: Model(model:"slab;dirt.dirt;dirt.dirt;dirt.dirt"),
     health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
         entries: [
