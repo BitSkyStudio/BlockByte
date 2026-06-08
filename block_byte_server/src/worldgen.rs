@@ -19,7 +19,10 @@ use serde::Deserialize;
 use smallvec::SmallVec;
 use splines::{Interpolation, Spline};
 
-use crate::world::{BlockPlants, Chunk, ChunkBlockComponents, WorldAccessCell};
+use crate::{
+    inventory::generate_loot_table,
+    world::{BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, WorldAccessCell},
+};
 
 pub struct RegionGeneration {
     pub x: i16,
@@ -536,13 +539,14 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     block_position,
                     placed_decoration.rotation,
                     placed_decoration.seed,
-                    |place_position, block, replace_list, replace_inverted| {
+                    |place_position, block, entry| {
                         let (place_chunk, place_chunk_offset) =
                             place_position.to_chunk_pos_offset();
                         if place_chunk == position {
-                            if replace_list
+                            if entry
+                                .replace
                                 .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
-                                ^ replace_inverted
+                                ^ entry.replace_inverted
                             {
                                 blocks.set(place_chunk_offset.index(), &block);
                             }
@@ -566,14 +570,28 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 placement.position,
                 placement.rotation,
                 placement.seed as u64,
-                |place_position, block, replace_list, replace_inverted| {
+                |place_position, block, entry| {
                     let (place_chunk, place_chunk_offset) = place_position.to_chunk_pos_offset();
                     if place_chunk == position {
-                        if replace_list
+                        if entry
+                            .replace
                             .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
-                            ^ replace_inverted
+                            ^ entry.replace_inverted
                         {
                             blocks.set(place_chunk_offset.index(), &block);
+                            if let Some(machine_data) = &block.block.data().machine {
+                                let mut machine = BlockMachine::new(machine_data, 0);
+                                if let Some(loot_table) = &entry.loot_table {
+                                    for item in generate_loot_table(loot_table.data()) {
+                                        machine
+                                            .inventory
+                                            .add_item(&machine.inventory.full_view(), item);
+                                    }
+                                }
+                                components
+                                    .machine
+                                    .set(place_chunk_offset, WorldAccessCell::new(machine));
+                            }
                         }
                     }
                 },

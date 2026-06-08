@@ -14,7 +14,13 @@
     interact_action: OpenInventory(screen:"barrel", view:[(slot:0),(slot:1),(slot:2),(slot:3),(slot:4),(slot:5),(slot:6),(slot:7),(slot:8),(slot:9)]),
     machine: Some((
         inventory_size: 10,
-        script: "",
+        script: "
+        here:
+        craft generate_dirt 0 0 1 here
+        ",
+        script_views: [
+            [(slot:0)]
+        ],
         faces: (
             back: InventoryAccess(
                 input: [(slot:2),(slot:3)]

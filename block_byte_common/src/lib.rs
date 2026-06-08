@@ -593,12 +593,24 @@ pub enum EntityPose {
     Crouch,
     CrouchWalk,
     Slide,
+    Levitate,
+    Fly,
+    Fall,
+    Sleeping,
+    Mantle,
 }
 impl EntityPose {
     pub fn height(self, data: &EntityData) -> f32 {
         data.hitbox_height
             - (match self {
-                EntityPose::Stand | EntityPose::Walk | EntityPose::Run => 0.,
+                EntityPose::Stand
+                | EntityPose::Walk
+                | EntityPose::Run
+                | EntityPose::Fly
+                | EntityPose::Levitate
+                | EntityPose::Fall
+                | EntityPose::Sleeping
+                | EntityPose::Mantle => 0.,
                 EntityPose::Crouch | EntityPose::CrouchWalk | EntityPose::Slide => {
                     data.crouch_height_difference
                 }

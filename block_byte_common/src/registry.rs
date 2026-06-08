@@ -884,7 +884,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                         "transfer_push" => false,
                         _ => unreachable!(),
                     },
-                    success: arguments[4].parse().unwrap(),
+                    success: parse_context.parse_label(arguments[5]).unwrap(),
                 }
             }
             "get_slot_item_count" => {
@@ -899,7 +899,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                 MachineInstrution::MoveItem {
                     from_view: arguments[0].parse().unwrap(),
                     to_view: arguments[1].parse().unwrap(),
-                    success: arguments[2].parse().unwrap(),
+                    success: parse_context.parse_label(arguments[2]).unwrap(),
                 }
             }
             "craft" => {
@@ -909,7 +909,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                     input_view: arguments[1].parse().unwrap(),
                     output_view: arguments[2].parse().unwrap(),
                     speed: arguments[3].parse().unwrap(),
-                    success: arguments[4].parse().unwrap(),
+                    success: parse_context.parse_label(arguments[4]).unwrap(),
                 }
             }
             "play_animation" => {
@@ -1475,6 +1475,8 @@ pub struct PrefabEntry {
     pub rotation: BlockRotation,
     #[serde(default)]
     pub color: BlockColor,
+    #[serde(default)]
+    pub loot_table: Option<LootTableKey>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct PrefabData {
@@ -1499,7 +1501,7 @@ impl PrefabData {
         position: BlockPos,
         rotation: HorizontalFace,
         seed: u64,
-        mut callback: impl FnMut(BlockPos, BlockEntry, KeyGroup<BlockData>, bool),
+        mut callback: impl FnMut(BlockPos, BlockEntry, &PrefabEntry),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
@@ -1523,8 +1525,7 @@ impl PrefabData {
                             .rotation
                             .get_nearest_valid(rotation.compose(entry.rotation)),
                     },
-                    entry.replace,
-                    entry.replace_inverted,
+                    entry,
                 );
             }
         }

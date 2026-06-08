@@ -26,7 +26,7 @@ use block_byte_common::{
     HitTimer, ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, ModelGeometry, ModelTexture},
-    net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
+    net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     number_approach_smooth,
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
@@ -611,9 +611,17 @@ impl ApplicationHandler for App {
                         position: self.camera.position,
                         teleport_id: self.teleport_id,
                         direction: self.camera.direction,
-                        crouching: self.camera.crouching,
-                        walking: self.camera.walking,
-                        running: self.camera.running,
+                        pose: match (
+                            self.camera.crouching,
+                            self.camera.walking,
+                            self.camera.running,
+                        ) {
+                            (false, _, true) => EntityPose::Run,
+                            (false, true, _) => EntityPose::Walk,
+                            (false, false, _) => EntityPose::Stand,
+                            (true, true, _) => EntityPose::CrouchWalk,
+                            (true, false, _) => EntityPose::Crouch,
+                        },
                     });
                     if let Some(hit_timer) = &mut self.game.hit_timer {
                         if hit_timer.tick(dt) {
@@ -1985,15 +1993,18 @@ impl ClientGame {
         }
         ps.end();
 
-        if let Some(held_item) = self.held_item() {
+        if let Some(held_item) = self.held_item()
+            && self.screen.is_none()
+        {
+            let variant_id = self
+                .item_variation
+                .get(&held_item.item)
+                .cloned()
+                .unwrap_or(0);
+            let raycast = camera.raycast(self, true);
             match &held_item.item.data().action {
-                ItemAction::Place(place_block) => match camera.raycast(self, true) {
+                ItemAction::Place(place_block) => match raycast {
                     RayCastResult::Block(position, face) => {
-                        let variant_id = self
-                            .item_variation
-                            .get(&held_item.item)
-                            .cloned()
-                            .unwrap_or(0);
                         let place_block = &place_block[variant_id];
                         let block_position = position + face.get_block_offset();
                         let block_data = place_block.block.data();
@@ -2070,18 +2081,31 @@ impl ClientGame {
                                     && !blocked
                                 {
                                     self.viewmodel_player.trigger("build");
-                                    connection.tx.send(NetworkMessageC2S::PlaceBlock {
-                                        position,
-                                        face,
-                                        variant: variant_id,
-                                    });
                                 }
                             }
                         }
                     }
                     _ => {}
                 },
-                _ => {}
+                ItemAction::Ignore => {}
+                _ => {
+                    if self.buttons.is_just_down(MouseButton::Right) {
+                        self.viewmodel_player.trigger("build");
+                    }
+                }
+            }
+            if self.buttons.is_just_down(MouseButton::Right) {
+                connection.tx.send(NetworkMessageC2S::ItemInteraction {
+                    target: match raycast {
+                        RayCastResult::Empty => ItemInteractTarget::Empty,
+                        RayCastResult::Block(position, face) => {
+                            ItemInteractTarget::Block { position, face }
+                        }
+                        RayCastResult::Entity(entity) => ItemInteractTarget::Entity { entity },
+                        RayCastResult::Plant(_, _) => unreachable!(),
+                    },
+                    variant: variant_id,
+                });
             }
         }
     }
@@ -2764,13 +2788,22 @@ pub fn viewmodel_graph() -> &'static AnimationGraph {
                 model_animation: "equip".to_string(),
                 length: 0.5,
                 speed: 1.,
-                transitions: vec![AnimationTransition {
-                    condition: "equip".to_string(),
-                    reset: true,
-                    inverted: false,
-                    to: "equip".to_string(),
-                    time: 0.,
-                }],
+                transitions: vec![
+                    AnimationTransition {
+                        condition: "build".to_string(),
+                        inverted: false,
+                        reset: true,
+                        to: "place".to_string(),
+                        time: 0.,
+                    },
+                    AnimationTransition {
+                        condition: "equip".to_string(),
+                        reset: true,
+                        inverted: false,
+                        to: "equip".to_string(),
+                        time: 0.,
+                    },
+                ],
                 observers: vec![(0.25, "swap_hand_item".to_string())],
             },
         );

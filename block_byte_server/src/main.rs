@@ -15,7 +15,7 @@ use block_byte_common::{
     ClientItem, Color, DEFAULT_VIEWSLOT, DamageTable, EntityPose, EntityStats, InventoryView,
     LookDirection, MoveMode, SERVER_DT, SERVER_TPS,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
-    net::{NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
+    net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
         EntityInteractAction, EntityKey, ItemAction, ItemKey, KeyGroup, PrefabData, PrefabEntry,
@@ -26,7 +26,8 @@ use block_byte_common::{
     time_to_ticks,
     ui::{PropertyMap, UIScreenKey},
     world::{
-        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
+        BlockComponentStorage, BlockTickList, ClientBlockComponentUpdate, ClientBlockDamage,
+        ClientBlockPlants,
     },
 };
 use palettevec::PaletteVec;
@@ -79,6 +80,22 @@ fn main() {
         match arg.as_str() {
             "worldgen_vis" => {
                 debug::visualise();
+            }
+            "test_ticklist" => {
+                let mut tl = BlockTickList::default();
+                tl.set_ticking(3, true);
+                tl.set_ticking(5, true);
+                tl.set_ticking(34, true);
+                tl.set_ticking(64, true);
+                tl.set_ticking(65, true);
+                tl.set_ticking(101, true);
+                tl.set_ticking(128, true);
+                tl.set_ticking(537, true);
+                let mut index = tl.start_index();
+                while let Some(i) = tl.next_index(&mut index) {
+                    println!("{}", i);
+                }
+                return;
             }
             "tree" => {
                 let base = "wood.oak";
@@ -661,22 +678,13 @@ impl User {
                     position,
                     direction,
                     teleport_id,
-                    crouching,
-                    walking,
-                    running,
+                    pose,
                 } => {
                     if self.teleport_id.load(Ordering::SeqCst) != teleport_id {
                         continue;
                     }
-
                     entity.direction = direction;
-                    entity.pose = match (crouching, walking, running) {
-                        (false, _, true) => EntityPose::Run,
-                        (false, true, _) => EntityPose::Walk,
-                        (false, false, _) => EntityPose::Stand,
-                        (true, true, _) => EntityPose::CrouchWalk,
-                        (true, false, _) => EntityPose::Crouch,
-                    };
+                    entity.pose = pose;
                     match world.teleport_entity(entity, position) {
                         Ok(_) => {
                             *self.view_position.lock() = position.to_chunk_pos();
@@ -710,16 +718,15 @@ impl User {
                         },
                     );
                 }
-                NetworkMessageC2S::PlaceBlock {
-                    position,
-                    face,
-                    variant,
-                } => {
+                NetworkMessageC2S::ItemInteraction { target, variant } => {
                     let mut item_stack = &mut entity.inventory.items[entity.hand_slot];
                     if let Some(item) = &mut item_stack {
                         match &item.item.data().action {
                             ItemAction::Ignore => {}
                             ItemAction::Place(placements) => {
+                                let ItemInteractTarget::Block { position, face } = target else {
+                                    continue;
+                                };
                                 let Some(place) = placements.get(variant) else {
                                     continue;
                                 };
@@ -766,6 +773,9 @@ impl User {
                                 }
                             }
                             ItemAction::SpawnEntity(key) => {
+                                let ItemInteractTarget::Block { position, face } = target else {
+                                    continue;
+                                };
                                 world
                                     .spawn_entity(Entity::new(
                                         *key,
@@ -776,6 +786,9 @@ impl User {
                             }
                             ItemAction::Plant(key) => todo!(),
                             ItemAction::RotateBlock => {
+                                let ItemInteractTarget::Block { position, face } = target else {
+                                    continue;
+                                };
                                 let Some(mut block) = world.get_block(position) else {
                                     continue;
                                 };
@@ -887,6 +900,7 @@ impl User {
                                 .as_ref()
                                 .unwrap();
                             machine.modify_property(machine_data, &property, *value, *mode);
+                            world.wakeup_component::<BlockMachine>(position);
                         }
                     }
                 }
@@ -1186,6 +1200,7 @@ impl User {
                                         value,
                                         modify_mode,
                                     );
+                                    world.wakeup_component::<BlockMachine>(*position);
                                 }
                             }
                         }

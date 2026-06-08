@@ -17,22 +17,26 @@ use crate::{
 };
 
 #[derive(Serialize, Deserialize)]
+pub enum ItemInteractTarget {
+    Block { position: BlockPos, face: Face },
+    Entity { entity: Uuid },
+    Empty,
+}
+
+#[derive(Serialize, Deserialize)]
 pub enum NetworkMessageC2S {
     PlayerPosition {
         position: Pos,
         direction: LookDirection,
         teleport_id: u32,
-        crouching: bool,
-        walking: bool,
-        running: bool,
+        pose: EntityPose,
     },
     AttackBlock {
         position: BlockPos,
         face: Face,
     },
-    PlaceBlock {
-        position: BlockPos,
-        face: Face,
+    ItemInteraction {
+        target: ItemInteractTarget,
         variant: usize,
     },
     CloseUI,

@@ -319,7 +319,7 @@ impl ChunkPos {
         }
     }
 }
-#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct ChunkOffset(pub u16);
 impl ChunkOffset {
     pub fn new(x: u8, y: u8, z: u8) -> Self {
