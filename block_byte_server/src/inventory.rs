@@ -423,6 +423,9 @@ impl Inventory {
     pub fn add_item(&mut self, view: &InventoryView, mut item: ItemStack) -> Option<ItemStack> {
         let stack_size = item.item.data().stack_size;
         for slot_index in &view.slots {
+            if !slot_index.input {
+                continue;
+            }
             let mut slot = &mut self.items[slot_index.slot];
             if let Some(slot) = slot {
                 if let Some((stack, rest)) = item.merge(&slot, slot_index) {
@@ -437,15 +440,22 @@ impl Inventory {
             }
         }
         for slot_index in &view.slots {
+            if !slot_index.input {
+                continue;
+            }
             if let Some(filter) = &slot_index.filter {
                 if !filter.contains(item.item) {
                     continue;
                 }
             }
             let mut slot = &mut self.items[slot_index.slot];
+            let slot_stack_size = match slot_index.stack_size_override {
+                Some(overriden_value) => overriden_value,
+                None => stack_size,
+            };
             if slot.is_none() {
-                if item.count > stack_size {
-                    let (first, second) = item.split(stack_size);
+                if item.count > slot_stack_size {
+                    let (first, second) = item.split(slot_stack_size);
                     *slot = Some(first);
                     item = second;
                 } else {
@@ -456,9 +466,16 @@ impl Inventory {
         }
         Some(item)
     }
-    pub fn count_item(&self, view: &InventoryView, item: impl ItemMatcher) -> ItemCount {
+    pub fn count_removeable_items(
+        &self,
+        view: &InventoryView,
+        item: impl ItemMatcher,
+    ) -> ItemCount {
         let mut count = 0;
         for slot in &view.slots {
+            if !slot.output {
+                continue;
+            }
             match &self.items[slot.slot] {
                 Some(stack) => {
                     if item.matches(stack) {
@@ -477,6 +494,9 @@ impl Inventory {
         mut count: ItemCount,
     ) -> ItemCount {
         for slot_index in &view.slots {
+            if !slot_index.output {
+                continue;
+            }
             let mut slot = &mut self.items[slot_index.slot];
             if slot.is_some() {
                 let mut item_slot = slot.as_mut().unwrap();

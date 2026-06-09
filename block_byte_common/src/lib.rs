@@ -209,13 +209,12 @@ pub struct ViewSlot {
     pub stack_size_override: Option<u16>,
     #[serde(default)]
     pub filter: Option<KeyGroup<ItemData>>,
+    #[serde(default = "default_bool::<true>")]
+    pub input: bool,
+    #[serde(default = "default_bool::<true>")]
+    pub output: bool,
 }
 
-pub static DEFAULT_VIEWSLOT: ViewSlot = ViewSlot {
-    slot: 0,
-    filter: None,
-    stack_size_override: None,
-};
 #[derive(Default, Clone)]
 pub struct InventoryView {
     pub slots: Vec<ViewSlot>,
@@ -228,6 +227,8 @@ impl InventoryView {
                     slot,
                     stack_size_override: None,
                     filter: None,
+                    input: true,
+                    output: true,
                 })
                 .collect(),
         }

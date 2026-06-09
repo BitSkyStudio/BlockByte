@@ -1330,7 +1330,7 @@ impl BlockMachine {
                         let recipe = recipe.data();
                         let mut failed = false;
                         for (input, count) in &recipe.inputs {
-                            if self.inventory.count_item(input_view, *input) < *count {
+                            if self.inventory.count_removeable_items(input_view, *input) < *count {
                                 failed = true;
                                 break;
                             }

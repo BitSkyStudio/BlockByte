@@ -271,7 +271,7 @@ pub enum ScriptParseError<'a> {
 #[derive(Serialize, Deserialize)]
 pub struct ScriptState {
     pub pc: usize,
-    pub registers: Vec<ScriptValue>,
+    pub registers: Box<[ScriptValue]>,
 }
 impl ScriptState {
     pub fn new<E>(script: &CompiledScript<E>) -> Self {

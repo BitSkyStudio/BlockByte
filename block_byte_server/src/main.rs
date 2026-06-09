@@ -12,8 +12,8 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, Color, DEFAULT_VIEWSLOT, DamageTable, EntityPose, EntityStats, InventoryView,
-    LookDirection, MoveMode, SERVER_DT, SERVER_TPS,
+    ClientItem, Color, DamageTable, EntityPose, EntityStats, InventoryView, LookDirection,
+    MoveMode, SERVER_DT, SERVER_TPS, ViewSlot,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -999,21 +999,25 @@ impl User {
                     let Some(screen) = &*screen else {
                         continue;
                     };
-                    let Some((from_provider, from_index)) = screen.get_slot(from) else {
+                    let Some((from_provider, from_index, from_slot)) = screen.get_slot(from) else {
                         continue;
                     };
-                    let Some((to_provider, to_index)) = screen.get_slot(to) else {
+                    let Some((to_provider, to_index, to_slot)) = screen.get_slot(to) else {
                         continue;
                     };
-                    let move_item = |src: &mut Option<ItemStack>, dst: &mut Option<ItemStack>| {
+                    let move_item = |src: &mut Option<ItemStack>,
+                                     dst: &mut Option<ItemStack>,
+                                     src_viewslot: &ViewSlot,
+                                     dst_viewslot: &ViewSlot| {
+                        if !src_viewslot.output || !dst_viewslot.input {
+                            return;
+                        }
                         if let Some(source) = src.as_mut() {
                             let count = mode.get_count(source.count);
                             if let Some(destination) = dst.as_mut() {
-                                //todo: correct viewslot
-                                if let Some((a, b)) = destination.merge(
-                                    &source.copy(count),
-                                    &block_byte_common::DEFAULT_VIEWSLOT,
-                                ) {
+                                if let Some((a, b)) =
+                                    destination.merge(&source.copy(count), dst_viewslot)
+                                {
                                     *destination = a;
                                     source.count += b.map(|item| item.count).unwrap_or(0);
                                     source.count -= count;
@@ -1024,6 +1028,16 @@ impl User {
                                     std::mem::swap(source, destination);
                                 }
                             } else {
+                                match dst_viewslot.filter {
+                                    Some(filter) => {
+                                        if !filter.contains(source.item) {
+                                            return;
+                                        }
+                                    }
+                                    None => {}
+                                }
+                                let count =
+                                    count.min(dst_viewslot.stack_size_override.unwrap_or(u16::MAX));
                                 if count >= source.count {
                                     *dst = src.take();
                                 } else {
@@ -1048,7 +1062,7 @@ impl User {
                             .items
                             .get_disjoint_mut([from_index, to_index])
                             .unwrap();
-                        move_item(src, dst);
+                        move_item(src, dst, from_slot, to_slot);
                     } else {
                         let mut to_provided = ProvidedInventory::lock(
                             &to_provider,
@@ -1060,6 +1074,8 @@ impl User {
                         move_item(
                             &mut from_provided.get_mut().items[from_index],
                             &mut to_provided.get_mut().items[to_index],
+                            from_slot,
+                            to_slot,
                         );
                     }
                     entity.current_stats_dirty = true;
@@ -1212,9 +1228,12 @@ impl User {
                         continue;
                     };
                     let mut user_inventory = RefCell::new(&mut entity.inventory);
-                    let Some((provider, index)) = screen.get_slot(slot) else {
+                    let Some((provider, index, slot)) = screen.get_slot(slot) else {
                         continue;
                     };
+                    if !slot.output {
+                        continue;
+                    }
                     let mut provided =
                         ProvidedInventory::lock(&provider, world, entity.uuid, &user_inventory)
                             .unwrap();
@@ -1259,11 +1278,12 @@ pub struct UserScreen {
     pub previous_properties: PropertyMap,
 }
 impl UserScreen {
-    pub fn get_slot(&self, slot: usize) -> Option<(InventoryProvider, usize)> {
+    pub fn get_slot<'a>(&'a self, slot: usize) -> Option<(InventoryProvider, usize, &'a ViewSlot)> {
         let mut running_index = 0;
         for (inventory, view) in &self.inventories {
             if slot < running_index + view.size() {
-                return Some((*inventory, slot - running_index));
+                let i = slot - running_index;
+                return Some((*inventory, i, &view.slots[i]));
             }
             running_index += view.size();
         }
@@ -1359,7 +1379,7 @@ impl ProvidedInventoryList<'_> {
     pub fn count_item(&self, item: ItemKey) -> ItemCount {
         self.0
             .iter()
-            .map(|(provided, view)| provided.get().count_item(view, item))
+            .map(|(provided, view)| provided.get().count_removeable_items(view, item))
             .sum()
     }
     pub fn remove_item(&mut self, item: ItemKey, mut count: ItemCount) -> ItemCount {
