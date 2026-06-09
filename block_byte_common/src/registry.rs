@@ -811,6 +811,7 @@ pub enum MachineInstrution {
     ReadLogic {
         face: Face,
         register: RegisterId,
+        success: ScriptLabel,
     },
     WriteSignal {
         face: Face,
@@ -865,13 +866,44 @@ impl ExternalScriptByteCode for MachineInstrution {
         Ok(match opcode {
             "yield" => MachineInstrution::Yield,
             "sleep" => {
-                expect_argument_count(parse_context.current_line_num, arguments, 2)?;
-                let sleep_time = arguments[0].parse().unwrap();
-                MachineInstrution::Sleep { time: sleep_time }
+                expect_argument_count(parse_context, arguments, 2)?;
+                MachineInstrution::Sleep {
+                    time: arguments[0].parse().unwrap(),
+                }
             }
             "block" => MachineInstrution::Block,
+            "read_logic" => {
+                expect_argument_count(parse_context, arguments, 3)?;
+                MachineInstrution::ReadLogic {
+                    face: parse_face(arguments[0])?,
+                    register: arguments[1].parse().unwrap(),
+                    success: parse_context.parse_label(arguments[2])?,
+                }
+            }
+            "read_signal" => {
+                expect_argument_count(parse_context, arguments, 3)?;
+                MachineInstrution::ReadSignal {
+                    face: parse_face(arguments[0])?,
+                    register: arguments[1].parse().unwrap(),
+                    success: parse_context.parse_label(arguments[2])?,
+                }
+            }
+            "write_logic" => {
+                expect_argument_count(parse_context, arguments, 2)?;
+                MachineInstrution::WriteLogic {
+                    face: parse_face(arguments[0])?,
+                    value: parse_context.parse_value(arguments[1]),
+                }
+            }
+            "write_signal" => {
+                expect_argument_count(parse_context, arguments, 2)?;
+                MachineInstrution::WriteSignal {
+                    face: parse_face(arguments[0])?,
+                    value: parse_context.parse_value(arguments[1]),
+                }
+            }
             "transfer_pull" | "transfer_push" => {
-                expect_argument_count(parse_context.current_line_num, arguments, 5)?;
+                expect_argument_count(parse_context, arguments, 5)?;
                 let x = arguments[1].parse().unwrap();
                 let y = arguments[2].parse().unwrap();
                 let z = arguments[3].parse().unwrap();
@@ -888,14 +920,14 @@ impl ExternalScriptByteCode for MachineInstrution {
                 }
             }
             "get_slot_item_count" => {
-                expect_argument_count(parse_context.current_line_num, arguments, 2)?;
+                expect_argument_count(parse_context, arguments, 2)?;
                 MachineInstrution::GetSlotItemCount {
                     slot: parse_context.parse_value(arguments[1]),
                     register: parse_context.parse_register(arguments[0]),
                 }
             }
             "move_item" => {
-                expect_argument_count(parse_context.current_line_num, arguments, 3)?;
+                expect_argument_count(parse_context, arguments, 3)?;
                 MachineInstrution::MoveItem {
                     from_view: arguments[0].parse().unwrap(),
                     to_view: arguments[1].parse().unwrap(),
@@ -903,7 +935,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                 }
             }
             "craft" => {
-                expect_argument_count(parse_context.current_line_num, arguments, 5)?;
+                expect_argument_count(parse_context, arguments, 5)?;
                 MachineInstrution::Craft {
                     recipes: KeyGroup::parse(arguments[0]).unwrap(),
                     input_view: arguments[1].parse().unwrap(),
@@ -913,7 +945,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                 }
             }
             "play_animation" => {
-                expect_argument_count(parse_context.current_line_num, arguments, 1)?;
+                expect_argument_count(parse_context, arguments, 1)?;
                 MachineInstrution::PlayAnimation {
                     animation: arguments[0].to_string(),
                 }

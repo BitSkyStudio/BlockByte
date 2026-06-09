@@ -62,14 +62,14 @@ pub struct CompiledScript<E> {
     pub named_registers: Vec<String>,
 }
 pub fn expect_argument_count(
-    line_num: usize,
+    context: &ScriptParseContext,
     arguments: &[&str],
     expect: usize,
 ) -> Result<(), ScriptParseError<'static>> {
     let arg_count = arguments.len();
     if arg_count != expect {
         Err(ScriptParseError::IllegalArguments {
-            line: line_num,
+            line: context.current_line_num,
             expected_count: expect,
             actual_count: arg_count,
         })
@@ -117,20 +117,20 @@ impl<E: ExternalScriptByteCode> CompiledScript<E> {
                 let arguments = &parts[1..];
                 Ok(match parts[0] {
                     "move" => {
-                        expect_argument_count(line_num, arguments, 2)?;
+                        expect_argument_count(&parse_context, arguments, 2)?;
                         ScriptByteCode::Move {
                             from: parse_context.parse_value(arguments[1]),
                             to: parse_context.parse_register(arguments[0]),
                         }
                     }
                     "jmp" => {
-                        expect_argument_count(line_num, arguments, 1)?;
+                        expect_argument_count(&parse_context, arguments, 1)?;
                         ScriptByteCode::Jump {
                             label: parse_context.parse_label(arguments[0])?,
                         }
                     }
                     "jl" | "jle" | "jg" | "jge" | "je" | "jne" => {
-                        expect_argument_count(line_num, arguments, 3)?;
+                        expect_argument_count(&parse_context, arguments, 3)?;
                         ScriptByteCode::JumpConditional {
                             label: parse_context.parse_label(arguments[0])?,
                             b: parse_context.parse_value(arguments[2]),
@@ -148,7 +148,7 @@ impl<E: ExternalScriptByteCode> CompiledScript<E> {
                     }
                     "add" | "sub" | "mul" | "div" | "mod" | "or" | "xor" | "and" | "bsl"
                     | "bsr" => {
-                        expect_argument_count(line_num, arguments, 3)?;
+                        expect_argument_count(&parse_context, arguments, 3)?;
                         ScriptByteCode::Operation {
                             b: parse_context.parse_value(arguments[2]),
                             a: parse_context.parse_register(arguments[1]),
@@ -169,7 +169,7 @@ impl<E: ExternalScriptByteCode> CompiledScript<E> {
                         }
                     }
                     "not" => {
-                        expect_argument_count(line_num, arguments, 2)?;
+                        expect_argument_count(&parse_context, arguments, 2)?;
                         ScriptByteCode::Operation {
                             b: RegisterOrImmediate::Immediate(0),
                             a: parse_context.parse_register(arguments[1]),

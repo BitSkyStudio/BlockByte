@@ -1242,8 +1242,19 @@ impl BlockMachine {
                     other_machine.inventory_observers.push(block_position);
                     CallbackResult::Continue
                 }
-                MachineInstrution::ReadLogic { face, register } => {
-                    state.registers[*register] = self.logic_state.by_face(*face).unwrap_or(0);
+                MachineInstrution::ReadLogic {
+                    face,
+                    register,
+                    success,
+                } => {
+                    match self.logic_state.by_face(*face) {
+                        Some(value) => {
+                            state.registers[*register] = *value;
+                            state.pc = *success;
+                        }
+                        None => {}
+                    }
+
                     CallbackResult::Continue
                 }
                 MachineInstrution::WriteSignal { face, value } => {

@@ -1183,10 +1183,14 @@ impl TexCoordsExt for TextureKey {
 }
 trait TexCoordsIndexExt {
     fn tex_coords(self, index: usize) -> TexCoords;
+    fn variant_count(self) -> usize;
 }
 impl TexCoordsIndexExt for KeyGroup<TextureData> {
     fn tex_coords(self, index: usize) -> TexCoords {
         self.list()[index % self.list().len()].tex_coords()
+    }
+    fn variant_count(self) -> usize {
+        self.list().len()
     }
 }
 pub enum RayCastResult {
@@ -2336,8 +2340,17 @@ impl ClientChunk {
                                             }
                                         }
                                     }
-                                    //todo: proper tex index
-                                    let texture = faces.by_face(face).tex_coords(0 as usize);
+                                    let face_texture = faces.by_face(face);
+                                    let mut tex_index = if face_texture.variant_count() > 1 {
+                                        let hash = (base_position.x as i32 * 94839)
+                                            ^ (base_position.y as i32 * 532)
+                                            ^ (base_position.z as i32 * 5473);
+                                        let hash = hash * hash * 957548 + hash * 344;
+                                        (hash >> 6) as usize
+                                    } else {
+                                        0
+                                    };
+                                    let texture = face_texture.tex_coords(tex_index);
                                     mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
                                         |(position, uv)| MeshVertex {
                                             position: {
@@ -2375,8 +2388,17 @@ impl ClientChunk {
                                             }
                                         }
                                     }
-                                    //todo: proper tex index
-                                    let texture = faces.by_face(face).tex_coords(0 as usize);
+                                    let face_texture = faces.by_face(face);
+                                    let mut tex_index = if face_texture.variant_count() > 1 {
+                                        let hash = (base_position.x as i32 * 94839)
+                                            ^ (base_position.y as i32 * 532)
+                                            ^ (base_position.z as i32 * 5473);
+                                        let hash = hash * hash * 957548 + hash * 344;
+                                        (hash >> 6) as usize
+                                    } else {
+                                        0
+                                    };
+                                    let texture = face_texture.tex_coords(tex_index);
                                     let base_position = position.to_block_pos().to_pos()
                                         + (BlockPos {
                                             x: x as i32,
