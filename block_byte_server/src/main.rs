@@ -1025,6 +1025,45 @@ impl User {
                                         *src = None;
                                     }
                                 } else if mode.can_swap() {
+                                    if !(src_viewslot.input
+                                        && src_viewslot.output
+                                        && dst_viewslot.input
+                                        && dst_viewslot.output)
+                                    {
+                                        return;
+                                    }
+                                    match dst_viewslot.filter {
+                                        Some(filter) => {
+                                            if !filter.contains(source.item) {
+                                                return;
+                                            }
+                                        }
+                                        None => {}
+                                    }
+                                    match src_viewslot.filter {
+                                        Some(filter) => {
+                                            if !filter.contains(destination.item) {
+                                                return;
+                                            }
+                                        }
+                                        None => {}
+                                    }
+                                    match dst_viewslot.stack_size_override {
+                                        Some(stack_size_override) => {
+                                            if source.count > stack_size_override {
+                                                return;
+                                            }
+                                        }
+                                        None => {}
+                                    }
+                                    match src_viewslot.stack_size_override {
+                                        Some(stack_size_override) => {
+                                            if destination.count > stack_size_override {
+                                                return;
+                                            }
+                                        }
+                                        None => {}
+                                    }
                                     std::mem::swap(source, destination);
                                 }
                             } else {
