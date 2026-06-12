@@ -20,7 +20,7 @@ use smallvec::SmallVec;
 use splines::{Interpolation, Spline};
 
 use crate::{
-    inventory::generate_loot_table,
+    inventory::{LootGenerationContext, generate_loot_table},
     world::{BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, WorldAccessCell},
 };
 
@@ -582,7 +582,10 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                             if let Some(machine_data) = &block.block.data().machine {
                                 let mut machine = BlockMachine::new(machine_data, 0);
                                 if let Some(loot_table) = &entry.loot_table {
-                                    for item in generate_loot_table(loot_table.data()) {
+                                    for item in generate_loot_table(
+                                        loot_table.data(),
+                                        &LootGenerationContext::default(),
+                                    ) {
                                         machine
                                             .inventory
                                             .add_item(&machine.inventory.full_view(), item);

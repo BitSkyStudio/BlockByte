@@ -5,7 +5,7 @@
         entries: [
             (
                 item: "rock.§%{rockType}.stone",
-                chance: 1.,
+                
                 modifiers: [
                     SetCount(Constant(3))
                 ]

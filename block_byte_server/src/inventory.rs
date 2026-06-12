@@ -8,6 +8,8 @@ use block_byte_common::{
     },
 };
 use parking_lot::{RwLock, RwLockWriteGuard};
+use rand::SeedableRng;
+use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
@@ -530,7 +532,10 @@ impl ItemMatcher for KeyGroup<ItemData> {
         self.contains(item.item)
     }
 }
-pub struct LootGenerationContext {}
+#[derive(Default)]
+pub struct LootGenerationContext {
+    pub seed: u64,
+}
 impl LootGenerationContext {
     pub fn generate_integer(&self, integer: &LootModifierInteger) -> u32 {
         match integer {
@@ -539,30 +544,31 @@ impl LootGenerationContext {
         }
     }
 }
-pub fn generate_loot_table(loot_table: &LootTableData) -> Vec<ItemStack> {
+pub fn generate_loot_table(
+    loot_table: &LootTableData,
+    context: &LootGenerationContext,
+) -> Vec<ItemStack> {
     let mut items = Vec::new();
+    let mut rng = Xoshiro256PlusPlus::seed_from_u64(context.seed);
     for entry in &loot_table.entries {
-        if rand::random_bool(entry.chance as f64) {
-            let mut item = ItemStack {
-                item: entry.item,
-                count: 1,
-                components: ItemComponentStorage::new(),
-            };
-            let context = LootGenerationContext {};
-            for modifier in &entry.modifiers {
-                match modifier {
-                    LootItemModifier::SetCount(value) => {
-                        item.count = context.generate_integer(value) as u16;
-                    }
-                    LootItemModifier::ApplyQuality => {
-                        //todo: randomness
-                        item.components.set_component(ItemQuality::Good);
-                    }
+        let mut item = ItemStack {
+            item: entry.item,
+            count: 1,
+            components: ItemComponentStorage::new(),
+        };
+        for modifier in &entry.modifiers {
+            match modifier {
+                LootItemModifier::SetCount(value) => {
+                    item.count = context.generate_integer(value) as u16;
+                }
+                LootItemModifier::ApplyQuality => {
+                    //todo: randomness
+                    item.components.set_component(ItemQuality::Good);
                 }
             }
-            if item.count > 0 {
-                items.push(item);
-            }
+        }
+        if item.count > 0 {
+            items.push(item);
         }
     }
     items

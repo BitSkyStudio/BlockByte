@@ -9,7 +9,7 @@
         entries: [
             (
                 item: "wood.§%{woodType}.stick",
-                chance: 1.,
+                
             )
         ]
     )),

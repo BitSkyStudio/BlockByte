@@ -49,7 +49,8 @@ use uuid::Uuid;
 
 use crate::{
     inventory::{
-        Inventory, ItemCount, ItemDurability, ItemQuality, ItemStack, generate_loot_table,
+        Inventory, ItemCount, ItemDurability, ItemQuality, ItemStack, LootGenerationContext,
+        generate_loot_table,
     },
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
@@ -1196,7 +1197,10 @@ impl User {
                         assert_eq!(list.remove_item(*input_item, *input_count * count), 0);
                     }
                     for _ in 0..count {
-                        for item in generate_loot_table(recipe.outputs.data()) {
+                        for item in generate_loot_table(
+                            recipe.outputs.data(),
+                            &LootGenerationContext::default(),
+                        ) {
                             if let Some(overflow_item) = list.add_item(item) {
                                 world.drop_items(
                                     std::iter::once(overflow_item),

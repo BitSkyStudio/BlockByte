@@ -12,7 +12,7 @@
         entries: [
             (
                 item: "wood.§%{woodType}.plank",
-                chance: 1.,
+                
                 modifiers: [
                     SetCount(Constant(2))
                 ],

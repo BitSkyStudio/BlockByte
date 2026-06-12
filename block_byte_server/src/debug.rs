@@ -217,7 +217,7 @@ pub fn generate_tree(
         }
     }
     /*let part = PrefabEntry {
-        chance: 1.,
+
         blocks: blocks
             .into_iter()
             .filter_map(|(position, block_type)| {

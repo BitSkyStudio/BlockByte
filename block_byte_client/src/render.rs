@@ -1613,7 +1613,7 @@ impl<T> Default for Mesh<T> {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub struct MeshVertex {
     pub position: Pos,
     pub normal: Pos,
@@ -1913,4 +1913,50 @@ impl GPURenderPipeline {
         });
         GPURenderPipeline { render_pipeline }
     }
+}
+
+struct BlockRotationFacePrecompute {
+    rotation_face_coords: [([MeshVertex; 4], Face); 24 * 6],
+}
+static BLOCK_ROTATION_FACE_TABLE: OnceLock<BlockRotationFacePrecompute> = OnceLock::new();
+pub fn get_block_rotation_face_vertices(
+    rotation: BlockRotation,
+    world_face: Face,
+) -> &'static ([MeshVertex; 4], Face) {
+    let table = BLOCK_ROTATION_FACE_TABLE.get_or_init(|| BlockRotationFacePrecompute {
+        rotation_face_coords: std::array::from_fn(|i| {
+            let rotation: BlockRotation = unsafe { std::mem::transmute((i % 24) as u8) };
+            let world_face = Face::all()[i / 24];
+            let local_face = rotation.inverse_rotate_face(world_face);
+            let matrix = get_block_matrix(BlockPos::all(0), rotation);
+            (
+                local_face
+                    .get_vertices(
+                        TexCoords {
+                            u1: 0.,
+                            u2: 1.,
+                            v1: 0.,
+                            v2: 1.,
+                        },
+                        0,
+                    )
+                    .map(|(position, uv)| MeshVertex {
+                        position: {
+                            let position =
+                                cgmath::Point3::new(position.x - 0.5, position.y, position.z - 0.5);
+                            let rotated = matrix.transform_point(position);
+                            Pos {
+                                x: rotated.x,
+                                y: rotated.y,
+                                z: rotated.z,
+                            }
+                        },
+                        normal: world_face.get_offset(),
+                        uv,
+                    }),
+                local_face,
+            )
+        }),
+    });
+    &table.rotation_face_coords[rotation as usize + world_face as usize * 24]
 }

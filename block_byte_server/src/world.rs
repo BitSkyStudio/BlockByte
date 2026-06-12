@@ -54,7 +54,8 @@ use crate::{
     InventoryProvider, MessageQueue, ProvidedInventory, ProvidedInventoryList, Server, User,
     UserIndex, UserScreenState,
     inventory::{
-        Inventory, ItemCraftStats, ItemQuality, ItemStack, generate_loot_table, lock_inventories,
+        Inventory, ItemCraftStats, ItemQuality, ItemStack, LootGenerationContext,
+        generate_loot_table, lock_inventories,
     },
     registry::{Key, RegistryConfigLoadable},
 };
@@ -1352,7 +1353,10 @@ impl BlockMachine {
                         for (input, count) in &recipe.inputs {
                             self.inventory.remove_item(input_view, *input, *count);
                         }
-                        for output in generate_loot_table(recipe.outputs.data()) {
+                        for output in generate_loot_table(
+                            recipe.outputs.data(),
+                            &LootGenerationContext::default(),
+                        ) {
                             self.inventory.add_item(output_view, output);
                         }
                         result = MachineRunResult::Sleep(time_to_ticks(recipe.craft_time * speed));
@@ -1523,7 +1527,10 @@ impl WorldAccess<'_> {
             self.remove_block_component(damage);
         }
 
-        let mut drops = generate_loot_table(block_data.loot_table.data());
+        let mut drops = generate_loot_table(
+            block_data.loot_table.data(),
+            &LootGenerationContext::default(),
+        );
 
         if let Some(plant) = self.get_block_component::<BlockPlants>(position) {
             //todo: harvest

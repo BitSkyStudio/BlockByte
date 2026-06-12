@@ -548,8 +548,7 @@ fn render_element(
                                 for loot_entry in &recipe_data.outputs.data().entries {
                                     //todo: somehow do modifiers
                                     text += format!(
-                                        "\n+{}% {}",
-                                        loot_entry.chance * 100.,
+                                        "\n+{}",
                                         translate(
                                             format!("item.{}", loot_entry.item.text_id()).as_str()
                                         )

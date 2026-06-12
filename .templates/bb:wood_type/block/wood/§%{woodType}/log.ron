@@ -19,7 +19,7 @@
         entries: [
             (
                 item: "wood.§%{woodType}.log",
-                chance: 1.,
+                
             )
         ]
     )),

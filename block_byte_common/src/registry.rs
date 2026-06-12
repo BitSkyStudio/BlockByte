@@ -1379,7 +1379,6 @@ pub type LootTableKey = Key<LootTableData>;
 #[derive(Deserialize)]
 pub struct LootTableEntry {
     pub item: ItemKey,
-    pub chance: f32,
     #[serde(default)]
     pub modifiers: Vec<LootItemModifier>,
 }

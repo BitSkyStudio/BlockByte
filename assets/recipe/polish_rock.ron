@@ -6,7 +6,7 @@
         entries: [
             (
                 item: "rock.limestone.brick",
-                chance: 1.,
+                
             )
         ]
     )),

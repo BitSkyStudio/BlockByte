@@ -69,7 +69,7 @@ use crate::{
     render::{
         BaseMesh, CameraUniform, ChunkMesh, ChunkVertex, DamageMesh, DamageVertex, GPUMesh,
         GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, SurfaceError,
-        Vertex, draw_model, get_block_matrix,
+        Vertex, draw_model, get_block_matrix, get_block_rotation_face_vertices,
     },
     ui::{ScreenData, TextRenderer, UIInput, UIPos, UIRect, render_screen, text_renderer},
 };
@@ -2313,107 +2313,39 @@ impl ClientChunk {
                                 y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32,
                                 z: (position.z as f32 * CHUNK_SIZE as f32) + z as f32,
                             };
-                            if block.rotation != BlockRotation::default() {
-                                let matrix = get_block_matrix(
-                                    position.to_block_pos()
-                                        + BlockPos {
-                                            x: x as i32,
-                                            y: y as i32,
-                                            z: z as i32,
-                                        },
-                                    block.rotation,
-                                );
-                                for face in Face::all() {
-                                    let neighbor_position =
-                                        BlockPos {
-                                            x: x as i32,
-                                            y: y as i32,
-                                            z: z as i32,
-                                        } + block.rotation.rotate_face(face).get_block_offset();
-                                    if let Some(neighbor_block) = get_neighbor(neighbor_position) {
-                                        let neighbor_block_data = neighbor_block.block.data();
-                                        match &neighbor_block_data.render_data {
-                                            BlockRenderData::Air
-                                            | BlockRenderData::Model { .. } => {}
-                                            BlockRenderData::Full { faces, .. } => {
-                                                continue;
-                                            }
+                            for face in Face::all() {
+                                let neighbor_position = BlockPos {
+                                    x: x as i32,
+                                    y: y as i32,
+                                    z: z as i32,
+                                } + face.get_block_offset();
+                                if let Some(neighbor_block) = get_neighbor(neighbor_position) {
+                                    let neighbor_block_data = neighbor_block.block.data();
+                                    match &neighbor_block_data.render_data {
+                                        BlockRenderData::Air | BlockRenderData::Model { .. } => {}
+                                        BlockRenderData::Full { faces, .. } => {
+                                            continue;
                                         }
                                     }
-                                    let face_texture = faces.by_face(face);
-                                    let mut tex_index = if face_texture.variant_count() > 1 {
-                                        let hash = (base_position.x as i32 * 94839)
-                                            ^ (base_position.y as i32 * 532)
-                                            ^ (base_position.z as i32 * 5473);
-                                        let hash = hash * hash * 957548 + hash * 344;
-                                        (hash >> 6) as usize
-                                    } else {
-                                        0
-                                    };
-                                    let texture = face_texture.tex_coords(tex_index);
-                                    mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
-                                        |(position, uv)| MeshVertex {
-                                            position: {
-                                                let position = cgmath::Point3::new(
-                                                    position.x - 0.5,
-                                                    position.y,
-                                                    position.z - 0.5,
-                                                );
-                                                let rotated = matrix.transform_point(position);
-                                                Pos {
-                                                    x: rotated.x,
-                                                    y: rotated.y,
-                                                    z: rotated.z,
-                                                }
-                                            },
-                                            normal: face.get_offset(),
-                                            uv,
-                                        },
-                                    ));
                                 }
-                            } else {
-                                for face in Face::all() {
-                                    let neighbor_position = BlockPos {
-                                        x: x as i32,
-                                        y: y as i32,
-                                        z: z as i32,
-                                    } + face.get_block_offset();
-                                    if let Some(neighbor_block) = get_neighbor(neighbor_position) {
-                                        let neighbor_block_data = neighbor_block.block.data();
-                                        match &neighbor_block_data.render_data {
-                                            BlockRenderData::Air
-                                            | BlockRenderData::Model { .. } => {}
-                                            BlockRenderData::Full { faces, .. } => {
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                    let face_texture = faces.by_face(face);
-                                    let mut tex_index = if face_texture.variant_count() > 1 {
-                                        let hash = (base_position.x as i32 * 94839)
-                                            ^ (base_position.y as i32 * 532)
-                                            ^ (base_position.z as i32 * 5473);
-                                        let hash = hash * hash * 957548 + hash * 344;
-                                        (hash >> 6) as usize
-                                    } else {
-                                        0
-                                    };
-                                    let texture = face_texture.tex_coords(tex_index);
-                                    let base_position = position.to_block_pos().to_pos()
-                                        + (BlockPos {
-                                            x: x as i32,
-                                            y: y as i32,
-                                            z: z as i32,
-                                        })
-                                        .to_pos();
-                                    mesh_consumer.add_quad(face.get_vertices(texture, 0).map(
-                                        |(position, uv)| MeshVertex {
-                                            position: position + base_position,
-                                            normal: face.get_offset(),
-                                            uv,
-                                        },
-                                    ));
-                                }
+                                let (vertices, local_face) =
+                                    get_block_rotation_face_vertices(block.rotation, face);
+                                let face_texture = faces.by_face(*local_face);
+                                let mut tex_index = if face_texture.variant_count() > 1 {
+                                    let hash = (base_position.x as i32 * 94839)
+                                        ^ (base_position.y as i32 * 532)
+                                        ^ (base_position.z as i32 * 5473);
+                                    let hash = hash * hash * 957548 + hash * 344;
+                                    (hash >> 6) as usize
+                                } else {
+                                    0
+                                };
+                                let texture = face_texture.tex_coords(tex_index);
+                                mesh_consumer.add_quad(vertices.map(|vertex| MeshVertex {
+                                    position: vertex.position + base_position,
+                                    normal: vertex.normal,
+                                    uv: texture.map(vertex.uv),
+                                }));
                             }
                         }
                         BlockRenderData::Model {

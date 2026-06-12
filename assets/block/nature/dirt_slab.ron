@@ -5,7 +5,7 @@
         entries: [
             (
                 item: "dirt",
-                chance: 1.,
+                
             )
         ]
     )),
