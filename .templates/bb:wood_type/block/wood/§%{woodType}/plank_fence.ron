@@ -1,0 +1,35 @@
+(
+    render_data: Model(
+        model:"beam;wood.§%{woodType}.plank",
+        render_connectors: (
+            front: ["fence"],
+            back: ["fence"],
+            left: ["fence"],
+            right: ["fence"],
+        ),
+        render_connections: [
+            (
+                model: "fence_connector;wood.§%{woodType}.plank",
+                rotations: [FrontUp, BackUp, LeftUp, RightUp],
+                contain: ["fence"],
+            )
+        ]
+    ),
+    health: (
+        health: 5., 
+        health_regen: 0.05, 
+        table: ()
+    ),
+    rotation: Axis,
+    loot_table: Own((
+        entries: [
+            (
+                item: "wood.§%{woodType}.plank",
+                
+                modifiers: [
+                    SetCount(Constant(1))
+                ],
+            )
+        ]
+    )),
+)

@@ -573,20 +573,3 @@ pub fn generate_loot_table(
     }
     items
 }
-pub fn lock_inventories<'a>(
-    a: &'a RwLock<Inventory>,
-    b: &'a RwLock<Inventory>,
-) -> (
-    RwLockWriteGuard<'a, Inventory>,
-    RwLockWriteGuard<'a, Inventory>,
-) {
-    if (a as *const _) < (b as *const _) {
-        let a = a.write();
-        let b = b.write();
-        (a, b)
-    } else {
-        let b = b.write();
-        let a = a.write();
-        (a, b)
-    }
-}

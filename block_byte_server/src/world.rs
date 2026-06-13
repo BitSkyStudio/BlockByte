@@ -55,7 +55,7 @@ use crate::{
     UserIndex, UserScreenState,
     inventory::{
         Inventory, ItemCraftStats, ItemQuality, ItemStack, LootGenerationContext,
-        generate_loot_table, lock_inventories,
+        generate_loot_table,
     },
     registry::{Key, RegistryConfigLoadable},
 };
