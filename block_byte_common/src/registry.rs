@@ -267,7 +267,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; PrefabData, prefab; ResearchData, research);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; PrefabData, prefab; ResearchData, research; WorldGenStructureData, structure);
 
 impl<T: 'static> Key<T>
 where
@@ -1338,6 +1338,7 @@ pub struct BiomeData {
     pub bottom_block: BlockKey,
     pub plants: Vec<PlantSpawner>,
     pub decorators: Vec<BiomeDecorator>,
+    pub structures: Vec<WorldGenStructureKey>,
     #[serde(default)]
     pub debug_color: Color,
     pub temperature: BiomeNoiseConfig,
@@ -1575,3 +1576,32 @@ pub struct ResearchData {
 }
 impl RegistryRonConfigLoadable for ResearchData {}
 pub type ResearchKey = Key<ResearchData>;
+
+#[derive(Deserialize)]
+pub struct WorldGenStructureData {
+    pub exclusion_zone: u16,
+    pub root_room: String,
+    pub rooms: HashMap<String, WorldGenStructureRoom>,
+}
+impl RegistryRonConfigLoadable for WorldGenStructureData {}
+pub type WorldGenStructureKey = Key<WorldGenStructureData>;
+#[derive(Deserialize)]
+pub struct WorldGenStructureConnection {
+    pub position: BlockPos,
+    pub facing: HorizontalFace,
+    pub rooms: Vec<WorldGenStructureRoomSelection>,
+}
+#[derive(Deserialize)]
+pub struct WorldGenStructureRoomSelection {
+    pub room: String,
+    pub weight: f32,
+    #[serde(default)]
+    pub weight_depth_bias: f32,
+}
+#[derive(Deserialize)]
+pub struct WorldGenStructureRoom {
+    pub prefab: PrefabKey,
+    pub connections: Vec<WorldGenStructureConnection>,
+    #[serde(default)]
+    pub road: Option<(BlockPos, u8)>,
+}

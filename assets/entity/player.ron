@@ -6,4 +6,8 @@
     crouch_height_difference: 0.45,
     model: "player",
     damage_table: (),
+    base_stats: (
+        speed_mul: 6,
+        jump_height_mul: 5,
+    )
 )

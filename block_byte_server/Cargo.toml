@@ -31,6 +31,7 @@ image = { version = "0.25", default-features = false, features = [
     "jpeg",
 ] }
 pathfinding = "4.15.0"
+ordered-float = "5.3"
 ctrlc = "3.5.2"
 ahash = "0.8.12"
 serde_default_utils = "0.3.1"

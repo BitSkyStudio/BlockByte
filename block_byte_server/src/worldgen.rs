@@ -7,11 +7,15 @@ use std::{
 
 use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace},
-    registry::{BiomeKey, BlockEntry, BlockPalette, KeyGroup, PrefabKey, air_block},
+    registry::{
+        BiomeKey, BlockEntry, BlockKey, BlockPalette, KeyGroup, PrefabKey, WorldGenStructureKey,
+        WorldGenStructureRoom, air_block,
+    },
     rotation::BlockRotation,
 };
 use moka::sync::Cache;
 use noise::{NoiseFn, Perlin};
+use ordered_float::OrderedFloat;
 use rand::{Rng, RngCore, SeedableRng};
 use rand_seeder::Seeder;
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -28,9 +32,10 @@ pub struct RegionGeneration {
     pub x: i16,
     pub z: i16,
     pub structures: Vec<RegionStructure>,
-    pub structure_grid: [[Option<NonZeroU32>; Self::GRID_SIZE]; Self::GRID_SIZE], //could probably be u16
+    pub structure_grid: [[Option<NonZeroU32>; Self::REGION_CHUNK_SIZE]; Self::REGION_CHUNK_SIZE], //could probably be u16
     pub structure_grid_prefabs: Vec<StructureGridPrefab>,
-    pub roads: [[u8; Self::REGION_CHUNK_SIZE]; Self::REGION_CHUNK_SIZE],
+    pub roads: [[u8; Self::REGION_CHUNK_SIZE * Self::ROAD_SEGMENTS_PER_CHUNK];
+        Self::REGION_CHUNK_SIZE * Self::ROAD_SEGMENTS_PER_CHUNK],
 }
 impl RegionGeneration {
     pub fn generate_structure_list(
@@ -43,13 +48,14 @@ impl RegionGeneration {
             Seeder::from((world_generator.seed as u32, x, z)).make_seed(),
         );
         for _ in 0..world_generator.config.region_structure_spawn_attempts {
-            let index = rng.next_u32() as usize % world_generator.config.structures.len();
-            let x = x as i32 * Self::REGION_CHUNK_SIZE as i32
-                + (rng.next_u32() % Self::REGION_CHUNK_SIZE as u32) as i32;
-            let z = z as i32 * Self::REGION_CHUNK_SIZE as i32
-                + (rng.next_u32() % Self::REGION_CHUNK_SIZE as u32) as i32;
+            let index = rng.next_u32() as usize % WorldGenStructureKey::entries().count();
+            let x = x as i32 * Self::REGION_BLOCK_SIZE as i32
+                + (rng.next_u32() % Self::REGION_BLOCK_SIZE as u32) as i32;
+            let z = z as i32 * Self::REGION_BLOCK_SIZE as i32
+                + (rng.next_u32() % Self::REGION_BLOCK_SIZE as u32) as i32;
             let seed = rng.next_u64();
-            let structure_data = &world_generator.config.structures[index];
+            let structure = WorldGenStructureKey::entries().nth(index).unwrap();
+            let structure_data = structure.data();
             if structures.iter().any(|structure| {
                 let distance = (structure.x - x).pow(2) + (structure.z - z).pow(2);
                 distance < (structure.exclusion_zone + structure_data.exclusion_zone).pow(2) as i32
@@ -60,7 +66,7 @@ impl RegionGeneration {
                 x,
                 z,
                 exclusion_zone: structure_data.exclusion_zone,
-                index,
+                structure,
                 seed,
             });
         }
@@ -73,34 +79,26 @@ impl RegionGeneration {
         prefab: PrefabKey,
         seed: u32,
     ) {
-        let grid_corner_x =
+        /*let grid_corner_x =
             self.x * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
         let grid_corner_z =
-            self.z * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;
+            self.z * Self::REGION_CHUNK_SIZE as i16 - Self::BORDER_CHUNK_SIZE as i16;*/
 
         let aabb = prefab.data().bounding_box();
         let aabb = BlockRotation::looking_to_horizontal(rotation).rotate_block_aabb(aabb);
         let aabb = aabb.offset(position);
         for chunk in aabb.to_chunk().vertically_flatten() {
-            let offset_x = chunk.x - grid_corner_x;
-            let offset_z = chunk.z - grid_corner_z;
-            if offset_x >= 0
-                && offset_z >= 0
-                && offset_x < Self::GRID_SIZE as i16
-                && offset_z < Self::GRID_SIZE as i16
-            {
-                self.structure_grid_prefabs.push(StructureGridPrefab {
-                    position,
-                    rotation,
-                    prefab,
-                    seed: seed, //todo: do something
-                    next: self.structure_grid[offset_x as usize][offset_z as usize],
-                });
-                self.structure_grid[offset_x as usize][offset_z as usize] =
-                    NonZero::new(self.structure_grid_prefabs.len() as u32);
-            } else {
-                println!("structure generation outside bounds");
-            }
+            let offset_x = chunk.x.rem_euclid(Self::REGION_CHUNK_SIZE as i16); // - grid_corner_x;
+            let offset_z = chunk.z.rem_euclid(Self::REGION_CHUNK_SIZE as i16); // - grid_corner_z;
+            self.structure_grid_prefabs.push(StructureGridPrefab {
+                position,
+                rotation,
+                prefab,
+                seed: seed, //todo: do something
+                next: self.structure_grid[offset_x as usize][offset_z as usize],
+            });
+            self.structure_grid[offset_x as usize][offset_z as usize] =
+                NonZero::new(self.structure_grid_prefabs.len() as u32);
         }
     }
 }
@@ -113,15 +111,19 @@ struct StructureGridPrefab {
 }
 impl RegionGeneration {
     pub const REGION_CHUNK_SIZE: usize = 64;
-    pub const BORDER_CHUNK_SIZE: usize = 8;
-    const GRID_SIZE: usize = Self::REGION_CHUNK_SIZE + Self::BORDER_CHUNK_SIZE * 2;
+    pub const REGION_BLOCK_SIZE: usize = RegionGeneration::REGION_CHUNK_SIZE * CHUNK_SIZE;
+    //pub const BORDER_CHUNK_SIZE: usize = 8;
+    pub const ROAD_SEGMENTS_PER_CHUNK: usize = 4;
+    pub const ROAD_SEGMENTS_PER_REGION: usize =
+        RegionGeneration::REGION_CHUNK_SIZE * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK;
+    //const GRID_SIZE: usize = Self::REGION_CHUNK_SIZE + Self::BORDER_CHUNK_SIZE * 2;
 }
 #[derive(Clone, Copy)]
 pub struct RegionStructure {
     pub x: i32,
     pub z: i32,
     pub exclusion_zone: u16,
-    pub index: usize,
+    pub structure: WorldGenStructureKey,
     pub seed: u64,
 }
 pub struct ChunkColumnGeneration {
@@ -172,35 +174,9 @@ struct ChunkColumnDecoration {
     rotation: HorizontalFace,
     seed: u64,
 }
-#[derive(Deserialize)]
-pub struct WorldGeneratorConfigStructure {
-    pub exclusion_zone: u16,
-    pub root_room: String,
-    pub rooms: HashMap<String, StructureConfigRoom>,
-}
-#[derive(Deserialize)]
-pub struct StructureConfigConnection {
-    pub position: BlockPos,
-    pub facing: HorizontalFace,
-    pub rooms: Vec<StructureConfigRoomSelection>,
-}
-#[derive(Deserialize)]
-pub struct StructureConfigRoomSelection {
-    pub room: String,
-    pub weight: f32,
-    #[serde(default)]
-    pub weight_depth_bias: f32,
-}
-#[derive(Deserialize)]
-pub struct StructureConfigRoom {
-    pub prefab: PrefabKey,
-    pub connections: Vec<StructureConfigConnection>,
-    #[serde(default)]
-    pub road: Option<BlockPos>,
-}
+
 #[derive(Deserialize)]
 pub struct WorldGeneratorConfig {
-    pub structures: Vec<WorldGeneratorConfigStructure>,
     pub region_structure_spawn_attempts: u32,
 }
 pub struct WorldGenerator {
@@ -247,13 +223,19 @@ impl WorldGenerator {
                 x: region_x,
                 z: region_z,
                 structures: structures.clone(), //todo: probably not even required
-                structure_grid: [[None; RegionGeneration::GRID_SIZE]; RegionGeneration::GRID_SIZE],
+                structure_grid: [[None; RegionGeneration::REGION_CHUNK_SIZE]; RegionGeneration::REGION_CHUNK_SIZE],
                 structure_grid_prefabs: Vec::new(),
-                roads: [[0; RegionGeneration::REGION_CHUNK_SIZE];
-                    RegionGeneration::REGION_CHUNK_SIZE],
+                roads: [[0; RegionGeneration::REGION_CHUNK_SIZE * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK];
+                    RegionGeneration::REGION_CHUNK_SIZE * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK],
             };
+            #[derive(Copy, PartialEq, Eq, Hash, Clone, Debug)]
+            struct RoadCoord{
+                x: usize,
+                z: usize,
+            }
+            let mut road_connectors = Vec::new();
             for structure in structures {
-                let structure_data = &self.config.structures[structure.index];
+                let structure_data = structure.structure.data();
                 let mut rng = Xoshiro256PlusPlus::seed_from_u64(structure.seed);
                 let start_rotation = HorizontalFace::all()[rng.random_range(0..4)];
                 let mut queue = VecDeque::new();
@@ -262,13 +244,13 @@ impl WorldGenerator {
                     depth: u32,
                     position: BlockPos,
                     rotation: HorizontalFace,
-                    room: &'a StructureConfigRoom,
+                    room: &'a WorldGenStructureRoom,
                 }
                 queue.push_front(QueueEntry {
                     depth: 0,
                     position: BlockPos {
                         x: structure.x,
-                        y: 80,
+                        y: self.get_height_at(structure.x, structure.z) as i32 + 1,
                         z: structure.z,
                     },
                     rotation: start_rotation,
@@ -281,6 +263,20 @@ impl WorldGenerator {
                         entry.room.prefab,
                         rng.random::<u32>(),
                     );
+                    if let Some((road_offset, road_type)) = entry.room.road{
+                        let connection_rotation =
+                            BlockRotation::looking_to_horizontal(entry.rotation);
+                        let road_exact_position = entry.position + connection_rotation.rotate_block_pos(road_offset);
+                        let road_x: i32 = road_exact_position.x.rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i32 * CHUNK_SIZE as i32) / (CHUNK_SIZE as i32 / RegionGeneration::ROAD_SEGMENTS_PER_CHUNK as i32);
+                        let road_z: i32 = road_exact_position.z.rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i32 * CHUNK_SIZE as i32) / (CHUNK_SIZE as i32 / RegionGeneration::ROAD_SEGMENTS_PER_CHUNK as i32);
+                        road_connectors.push((
+                            RoadCoord{
+                                x: road_x as usize,
+                                z: road_z as usize,
+                            },
+                            road_type,
+                        ));
+                    }
                     let rotation = BlockRotation::looking_to_horizontal(entry.rotation);
                     bounding_boxes.push(
                         rotation
@@ -335,6 +331,59 @@ impl WorldGenerator {
                     }
                 }
             }
+            if road_connectors.len() >= 2 || true{
+            for i in 0..100{
+                let first_road = road_connectors[rand::random_range(0..road_connectors.len())];
+                let second_road = road_connectors[rand::random_range(0..road_connectors.len())];
+                if first_road == second_road {
+                    continue;
+                }
+                let solution = pathfinding::directed::astar::astar(
+                    &first_road.0,
+                    |pos| {
+                        let pos = *pos;
+                        HorizontalFace::all().into_iter().filter_map(move |face|{
+                            match face{
+                                HorizontalFace::Front => {
+                                    if pos.z == 0{
+                                        return None;
+                                    }
+                                }
+                                HorizontalFace::Back => {
+                                    if pos.z == RegionGeneration::ROAD_SEGMENTS_PER_REGION-1{
+                                        return None;
+                                    }
+                                }
+                                HorizontalFace::Left => {
+                                    if pos.x == 0{
+                                        return None;
+                                    }
+                                }
+                                HorizontalFace::Right => {
+                                    if pos.x == RegionGeneration::ROAD_SEGMENTS_PER_REGION-1{
+                                        return None;
+                                    }
+                                }
+                            }
+                            let offset = face.get_block_offset();
+                            let neighbor = RoadCoord{
+                                x: (pos.x as i32 + offset.x) as usize,
+                                z: (pos.z as i32 + offset.z) as usize,
+                            };
+                            Some((neighbor, OrderedFloat(if region.roads[neighbor.x][neighbor.z] > 0 {1.} else {5.})))
+                        })
+                    },
+                    |node| OrderedFloat(((node.x-second_road.0.x).pow(2) as f32 + (node.z-second_road.0.z).pow(2) as f32).sqrt()),
+                    |node| {
+                        *node == second_road.0
+                    },
+                ).unwrap().0;
+                for segment in solution{
+                    //println!("segment {:?}", segment);
+                    region.roads[segment.x][segment.z] = region.roads[segment.x][segment.z].max(first_road.1.min(second_road.1));
+                }
+            }
+        }
 
             Arc::new(region)
         })
@@ -429,6 +478,12 @@ impl WorldGenerator {
             }
             Arc::new(chunk_column_generation)
         })
+    }
+    pub fn get_height_at(&self, x: i32, z: i32) -> u16 {
+        let (chunk, offset) = BlockPos { x, y: 0, z }.to_chunk_pos_offset();
+        let generation = self.get_column_generation(chunk.x, chunk.z);
+        let offset = offset.xyz();
+        generation.height[offset.x as usize][offset.z as usize]
     }
 }
 pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
@@ -557,13 +612,23 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         }
     }
     let region = generator.get_region_generation(
-        position.x / RegionGeneration::GRID_SIZE as i16,
-        position.z / RegionGeneration::GRID_SIZE as i16,
+        position
+            .x
+            .div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16),
+        position
+            .z
+            .div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16),
     );
     {
-        let mut next_placement = region.structure_grid
-            [(position.x.rem_euclid(RegionGeneration::GRID_SIZE as i16)) as usize]
-            [(position.z.rem_euclid(RegionGeneration::GRID_SIZE as i16)) as usize];
+        let region_x = (position
+            .x
+            .rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16))
+            as usize;
+        let region_z = (position
+            .z
+            .rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16))
+            as usize;
+        let mut next_placement = region.structure_grid[region_x][region_z];
         while let Some(placement) = next_placement {
             let placement = &region.structure_grid_prefabs[(placement.get() - 1) as usize];
             placement.prefab.data().build(
@@ -601,7 +666,40 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             );
             next_placement = placement.next;
         }
+        for x in 0..RegionGeneration::ROAD_SEGMENTS_PER_CHUNK {
+            for z in 0..RegionGeneration::ROAD_SEGMENTS_PER_CHUNK {
+                let road = region.roads[region_x * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + x]
+                    [region_z * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + z];
+                if road > 0 {
+                    //todo: better algorithm
+                    let block = BlockEntry::simple(BlockKey::id("nature.dirt").unwrap());
+                    for place_x in 0..8 {
+                        for place_z in 0..8 {
+                            let offset_x = x
+                                * (CHUNK_SIZE / RegionGeneration::ROAD_SEGMENTS_PER_CHUNK)
+                                + place_x;
+                            let offset_z = z
+                                * (CHUNK_SIZE / RegionGeneration::ROAD_SEGMENTS_PER_CHUNK)
+                                + place_z;
+                            let height = column_data.height[offset_x][offset_z] as i32;
+                            if height.div_euclid(CHUNK_SIZE as i32) == position.y as i32 {
+                                blocks.set(
+                                    ChunkOffset::new(
+                                        offset_x as u8,
+                                        height.rem_euclid(CHUNK_SIZE as i32) as u8,
+                                        offset_z as u8,
+                                    )
+                                    .index(),
+                                    &block,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+
     //blocks.set(ChunkOffset::new(16, 16, 16).index(), &grass);
     Chunk {
         position,

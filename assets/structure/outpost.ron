@@ -1,0 +1,11 @@
+(
+    exclusion_zone: 0,
+    root_room: "root",
+    rooms: {
+        "root": (
+            prefab: "rock",
+            connections: [],
+            road: ((0,0,0),1),
+        )
+    }
+)

@@ -1420,7 +1420,7 @@ impl ClientPlayer {
                     move_vector /= 2.;
                 }
                 if game.keys.is_down(KeyCode::Space) && self.controller.on_ground {
-                    self.controller.velocity.y += player_entity_data.base_stats.jump_velocity();
+                    self.controller.velocity.y += game.player_stats.jump_velocity();
                 }
             }
             MoveMode::Fly | MoveMode::NoClip => {}

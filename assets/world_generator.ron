@@ -1,4 +1,3 @@
 (
-    structures: [],
-    region_structure_spawn_attempts: 0,
+    region_structure_spawn_attempts: 100,
 )

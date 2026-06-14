@@ -39,6 +39,7 @@ use block_byte_common::{
     },
 };
 use noise::{BasicMulti, NoiseFn, Perlin};
+use ordered_float::OrderedFloat;
 use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
 use parking_lot::{Mutex, RwLock};
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
@@ -721,21 +722,24 @@ impl MobBrain {
                             };
                             if !is_block_empty(block_position) {
                                 if is_block_empty(block_position + BlockPos::Y) {
-                                    return Some((block_position + BlockPos::Y, 1));
+                                    return Some((block_position + BlockPos::Y, OrderedFloat(1.)));
                                 }
                             } else {
                                 if is_block_empty(block_position - BlockPos::Y) {
                                     if !is_block_empty(block_position - BlockPos::Y * 2) {
-                                        return Some((block_position - BlockPos::Y, 1));
+                                        return Some((
+                                            block_position - BlockPos::Y,
+                                            OrderedFloat(1.),
+                                        ));
                                     }
                                 } else {
-                                    return Some((block_position, 1));
+                                    return Some((block_position, OrderedFloat(1.)));
                                 }
                             }
                             None
                         })
                     },
-                    |node| node.distance_squared(goal_block),
+                    |node| OrderedFloat(node.distance(goal_block)),
                     |node| {
                         node.x == goal_block.x
                             && node.z == goal_block.z
@@ -794,7 +798,7 @@ impl Entity {
             pose: EntityPose::Stand,
             effects: Vec::new(),
             current_stats: EntityStats::default(),
-            current_stats_dirty: false,
+            current_stats_dirty: true,
         }
     }
     pub fn get_eye(&self) -> Pos {
