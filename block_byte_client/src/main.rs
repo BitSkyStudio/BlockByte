@@ -2085,6 +2085,10 @@ impl ClientGame {
                                     && !blocked
                                 {
                                     self.viewmodel_player.trigger("build");
+                                    connection.tx.send(NetworkMessageC2S::ItemInteraction {
+                                        target: ItemInteractTarget::Block { position, face },
+                                        variant: variant_id,
+                                    });
                                 }
                             }
                         }
@@ -2095,21 +2099,21 @@ impl ClientGame {
                 _ => {
                     if self.buttons.is_just_down(MouseButton::Right) {
                         self.viewmodel_player.trigger("build");
+                        connection.tx.send(NetworkMessageC2S::ItemInteraction {
+                            target: match raycast {
+                                RayCastResult::Empty => ItemInteractTarget::Empty,
+                                RayCastResult::Block(position, face) => {
+                                    ItemInteractTarget::Block { position, face }
+                                }
+                                RayCastResult::Entity(entity) => {
+                                    ItemInteractTarget::Entity { entity }
+                                }
+                                RayCastResult::Plant(_, _) => unreachable!(),
+                            },
+                            variant: variant_id,
+                        });
                     }
                 }
-            }
-            if self.buttons.is_just_down(MouseButton::Right) {
-                connection.tx.send(NetworkMessageC2S::ItemInteraction {
-                    target: match raycast {
-                        RayCastResult::Empty => ItemInteractTarget::Empty,
-                        RayCastResult::Block(position, face) => {
-                            ItemInteractTarget::Block { position, face }
-                        }
-                        RayCastResult::Entity(entity) => ItemInteractTarget::Entity { entity },
-                        RayCastResult::Plant(_, _) => unreachable!(),
-                    },
-                    variant: variant_id,
-                });
             }
         }
     }

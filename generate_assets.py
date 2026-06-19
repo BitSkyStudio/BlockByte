@@ -17,7 +17,17 @@ def generate_tag(name, content):
     with open(os.path.join(asset_dir, *name.split(".")) + ".txt", "w") as f:
         f.write("\n".join(content))
 
-wood_types = [{"woodType": "oak", "barkColor": "48341d", "woodColor": "8c6d47"}]
+wood_types = [
+    {"woodType": "oak", "barkColor": "48341d", "woodColor": "8c6d47"},
+    {"woodType": "acacia", "barkColor": "754a08", "woodColor": "ba8457"},
+    {"woodType": "mangrove", "barkColor": "4a2907", "woodColor": "66482a"},
+    {"woodType": "cedar", "barkColor": "4d4339", "woodColor": "706254"},
+    {"woodType": "willow", "barkColor": "6e665e", "woodColor": "918579"},
+    {"woodType": "apple", "barkColor": "542a05", "woodColor": "693b13"},
+    {"woodType": "cherry", "barkColor": "291b10", "woodColor": "8d7296"},
+    {"woodType": "maple", "barkColor": "5c3e24", "woodColor": "825834"},
+    {"woodType": "pine", "barkColor": "4d381e", "woodColor": "8a602c"},
+]
 for data in wood_types:
     generate("bb:wood_type", data)
 generate_tag("#sticks", ["wood." + data["woodType"] + ".stick" for data in wood_types])

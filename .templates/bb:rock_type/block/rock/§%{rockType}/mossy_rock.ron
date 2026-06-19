@@ -1,0 +1,24 @@
+(
+    render_data: Full(
+        faces: (
+            front: "rock.§%{rockType}_mossy",
+            back: "rock.§%{rockType}_mossy",
+            left: "rock.§%{rockType}_mossy",
+            right: "rock.§%{rockType}_mossy",
+            down: "rock.§%{rockType}_mossy",
+            up: "rock.§%{rockType}_mossy",
+        ),
+    ),
+    health: (health: 5., health_regen: 0.05, table: ()),
+    loot_table: Own((
+        entries: [
+            (
+                item: "rock.§%{rockType}.stone",
+                
+                modifiers: [
+                    SetCount(Constant(4))
+                ]
+            )
+        ]
+    )),
+)

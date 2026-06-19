@@ -1,0 +1,18 @@
+(
+    render_data: Model(model:"slab;rock.§%{rockType}_bricks_mossy;rock.§%{rockType}_bricks_mossy;rock.§%{rockType}_bricks_mossy"),
+    health: (health: 5., health_regen: 0.05, table: ()),
+    loot_table: Own((
+        entries: [
+            (
+                item: "rock.§%{rockType}.brick",
+                
+                modifiers: [
+                    SetCount(Constant(2))
+                ]
+            )
+        ]
+    )),
+    rotation: Full,
+    collision: [(0., 0., 0., 1., 1., 0.5)],
+    selection: [(0., 0., 0., 1., 1., 0.5)],
+)

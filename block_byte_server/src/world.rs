@@ -739,7 +739,7 @@ impl MobBrain {
                             None
                         })
                     },
-                    |node| OrderedFloat(node.distance(goal_block)),
+                    |node| OrderedFloat(1.3 * node.distance(goal_block)),
                     |node| {
                         node.x == goal_block.x
                             && node.z == goal_block.z

@@ -1332,6 +1332,20 @@ impl RegistryRonConfigLoadable for PlantData {}
 pub type PlantKey = Key<PlantData>;
 
 #[derive(Deserialize)]
+pub struct RoadPlacementEntry {
+    pub weight: i32,
+    pub weight_center_distance_bias: i32,
+    pub block: Option<BlockKey>,
+}
+impl RoadPlacementEntry {
+    pub fn weight(&self, center_distance: i32) -> i32 {
+        (self.weight + self.weight_center_distance_bias * center_distance).max(0)
+    }
+}
+#[derive(Deserialize)]
+pub struct RoadPlacementInfo(pub Vec<RoadPlacementEntry>);
+
+#[derive(Deserialize)]
 pub struct BiomeData {
     pub top_block: BlockKey,
     pub middle_block: BlockKey,
@@ -1344,6 +1358,7 @@ pub struct BiomeData {
     pub temperature: BiomeNoiseConfig,
     pub moisture: BiomeNoiseConfig,
     pub elevation: BiomeNoiseConfig,
+    pub road: RoadPlacementInfo,
 }
 impl RegistryRonConfigLoadable for BiomeData {}
 #[derive(Deserialize)]

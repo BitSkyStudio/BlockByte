@@ -1,5 +1,5 @@
 (
-    exclusion_zone: 0,
+    exclusion_zone: 32,
     root_room: "root",
     rooms: {
         "root": (

@@ -1,8 +1,10 @@
 use std::{
-    cell::{RefCell, UnsafeCell},
+    cell::{OnceCell, RefCell, UnsafeCell},
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     num::{NonZero, NonZeroU32},
+    rc::Rc,
     sync::Arc,
+    time::Instant,
 };
 
 use block_byte_common::{
@@ -16,6 +18,7 @@ use block_byte_common::{
 use moka::sync::Cache;
 use noise::{NoiseFn, Perlin};
 use ordered_float::OrderedFloat;
+use pathfinding::num_traits::Euclid;
 use rand::{Rng, RngCore, SeedableRng};
 use rand_seeder::Seeder;
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -114,6 +117,7 @@ impl RegionGeneration {
     pub const REGION_BLOCK_SIZE: usize = RegionGeneration::REGION_CHUNK_SIZE * CHUNK_SIZE;
     //pub const BORDER_CHUNK_SIZE: usize = 8;
     pub const ROAD_SEGMENTS_PER_CHUNK: usize = 4;
+    pub const ROAD_SEGMENT_SIZE: usize = CHUNK_SIZE / RegionGeneration::ROAD_SEGMENTS_PER_CHUNK;
     pub const ROAD_SEGMENTS_PER_REGION: usize =
         RegionGeneration::REGION_CHUNK_SIZE * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK;
     //const GRID_SIZE: usize = Self::REGION_CHUNK_SIZE + Self::BORDER_CHUNK_SIZE * 2;
@@ -332,6 +336,17 @@ impl WorldGenerator {
                 }
             }
             if road_connectors.len() >= 2 || true{
+                let road_noise = Perlin::new(self.seed as u32 ^ 213889);
+            let mut road_noise_cache = [[0.;RegionGeneration::ROAD_SEGMENTS_PER_REGION];RegionGeneration::ROAD_SEGMENTS_PER_REGION];
+            for x in 0..RegionGeneration::ROAD_SEGMENTS_PER_REGION{
+                for z in 0..RegionGeneration::ROAD_SEGMENTS_PER_REGION{
+                    road_noise_cache[x][z] = (road_noise.get([
+                        x as f64 * RegionGeneration::ROAD_SEGMENT_SIZE as f64 / 50.,// + region_z as f64 * RegionGeneration::REGION_BLOCK_SIZE as f64
+                        z as f64 * RegionGeneration::ROAD_SEGMENT_SIZE as f64 / 50.,
+                    ]) as f32 +1.)*8.;
+                }
+            }
+            let road_noise_cache = Rc::new(road_noise_cache);
             for i in 0..100{
                 let first_road = road_connectors[rand::random_range(0..road_connectors.len())];
                 let second_road = road_connectors[rand::random_range(0..road_connectors.len())];
@@ -342,6 +357,7 @@ impl WorldGenerator {
                     &first_road.0,
                     |pos| {
                         let pos = *pos;
+                        let road_noise_cache = road_noise_cache.clone();
                         HorizontalFace::all().into_iter().filter_map(move |face|{
                             match face{
                                 HorizontalFace::Front => {
@@ -370,10 +386,13 @@ impl WorldGenerator {
                                 x: (pos.x as i32 + offset.x) as usize,
                                 z: (pos.z as i32 + offset.z) as usize,
                             };
-                            Some((neighbor, OrderedFloat(if region.roads[neighbor.x][neighbor.z] > 0 {1.} else {5.})))
+                            let mut cost = if region.roads[neighbor.x][neighbor.z] > 0 {1.} else {5.};
+                            cost *= road_noise_cache[neighbor.x][neighbor.z];
+
+                            Some((neighbor, OrderedFloat(cost)))
                         })
                     },
-                    |node| OrderedFloat(((node.x-second_road.0.x).pow(2) as f32 + (node.z-second_road.0.z).pow(2) as f32).sqrt()),
+                    |node| OrderedFloat(2.*((node.x-second_road.0.x).pow(2) as f32 + (node.z-second_road.0.z).pow(2) as f32).sqrt()),
                     |node| {
                         *node == second_road.0
                     },
@@ -509,7 +528,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             for x in 0..CHUNK_SIZE as u8 {
                 let offset = ChunkOffset::new(x, y, z);
                 let y_pos = y as i32 + position.y as i32 * CHUNK_SIZE as i32;
-                let biome = column_data.biomes[x as usize][y as usize].data();
+                let biome = column_data.biomes[x as usize][z as usize].data();
                 let height = column_data.height[x as usize][z as usize] as i32;
                 /*let holes = hole_spline.clamped_sample(height as f32).unwrap();
                 let density = density_noise.get([
@@ -531,29 +550,6 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 }*/
                 if y_pos == height {
                     blocks.set(offset.index(), &BlockEntry::simple(biome.top_block));
-                    let spawned_plants: SmallVec<_> = biome
-                        .plants
-                        .iter()
-                        .filter_map(|spawner| {
-                            if rng.random_bool(spawner.chance as f64) {
-                                let plant_data = spawner.plant.data();
-                                Some((
-                                    spawner.plant,
-                                    rng.random::<f32>() * plant_data.growth_length,
-                                ))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !spawned_plants.is_empty() {
-                        components.plant.set(
-                            offset,
-                            WorldAccessCell::new(BlockPlants {
-                                plants: spawned_plants,
-                            }),
-                        );
-                    }
                 } else if y_pos < height - 3 {
                     blocks.set(offset.index(), &BlockEntry::simple(biome.bottom_block));
                 } else if y_pos < height {
@@ -562,6 +558,14 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             }
         }
     }
+    let region = generator.get_region_generation(
+        position
+            .x
+            .div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16),
+        position
+            .z
+            .div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16),
+    );
     let chunk_aabb = (AABB {
         min: BlockPos::all(0),
         max: BlockPos::all(CHUNK_SIZE as i32),
@@ -584,6 +588,20 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 y: height,
                 z: block_offset.z + placed_decoration.z as i32,
             };
+            //todo: this wraps on region borders
+            if region.roads[block_position
+                .x
+                .rem_euclid(RegionGeneration::REGION_BLOCK_SIZE as i32)
+                .div_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
+                as usize][block_position
+                .z
+                .rem_euclid(RegionGeneration::REGION_BLOCK_SIZE as i32)
+                .div_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
+                as usize]
+                > 0
+            {
+                continue;
+            }
             let prefab = placed_decoration.key.data();
             if BlockRotation::looking_to_horizontal(placed_decoration.rotation)
                 .rotate_block_aabb(prefab.bounding_box())
@@ -611,14 +629,6 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             }
         }
     }
-    let region = generator.get_region_generation(
-        position
-            .x
-            .div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16),
-        position
-            .z
-            .div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16),
-    );
     {
         let region_x = (position
             .x
@@ -668,30 +678,119 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         }
         for x in 0..RegionGeneration::ROAD_SEGMENTS_PER_CHUNK {
             for z in 0..RegionGeneration::ROAD_SEGMENTS_PER_CHUNK {
-                let road = region.roads[region_x * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + x]
-                    [region_z * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + z];
-                if road > 0 {
+                let get_road = |x: usize, z: usize, x_off: isize, z_off: isize| -> u8 {
+                    let x_final =
+                        (region_x * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + x) as isize + x_off;
+                    let z_final =
+                        (region_z * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + z) as isize + z_off;
+                    if x_final < 0 || x_final >= RegionGeneration::ROAD_SEGMENTS_PER_REGION as isize
+                    {
+                        return 0;
+                    }
+                    if z_final < 0 || z_final >= RegionGeneration::ROAD_SEGMENTS_PER_REGION as isize
+                    {
+                        return 0;
+                    }
+                    region.roads[x_final as usize][z_final as usize]
+                };
+                if get_road(x, z, 0, 0) > 0 {
                     //todo: better algorithm
-                    let block = BlockEntry::simple(BlockKey::id("nature.dirt").unwrap());
+                    let road_info = &column_data.biomes[x * RegionGeneration::ROAD_SEGMENT_SIZE]
+                        [z * RegionGeneration::ROAD_SEGMENT_SIZE]
+                        .data()
+                        .road;
                     for place_x in 0..8 {
                         for place_z in 0..8 {
-                            let offset_x = x
-                                * (CHUNK_SIZE / RegionGeneration::ROAD_SEGMENTS_PER_CHUNK)
-                                + place_x;
-                            let offset_z = z
-                                * (CHUNK_SIZE / RegionGeneration::ROAD_SEGMENTS_PER_CHUNK)
-                                + place_z;
+                            let offset_x = x * RegionGeneration::ROAD_SEGMENT_SIZE + place_x;
+                            let offset_z = z * RegionGeneration::ROAD_SEGMENT_SIZE + place_z;
                             let height = column_data.height[offset_x][offset_z] as i32;
                             if height.div_euclid(CHUNK_SIZE as i32) == position.y as i32 {
-                                blocks.set(
-                                    ChunkOffset::new(
-                                        offset_x as u8,
-                                        height.rem_euclid(CHUNK_SIZE as i32) as u8,
-                                        offset_z as u8,
-                                    )
-                                    .index(),
-                                    &block,
-                                );
+                                let [center_distance_x, center_distance_z] =
+                                    [(place_x, 1, 0), (place_z, 0, 1)].map(
+                                        |(place, x_off, z_off)| {
+                                            if place <= 3 {
+                                                if get_road(x, z, -x_off, -z_off) > 0 {
+                                                    0
+                                                } else {
+                                                    3 - place
+                                                }
+                                            } else {
+                                                if get_road(x, z, x_off, z_off) > 0 {
+                                                    0
+                                                } else {
+                                                    place - 4
+                                                }
+                                            }
+                                        },
+                                    );
+                                /*let center_distance =
+                                (center_distance_x.pow(2) + center_distance_z.pow(2)).isqrt()
+                                    as i32;*/
+                                let center_distance =
+                                    (center_distance_x + center_distance_z) as i32;
+                                let mut sum_weights = 0;
+                                for entry in &road_info.0 {
+                                    sum_weights += entry.weight(center_distance);
+                                }
+                                let mut selection = rng.random_range(0..sum_weights);
+                                for entry in &road_info.0 {
+                                    let weight = entry.weight(center_distance);
+                                    if selection < weight {
+                                        if let Some(block) = entry.block {
+                                            blocks.set(
+                                                ChunkOffset::new(
+                                                    offset_x as u8,
+                                                    height.rem_euclid(CHUNK_SIZE as i32) as u8,
+                                                    offset_z as u8,
+                                                )
+                                                .index(),
+                                                &BlockEntry::simple(block),
+                                            );
+                                        }
+                                        break;
+                                    }
+                                    selection -= weight;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for place_x in 0..8 {
+                        for place_z in 0..8 {
+                            let offset_x = x * RegionGeneration::ROAD_SEGMENT_SIZE + place_x;
+                            let offset_z = z * RegionGeneration::ROAD_SEGMENT_SIZE + place_z;
+                            let height = column_data.height[offset_x][offset_z] as i32;
+                            let (height_chunk, height_offset) =
+                                height.div_rem_euclid(&(CHUNK_SIZE as i32));
+                            if height_chunk as i16 == position.y {
+                                let biome = column_data.biomes[offset_x][offset_z].data();
+                                let spawned_plants: SmallVec<_> = biome
+                                    .plants
+                                    .iter()
+                                    .filter_map(|spawner| {
+                                        if rng.random_bool(spawner.chance as f64) {
+                                            let plant_data = spawner.plant.data();
+                                            Some((
+                                                spawner.plant,
+                                                rng.random::<f32>() * plant_data.growth_length,
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                if !spawned_plants.is_empty() {
+                                    components.plant.set(
+                                        ChunkOffset::new(
+                                            offset_x as u8,
+                                            height_offset as u8,
+                                            offset_z as u8,
+                                        ),
+                                        WorldAccessCell::new(BlockPlants {
+                                            plants: spawned_plants,
+                                        }),
+                                    );
+                                }
                             }
                         }
                     }
