@@ -8,6 +8,7 @@ use std::{
 };
 
 use block_byte_common::{
+    WeightedList,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace},
     registry::{
         BiomeKey, BlockEntry, BlockKey, BlockPalette, KeyGroup, PrefabKey, WorldGenStructureKey,
@@ -57,7 +58,11 @@ impl RegionGeneration {
             let z = z as i32 * Self::REGION_BLOCK_SIZE as i32
                 + (rng.next_u32() % Self::REGION_BLOCK_SIZE as u32) as i32;
             let seed = rng.next_u64();
-            let structure = WorldGenStructureKey::entries().nth(index).unwrap();
+            let biome_data = world_generator.get_biome_at(x, z).data();
+            let Some(structure) = biome_data.structures.get_random((), &mut rng).map(|e| e.0)
+            else {
+                continue;
+            };
             let structure_data = structure.data();
             if structures.iter().any(|structure| {
                 let distance = (structure.x - x).pow(2) + (structure.z - z).pow(2);
@@ -299,21 +304,7 @@ impl WorldGenerator {
                             .unwrap();
                         let connection_rotation =
                             BlockRotation::looking_to_horizontal(connection_facing);
-                        let mut list: Vec<_> = connection
-                            .rooms
-                            .iter()
-                            .map(|room| {
-                                (
-                                    room,
-                                    rng.random::<f32>().powf(
-                                        1. / (room.weight
-                                            + room.weight_depth_bias * entry.depth as f32),
-                                    ),
-                                )
-                            })
-                            .collect();
-                        list.sort_by(|(_, a), (_, b)| b.total_cmp(a));
-                        for (room, _) in list {
+                        for room in connection.rooms.get_random_weighted_list(entry.depth, &mut rng) {
                             let room = structure_data.rooms.get(&room.room).unwrap();
                             let room_bb = connection_rotation
                                 .rotate_block_aabb(room.prefab.data().bounding_box())
@@ -503,6 +494,12 @@ impl WorldGenerator {
         let generation = self.get_column_generation(chunk.x, chunk.z);
         let offset = offset.xyz();
         generation.height[offset.x as usize][offset.z as usize]
+    }
+    pub fn get_biome_at(&self, x: i32, z: i32) -> BiomeKey {
+        let (chunk, offset) = BlockPos { x, y: 0, z }.to_chunk_pos_offset();
+        let generation = self.get_column_generation(chunk.x, chunk.z);
+        let offset = offset.xyz();
+        generation.biomes[offset.x as usize][offset.z as usize]
     }
 }
 pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
@@ -726,30 +723,22 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                 /*let center_distance =
                                 (center_distance_x.pow(2) + center_distance_z.pow(2)).isqrt()
                                     as i32;*/
-                                let center_distance =
-                                    (center_distance_x + center_distance_z) as i32;
-                                let mut sum_weights = 0;
-                                for entry in &road_info.0 {
-                                    sum_weights += entry.weight(center_distance);
-                                }
-                                let mut selection = rng.random_range(0..sum_weights);
-                                for entry in &road_info.0 {
-                                    let weight = entry.weight(center_distance);
-                                    if selection < weight {
-                                        if let Some(block) = entry.block {
-                                            blocks.set(
-                                                ChunkOffset::new(
-                                                    offset_x as u8,
-                                                    height.rem_euclid(CHUNK_SIZE as i32) as u8,
-                                                    offset_z as u8,
-                                                )
-                                                .index(),
-                                                &BlockEntry::simple(block),
-                                            );
-                                        }
-                                        break;
-                                    }
-                                    selection -= weight;
+                                let center_distance = center_distance_x + center_distance_z;
+                                let Some(entry) =
+                                    road_info.0.get_random(center_distance as u32, &mut rng)
+                                else {
+                                    continue;
+                                };
+                                if let Some(block) = entry.block {
+                                    blocks.set(
+                                        ChunkOffset::new(
+                                            offset_x as u8,
+                                            height.rem_euclid(CHUNK_SIZE as i32) as u8,
+                                            offset_z as u8,
+                                        )
+                                        .index(),
+                                        &BlockEntry::simple(block),
+                                    );
                                 }
                             }
                         }

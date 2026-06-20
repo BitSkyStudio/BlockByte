@@ -30,7 +30,7 @@ use crate::scripts::{
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
     Color, DamageTable, DamageType, EntityPose, EntityStats, GRAVITY_ACCELERATION, InventoryView,
-    LookDirection, ViewSlot,
+    LookDirection, ViewSlot, WeightedEntry,
 };
 
 use serde_default_utils::*;
@@ -1337,13 +1337,23 @@ pub struct RoadPlacementEntry {
     pub weight_center_distance_bias: i32,
     pub block: Option<BlockKey>,
 }
-impl RoadPlacementEntry {
-    pub fn weight(&self, center_distance: i32) -> i32 {
-        (self.weight + self.weight_center_distance_bias * center_distance).max(0)
+impl WeightedEntry for RoadPlacementEntry {
+    type WeightModifier = u32;
+    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+        (self.weight + self.weight_center_distance_bias * modifier as i32).max(0) as f32
     }
 }
 #[derive(Deserialize)]
 pub struct RoadPlacementInfo(pub Vec<RoadPlacementEntry>);
+
+#[derive(Deserialize)]
+pub struct BiomeStructureEntry(pub WorldGenStructureKey, pub u32);
+impl WeightedEntry for BiomeStructureEntry {
+    type WeightModifier = ();
+    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+        self.1 as f32
+    }
+}
 
 #[derive(Deserialize)]
 pub struct BiomeData {
@@ -1352,7 +1362,7 @@ pub struct BiomeData {
     pub bottom_block: BlockKey,
     pub plants: Vec<PlantSpawner>,
     pub decorators: Vec<BiomeDecorator>,
-    pub structures: Vec<WorldGenStructureKey>,
+    pub structures: Vec<BiomeStructureEntry>,
     #[serde(default)]
     pub debug_color: Color,
     pub temperature: BiomeNoiseConfig,
@@ -1612,6 +1622,12 @@ pub struct WorldGenStructureRoomSelection {
     pub weight: f32,
     #[serde(default)]
     pub weight_depth_bias: f32,
+}
+impl WeightedEntry for WorldGenStructureRoomSelection {
+    type WeightModifier = u32;
+    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+        (self.weight + self.weight_depth_bias * modifier as f32).max(0.)
+    }
 }
 #[derive(Deserialize)]
 pub struct WorldGenStructureRoom {

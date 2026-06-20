@@ -28,7 +28,7 @@
             prefab: "small_stick"
         )
     ],
-    structures: [],
+    structures: [("outpost", 10)],
     road: ([
         (
             weight: 20,

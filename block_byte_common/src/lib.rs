@@ -1,3 +1,4 @@
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -616,5 +617,58 @@ impl EntityPose {
                     data.crouch_height_difference
                 }
             })
+    }
+}
+pub trait WeightedEntry {
+    type WeightModifier: Copy;
+    fn get_weight(&self, modifier: Self::WeightModifier) -> f32;
+}
+pub trait WeightedList {
+    type Entry: WeightedEntry;
+    fn get_random<'a>(
+        &'a self,
+        modifier: <Self::Entry as WeightedEntry>::WeightModifier,
+        rng: &mut impl Rng,
+    ) -> Option<&'a Self::Entry>;
+    fn get_random_weighted_list<'a>(
+        &'a self,
+        modifier: <Self::Entry as WeightedEntry>::WeightModifier,
+        rng: &mut impl Rng,
+    ) -> impl Iterator<Item = &'a Self::Entry>;
+}
+impl<T: WeightedEntry> WeightedList for Vec<T> {
+    type Entry = T;
+    fn get_random<'a>(
+        &'a self,
+        modifier: T::WeightModifier,
+        rng: &mut impl Rng,
+    ) -> Option<&'a Self::Entry> {
+        let sum_weights = self.iter().map(|e| e.get_weight(modifier)).sum();
+        let mut selection = rng.random_range((0.)..sum_weights);
+        for entry in self {
+            let weight = entry.get_weight(modifier);
+            if selection < weight {
+                return Some(entry);
+            }
+            selection -= weight;
+        }
+        None
+    }
+    fn get_random_weighted_list<'a>(
+        &'a self,
+        modifier: T::WeightModifier,
+        rng: &mut impl Rng,
+    ) -> impl Iterator<Item = &'a Self::Entry> {
+        let mut list: Vec<_> = self
+            .iter()
+            .map(|entry| {
+                (
+                    entry,
+                    rng.random::<f32>().powf(1. / entry.get_weight(modifier)),
+                )
+            })
+            .collect();
+        list.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+        list.into_iter().map(|(e, _)| e)
     }
 }
