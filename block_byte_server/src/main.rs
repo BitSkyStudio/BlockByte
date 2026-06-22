@@ -14,12 +14,12 @@ use std::{
 use block_byte_common::{
     ClientItem, Color, DamageTable, EntityPose, EntityStats, InventoryView, LookDirection,
     MoveMode, SERVER_DT, SERVER_TPS, ViewSlot,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
         EntityInteractAction, EntityKey, ItemAction, ItemKey, KeyGroup, PrefabData, PrefabEntry,
-        ToolData, air_block, load_registries,
+        PrefabKey, ToolData, air_block, load_registries,
     },
     rotation::BlockRotation,
     scripts::{ScriptState, ScriptValue},
@@ -76,6 +76,7 @@ fn main() {
         .num_threads(4)
         .build_global();
     let mut memorydb = false;
+    let mut is_design_server = false;
     if let Some(arg) = args().nth(1) {
         let mut start = false;
         match arg.as_str() {
@@ -113,6 +114,11 @@ fn main() {
             "memorydb" => {
                 start = true;
                 memorydb = true;
+            }
+            "design" => {
+                start = true;
+                memorydb = true;
+                is_design_server = true;
             }
             _ => {
                 start = true;
@@ -182,7 +188,8 @@ fn main() {
             .as_str(),
     )
     .unwrap();
-    let world_generator = WorldGenerator::new(world_generator_config, 1);
+    let mut world_generator = WorldGenerator::new(world_generator_config, 1);
+    world_generator.design_world = is_design_server;
     let mut server = Server {
         ticks_passed: 0,
         chunks: ahash::HashMap::default(),
@@ -224,7 +231,15 @@ fn main() {
                 .unwrap();
         }
         for (user, spawn_position) in player_spawns.drain(..) {
-            let mut entity = Entity::new(Key::id("player").unwrap(), spawn_position);
+            let mut entity = Entity::new(
+                Key::id(if is_design_server {
+                    "designer"
+                } else {
+                    "player"
+                })
+                .unwrap(),
+                spawn_position,
+            );
             let full_view = entity.inventory.full_view();
             entity.controlling_user = Some(user);
             let player_uuid = entity.uuid;
@@ -338,44 +353,85 @@ fn main() {
             }
             let command = command.trim().split(" ").collect::<Vec<_>>();
             match command[0] {
-                "structure_export" => {
-                    let args = command[1..]
-                        .iter()
-                        .map(|n| n.parse().unwrap())
-                        .collect::<Vec<i32>>();
-                    let from = BlockPos {
-                        x: args[0],
-                        y: args[1],
-                        z: args[2],
+                "design_export" => {
+                    let origin = BlockPos { x: 0, y: 80, z: 0 };
+                    let origin_chunk = origin.to_chunk_pos();
+                    let mut prefab = PrefabData {
+                        bb: OnceLock::new(),
+                        blocks: Vec::new(),
                     };
-                    let to = BlockPos {
-                        x: args[3],
-                        y: args[4],
-                        z: args[5],
-                    };
-                    let center = BlockPos {
-                        x: args[6],
-                        y: args[7],
-                        z: args[8],
-                    };
-                    //let mut blocks = HashMap::new();
-                    /*for position in AABB::new(from, to) {
-                        let block = server.get_block(position).unwrap();
-                        if block.block != air_block() {
-                            blocks.insert(position - center, block);
+                    for x in -1..=1 {
+                        for y in -1..=1 {
+                            for z in -1..=1 {
+                                let chunk_position = origin_chunk + ChunkPos { x, y, z };
+                                let Some(chunk) = server.chunks.get_mut(&chunk_position) else {
+                                    continue;
+                                };
+                                for bx in 0..CHUNK_SIZE {
+                                    for by in 0..CHUNK_SIZE {
+                                        for bz in 0..CHUNK_SIZE {
+                                            let offset =
+                                                ChunkOffset::new(bx as u8, by as u8, bz as u8);
+                                            let Some(block) =
+                                                chunk.blocks.get_mut().get(offset.index())
+                                            else {
+                                                continue;
+                                            };
+                                            if block.block != air_block() {
+                                                let block_position =
+                                                    chunk_position.to_block_pos() + offset.xyz();
+                                                let local_position = block_position - origin;
+                                                prefab.blocks.push(PrefabEntry {
+                                                    x: local_position.x,
+                                                    y: local_position.y,
+                                                    z: local_position.z,
+                                                    chance: 1.,
+                                                    replace: KeyGroup::Empty,
+                                                    replace_inverted: false,
+                                                    block: block.block,
+                                                    rotation: block.rotation,
+                                                    color: block.color,
+                                                    loot_table: None,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
-                    }*/
-                    /*println!(
-                        "{}",
-                        ron::ser::to_string_pretty(
-                            &PrefabData {
-                                parts: vec![PrefabEntry { blocks, chance: 1. }],
-                                bb: OnceLock::new(),
-                            },
-                            PrettyConfig::new()
-                        )
-                        .unwrap()
-                    );*/
+                    }
+                    println!("{}", ron::to_string(&prefab).unwrap());
+                }
+                "design_load" => {
+                    let Some(prefab) = command.get(1).and_then(|c| PrefabKey::id(c)) else {
+                        println!("unknown prefab");
+                        continue;
+                    };
+                    prefab.data().build(
+                        BlockPos { x: 0, y: 80, z: 0 },
+                        HorizontalFace::Front,
+                        0,
+                        |place_position, block, entry| {
+                            let (place_chunk, place_chunk_offset) =
+                                place_position.to_chunk_pos_offset();
+                            let Some(chunk) = server.chunks.get_mut(&place_chunk) else {
+                                return;
+                            };
+                            chunk
+                                .blocks
+                                .borrow_mut()
+                                .set(place_chunk_offset.index(), &block);
+                            for viewer in &chunk.viewers {
+                                server.message_queue.send_message(
+                                    std::iter::once(*viewer),
+                                    NetworkMessageS2C::SetBlock {
+                                        position: place_position,
+                                        block,
+                                    },
+                                );
+                            }
+                        },
+                    );
                 }
                 _ => {
                     println!("unknown command");
@@ -652,7 +708,6 @@ impl ChunkViewingManager {
         }
     }
 }
-
 new_key_type! {pub struct UserIndex;}
 pub struct User {
     client_id: ClientId,

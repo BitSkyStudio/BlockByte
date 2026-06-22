@@ -428,6 +428,9 @@ impl RenderState {
         frustum: &Frustum,
         delta_time: f32,
     ) -> Result<(), SurfaceError> {
+        let should_update_shadowmap =
+            (self.animation_time * 20.) as u32 != ((self.animation_time + delta_time) * 20.) as u32;
+
         let ps = profiler::profiler_scope("load uniforms");
         self.animation_time += delta_time;
         self.time_uniform.write(&self.queue, &self.animation_time);
@@ -444,8 +447,10 @@ impl RenderState {
         camera_uniform.load_gui_matrix(self.size.height as f32 / self.size.width as f32);
         self.gui_camera_uniform.write(&self.queue, &camera_uniform);
 
-        camera_uniform.load_light(camera.position);
-        self.shadow_camera.write(&self.queue, &camera_uniform);
+        if should_update_shadowmap {
+            camera_uniform.load_light(camera.position);
+            self.shadow_camera.write(&self.queue, &camera_uniform);
+        }
         ps.end();
 
         let ps = profiler::profiler_scope("render mesh alloc");
@@ -572,7 +577,7 @@ impl RenderState {
 
         let ps = profiler::profiler_scope("render shadow");
         let camera_chunk_position = camera.position.to_chunk_pos();
-        {
+        if should_update_shadowmap {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
                 color_attachments: &[],
@@ -752,7 +757,7 @@ impl RenderState {
             self.viewmodel_gpu_mesh.draw(&mut render_pass);
         }
         ps.end();
-        {
+        if false {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blur Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

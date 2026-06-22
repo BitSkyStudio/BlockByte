@@ -7,7 +7,7 @@
     moisture: (target: 0.5, weight: 1.2),
     elevation: (target: 0, weight: 0.5),
     plants: [(
-        chance: 0.08,
+        chance: 0.2,
         plant: "grass",
     )],
     decorators: [
@@ -26,6 +26,21 @@
             count: 15,
             chance: 0.8,
             prefab: "small_stick"
+        ),
+        (
+            count: 3,
+            chance: 0.25,
+            prefab: "bigrock"
+        ),
+        (
+            count: 3,
+            chance: 0.25,
+            prefab: "leaf_pile"
+        ),
+        (
+            count: 2,
+            chance: 0.15,
+            prefab: "fallen_tree"
         )
     ],
     structures: [("outpost", 10)],

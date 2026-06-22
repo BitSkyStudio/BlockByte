@@ -18,7 +18,7 @@ def generate_tag(name, content):
         f.write("\n".join(content))
 
 wood_types = [
-    {"woodType": "oak", "barkColor": "48341d", "woodColor": "8c6d47"},
+    {"woodType": "oak", "barkColor": "574026", "woodColor": "8c6d47"},
     {"woodType": "acacia", "barkColor": "754a08", "woodColor": "ba8457"},
     {"woodType": "mangrove", "barkColor": "4a2907", "woodColor": "66482a"},
     {"woodType": "cedar", "barkColor": "4d4339", "woodColor": "706254"},

@@ -705,17 +705,17 @@ impl BlockRotationMode {
             },
             BlockRotationMode::FullOriented => value,
             BlockRotationMode::Axis => {
-                let face = value.front_face();
+                let face = value.up_face();
                 let face = match face {
-                    Face::Front | Face::Right | Face::Up => face,
-                    Face::Back | Face::Left | Face::Down => face.opposite(),
+                    Face::Back | Face::Right | Face::Up => face,
+                    Face::Front | Face::Left | Face::Down => face.opposite(),
                 };
                 BlockRotation::new(
-                    face,
                     match face {
-                        Face::Up => Face::Back,
-                        _ => Face::Up,
+                        Face::Front | Face::Back => Face::Up,
+                        _ => Face::Front,
                     },
+                    face,
                 )
                 .unwrap()
             }
@@ -1256,6 +1256,8 @@ pub struct EntityData {
     pub crouch_height_difference: f32,
     pub model: ModelInstance,
     #[serde(default)]
+    pub viewmodel: Option<ModelInstance>,
+    #[serde(default)]
     pub interact_action: EntityInteractAction,
     #[serde(default)]
     pub damage_table: DamageTable,
@@ -1521,18 +1523,18 @@ pub struct PrefabEntry {
     pub x: i32,
     pub y: i32,
     pub z: i32,
-    #[serde(default = "default_prefab_entry_true_chance")]
+    #[serde(default = "default_prefab_entry_true_chance", skip_serializing)]
     pub chance: f32,
     #[serde(default = "default_prefab_replace", skip_serializing)]
     pub replace: KeyGroup<BlockData>,
     #[serde(default, skip_serializing)]
     pub replace_inverted: bool,
     pub block: BlockKey,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip_if_default")]
     pub rotation: BlockRotation,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip_if_default")]
     pub color: BlockColor,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "skip_if_default")]
     pub loot_table: Option<LootTableKey>,
 }
 #[derive(Serialize, Deserialize)]

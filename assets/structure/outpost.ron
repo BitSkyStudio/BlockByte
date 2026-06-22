@@ -3,7 +3,7 @@
     root_room: "root",
     rooms: {
         "root": (
-            prefab: "rock",
+            prefab: "outpost",
             connections: [],
             road: ((0,0,0),1),
         )

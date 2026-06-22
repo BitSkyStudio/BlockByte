@@ -19,7 +19,7 @@ pub mod world;
 pub const SERVER_TPS: u32 = 40;
 pub const SERVER_DT: f32 = 1. / (SERVER_TPS as f32);
 pub const GRAVITY_ACCELERATION: f32 = 25.;
-pub const NORMAL_SPEED: f32 = 5.;
+pub const NORMAL_SPEED: f32 = 6.;
 pub const ACCELERATION_COEFFICIENT: f32 = 8.;
 
 pub const fn time_to_ticks(time: f32) -> u32 {
@@ -351,7 +351,7 @@ impl EntityStats {
         GRAVITY_ACCELERATION * t
     }
 }
-create_entity_stats!(strength: 100., speed: 100., haste: 100., evasion: 0., vitality: 100., regen: 5., mana: 100., mana_regen: 5., stamina: 100., stamina_regen: 10., vulnerability: 100., jump_height: 1.3, armor: 0.);
+create_entity_stats!(strength: 100., speed: 100., haste: 100., evasion: 0., vitality: 100., regen: 5., mana: 100., mana_regen: 5., stamina: 100., stamina_regen: 10., vulnerability: 100., jump_height: 1.3, armor: 0., flight: 0.);
 
 #[derive(Serialize, Deserialize)]
 pub struct CharacterController {
@@ -384,7 +384,10 @@ impl CharacterController {
             MoveMode::Fly | MoveMode::NoClip => {}
         }
         let ground_multiplier = if self.on_ground { 1. } else { 0.2 };
-        let acceleration = ground_multiplier * acceleration;
+        let acceleration = match move_mode {
+            MoveMode::Normal => ground_multiplier,
+            MoveMode::Fly | MoveMode::NoClip => 1.,
+        } * acceleration;
         let mut error = (move_vector - self.velocity);
         match move_mode {
             MoveMode::Normal => {

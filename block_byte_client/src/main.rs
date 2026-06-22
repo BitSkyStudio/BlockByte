@@ -591,17 +591,26 @@ impl ApplicationHandler for App {
                     .window()
                     .request_redraw();
                 if self.connection.state() == ClientConnectionState::Connected {
-                    if self.game.buttons.is_down(MouseButton::Left)
-                        && self.game.hit_timer.is_none()
+                    if self.game.buttons.is_just_down(MouseButton::Left)
                         && self.game.screen.is_none()
+                        && match &self.game.hit_timer {
+                            Some(hit_timer) => {
+                                hit_timer.current_time > hit_timer.current_time * 0.5
+                            }
+                            None => true,
+                        }
                     {
+                        self.game.is_attack_queued = true;
+                    }
+                    if self.game.is_attack_queued && self.game.hit_timer.is_none() {
+                        self.game.is_attack_queued = false;
                         let stamina_cost = self.game.active_tool().stamina;
                         if self.game.stamina >= stamina_cost {
                             self.game.stamina -= stamina_cost;
                             self.game.hit_timer = Some(HitTimer {
                                 current_time: 0.,
                                 swing_time: self.game.active_tool().swing_time
-                                    * (self.game.player_stats.haste() / 100.),
+                                    / (self.game.player_stats.haste() / 100.),
                             });
                         }
                     }
@@ -1335,7 +1344,11 @@ impl ClientPlayer {
         raycast_result
     }
     pub fn update_position(&mut self, delta_time: f32, game: &mut ClientGame) {
-        let move_mode = MoveMode::Normal;
+        let move_mode = if game.player_stats.flight() > 0. {
+            MoveMode::Fly
+        } else {
+            MoveMode::Normal
+        };
         self.height_animation = number_approach_smooth(
             self.height_animation,
             self.position.y
@@ -1515,6 +1528,8 @@ pub struct ClientGame {
     pub chunk_mesh_queue_size: usize,
     pub server_ticks_passed: u64,
     pub chunk_buffer_pool: ChunkBufferPool,
+    pub is_attack_queued: bool,
+    pub placement_visualize_toggled: bool,
 }
 #[derive(Default)]
 struct ChunkBufferPool {
@@ -1651,6 +1666,8 @@ impl Default for ClientGame {
             chunk_mesh_queue_size: 0,
             server_ticks_passed: 0,
             chunk_buffer_pool: ChunkBufferPool::default(),
+            is_attack_queued: false,
+            placement_visualize_toggled: false,
         }
     }
 }
@@ -1752,45 +1769,47 @@ impl ClientGame {
                 None => None,
             };
         }
-        render::draw_model(
-            &ModelInstance {
-                model: ModelKey::id("viewmodel").unwrap(),
-                textures: vec![],
-            },
-            Matrix4::from_translation(Vector3::from(
-                camera.get_eye(self.get_player_data()).into_array(),
-            )) * Matrix4::from_angle_y(Rad(-camera.direction.yaw))
-                * Matrix4::from_angle_x(Rad(camera.direction.pitch)),
-            &mut viewmodel_mesh.consumer(Color::WHITE),
-            &animation,
-            |binding, vc| match binding {
-                "hand" => {
-                    let (item, variant) = match self.swap_hand_item.as_ref() {
-                        Some(item) => item,
-                        None => return None,
-                    };
-                    let item_data = item.data();
-                    match &item_data.action {
-                        ItemAction::Place(item_block_placements) => {
-                            let placement = &item_block_placements[*variant]; //todo: flash red when not enough items
-                            if let Some(held_item) = self.held_item() {
-                                if held_item.count < placement.use_count {
-                                    vc.color = Color {
-                                        r: 255,
-                                        g: 200,
-                                        b: 200,
-                                        a: 255,
-                                    };
+        let viewmodel = self
+            .get_player_data()
+            .and_then(|data| data.viewmodel.as_ref());
+        if let Some(viewmodel) = viewmodel {
+            render::draw_model(
+                viewmodel,
+                Matrix4::from_translation(Vector3::from(
+                    camera.get_eye(self.get_player_data()).into_array(),
+                )) * Matrix4::from_angle_y(Rad(-camera.direction.yaw))
+                    * Matrix4::from_angle_x(Rad(camera.direction.pitch)),
+                &mut viewmodel_mesh.consumer(Color::WHITE),
+                &animation,
+                |binding, vc| match binding {
+                    "hand" => {
+                        let (item, variant) = match self.swap_hand_item.as_ref() {
+                            Some(item) => item,
+                            None => return None,
+                        };
+                        let item_data = item.data();
+                        match &item_data.action {
+                            ItemAction::Place(item_block_placements) => {
+                                let placement = &item_block_placements[*variant]; //todo: flash red when not enough items
+                                if let Some(held_item) = self.held_item() {
+                                    if held_item.count < placement.use_count {
+                                        vc.color = Color {
+                                            r: 255,
+                                            g: 200,
+                                            b: 200,
+                                            a: 255,
+                                        };
+                                    }
                                 }
+                                Some(Cow::Owned(ItemModel::Block((placement.block))))
                             }
-                            Some(Cow::Owned(ItemModel::Block((placement.block))))
+                            _ => Some(Cow::Borrowed(&item_data.model)),
                         }
-                        _ => Some(Cow::Borrowed(&item_data.model)),
                     }
-                }
-                _ => None,
-            },
-        );
+                    _ => None,
+                },
+            );
+        }
 
         let mut i = 0;
         let ps = profiler::profiler_scope("upload chunks");
@@ -1997,6 +2016,10 @@ impl ClientGame {
         }
         ps.end();
 
+        if self.keys.is_just_down(KeyCode::AltLeft) {
+            self.placement_visualize_toggled ^= true;
+        }
+
         if let Some(held_item) = self.held_item()
             && self.screen.is_none()
         {
@@ -2059,7 +2082,7 @@ impl ClientGame {
                                 .unwrap()
                                 .block;
                             if block == air_block() {
-                                if self.keys.is_down(KeyCode::AltLeft) {
+                                if self.placement_visualize_toggled {
                                     render::draw_block_model(
                                         place_block.block,
                                         get_block_matrix(block_position, rotation),

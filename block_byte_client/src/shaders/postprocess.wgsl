@@ -59,7 +59,7 @@ var blur_sampler: sampler;
 fn fs_main(vs: VertexOutput) -> @location(0) vec4<f32> {
     let blur = textureSample(blur_image, blur_sampler, vs.uv).rgb;
     let hdr = textureSample(hdr_image, hdr_sampler, vs.uv);
-    let sharpness = 0.3;
+    let sharpness = 0.;//.3;
     let sharp_clamp_val = vec3<f32>(0.5);
     let sharp_color = hdr.rgb + clamp((hdr.rgb - blur), -sharp_clamp_val, sharp_clamp_val) * sharpness;
 

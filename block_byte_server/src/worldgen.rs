@@ -193,6 +193,7 @@ pub struct WorldGenerator {
     pub config: WorldGeneratorConfig,
     pub chunk_column_cache: Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
     pub region_cache: Cache<(i16, i16), Arc<RegionGeneration>>,
+    pub design_world: bool,
 }
 impl WorldGenerator {
     pub fn new(config: WorldGeneratorConfig, seed: u64) -> WorldGenerator {
@@ -201,6 +202,7 @@ impl WorldGenerator {
             config,
             chunk_column_cache: Cache::new(1024),
             region_cache: Cache::new(64),
+            design_world: false,
         }
     }
     pub fn get_region_generation(&self, region_x: i16, region_z: i16) -> Arc<RegionGeneration> {
@@ -517,6 +519,24 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
     );
     let mut components = ChunkBlockComponents::default();
+
+    if generator.design_world {
+        let (base_chunk, base_offset) = (BlockPos { x: 0, y: 79, z: 0 }).to_chunk_pos_offset();
+        if position == base_chunk {
+            blocks.set(
+                base_offset.index(),
+                &BlockEntry::simple(BlockKey::id("rock.limestone.rock").unwrap()),
+            );
+        }
+        return Chunk {
+            position,
+            blocks: RefCell::new(blocks),
+            viewers: HashSet::new(),
+            events: RefCell::new(VecDeque::new()),
+            components,
+            entities: BTreeMap::new(),
+        };
+    }
 
     let mut rng =
         Xoshiro256PlusPlus::from_seed(Seeder::from((generator.seed as u32, position)).make_seed());
