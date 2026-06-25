@@ -344,7 +344,10 @@ impl RenderState {
                             u1: (tx + 1) as f32 / 4.,
                             v2: (ty + 1) as f32 / 3.,
                         },
-                        0,
+                        match face {
+                            Face::Down => 2,
+                            _ => 0,
+                        },
                     )
                     .map(|(position, uv)| MeshVertex {
                         position: position * 2. - Pos::all(1.),
@@ -535,7 +538,7 @@ impl RenderState {
                         });
                     }
                 }
-                if frame_load_limit > (1. * 1024. * 1024.) as usize && true {
+                if frame_load_limit > (1. * 1024. * 1024.) as usize && false {
                     break;
                 }
             }

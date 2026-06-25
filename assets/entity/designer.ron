@@ -7,6 +7,7 @@
     model: "player",
     viewmodel: "viewmodel",
     damage_table: (),
+    loot_table: Key("empty"),
     base_stats: (
         flight_add: 1,
         strength_mul: 100000000,

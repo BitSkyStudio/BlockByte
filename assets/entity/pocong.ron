@@ -5,6 +5,7 @@
     eye_height: 1.7,
     model: "pocong",
     damage_table: (),
+    loot_table: Key("empty"),
     ai: (
         attacks: "player",
     ),

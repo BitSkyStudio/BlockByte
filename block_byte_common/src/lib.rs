@@ -255,9 +255,13 @@ macro_rules! create_damage_types {
         pub enum DamageType{
             $($id,)*
         }
-        fn default_damage_vulnerability() -> f32{1.}
+        impl DamageType{
+            pub fn list() -> &'static [DamageType]{
+                &[$(DamageType::$id,)*][..]
+            }
+        }
         #[allow(non_snake_case)]
-        #[derive(Default, Serialize, Deserialize)]
+        #[derive(Default, Serialize, Deserialize, Clone)]
         pub struct DamageTable{
             $(
                 #[serde(default)]
@@ -266,7 +270,12 @@ macro_rules! create_damage_types {
         }
         impl DamageTable {
             pub fn iter(&self) -> impl Iterator<Item=(DamageType, f32)>{
-                [$(DamageType::$id,)*].into_iter().filter_map(|damage_type|self[damage_type].map(|value|(damage_type, value)))
+                DamageType::list().into_iter().filter_map(|damage_type|self[*damage_type].map(|value|(*damage_type, value)))
+            }
+            pub const fn empty() -> DamageTable{
+                DamageTable{
+                    $($id: None,)*
+                }
             }
         }
         impl std::ops::Index<DamageType> for DamageTable {

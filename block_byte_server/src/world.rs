@@ -79,7 +79,11 @@ pub fn tick_chunk(world: &WorldAccess) {
     for _ in 0..world.get_event_queue_length() {
         let event = world.pop_event().unwrap();
         match event {
-            WorldEvent::BlockDamage { block, damage } => {
+            WorldEvent::BlockDamage {
+                block,
+                damage,
+                source_entity,
+            } => {
                 let block_position = world.center_chunk.to_block_pos() + block.xyz();
                 let Some(block) = world.get_block(block_position) else {
                     continue;
@@ -108,10 +112,22 @@ pub fn tick_chunk(world: &WorldAccess) {
                     }
                 };
                 if should_break_block {
-                    world.drop_items(
-                        world.break_block(block_position).unwrap().into_iter(),
-                        block_position.to_pos() + Pos::all(0.5),
-                    );
+                    let mut items = world.break_block(block_position).unwrap();
+                    if let Some(source_entity) = source_entity {
+                        if let Some(mut source_entity) = world.get_entity(source_entity) {
+                            let view = source_entity.key.data().pickup_view();
+                            items.retain_mut(|item| {
+                                match source_entity.inventory.add_item(view, item.clone()) {
+                                    Some(overflow) => {
+                                        *item = overflow;
+                                        true
+                                    }
+                                    None => false,
+                                }
+                            });
+                        }
+                    }
+                    world.drop_items(items.into_iter(), block_position.to_pos() + Pos::all(0.5));
                 }
             }
             WorldEvent::BlockLogicSignal {
@@ -253,6 +269,34 @@ pub fn tick_chunk(world: &WorldAccess) {
                 }
                 entity.health -= received_damage;
                 if entity.health <= 0. {
+                    let mut items = generate_loot_table(
+                        &entity.key.data().loot_table.data(),
+                        &LootGenerationContext { seed: 0 },
+                    );
+                    for item in &mut entity.inventory.items {
+                        if let Some(item) = item.take() {
+                            items.push(item);
+                        }
+                    }
+                    if let Some(source_entity) = source_entity {
+                        if let Some(mut source_entity) = world.get_entity(source_entity) {
+                            let view = source_entity.key.data().pickup_view();
+                            items.retain_mut(|item| {
+                                match source_entity.inventory.add_item(view, item.clone()) {
+                                    Some(overflow) => {
+                                        *item = overflow;
+                                        true
+                                    }
+                                    None => false,
+                                }
+                            });
+                        }
+                    }
+                    world.drop_items(
+                        items.into_iter(),
+                        entity.position + Pos::all(entity.key.data().hitbox_size),
+                    );
+
                     world.remove_entity(entity);
                 }
             }
@@ -622,6 +666,7 @@ pub enum WorldEvent {
     BlockDamage {
         block: ChunkOffset,
         damage: DamageTable,
+        source_entity: Option<Uuid>,
     },
     BlockLogicSignal {
         block: ChunkOffset,
@@ -848,8 +893,8 @@ impl Entity {
                     brain.goal = Some(target_position);
                     let hand_item = self.inventory.get_raw(self.hand_slot);
                     let tool = hand_item
-                        .and_then(|item| item.item.data().tool)
-                        .unwrap_or(ToolData::hand());
+                        .and_then(|item| item.item.data().tool.as_ref())
+                        .unwrap_or(&ToolData::HAND);
                     let reach_distance = tool.reach / 3. * 2.;
                     if target_position.distance(entity_eye_position) <= tool.reach {
                         if let Some(timer) = &mut brain.hit_timer {
@@ -1900,17 +1945,15 @@ impl WorldAccess<'_> {
     ) -> Result<(), ()> {
         let item_entity_key = EntityKey::id("item").unwrap();
         for mut item in items {
-            for _ in 0..item.count {
-                let mut item_entity = Entity::new(item_entity_key, position);
-                let angle = rand::random::<f32>() * 2. * std::f32::consts::PI;
-                item_entity.character_controller.velocity = Pos {
-                    x: angle.cos(),
-                    y: rand::random::<f32>() / 2.,
-                    z: angle.sin(),
-                } * 3.;
-                item_entity.inventory.items[0] = Some(item.copy(1));
-                let _ = self.spawn_entity(item_entity);
-            }
+            let mut item_entity = Entity::new(item_entity_key, position);
+            let angle = rand::random::<f32>() * 2. * std::f32::consts::PI;
+            item_entity.character_controller.velocity = Pos {
+                x: angle.cos(),
+                y: rand::random::<f32>() / 2.,
+                z: angle.sin(),
+            } * 3.;
+            item_entity.inventory.items[0] = Some(item);
+            let _ = self.spawn_entity(item_entity);
         }
         Ok(())
     }
@@ -2101,8 +2144,8 @@ impl<T, L: PartialEq> std::ops::DerefMut for WorldAccessRef<'_, T, L> {
 pub fn compute_tool_damage(item: Option<&ItemStack>, stats: &EntityStats) -> DamageTable {
     let tool = item
         .as_ref()
-        .and_then(|item| item.item.data().tool.clone())
-        .unwrap_or(ToolData::hand());
+        .and_then(|item| item.item.data().tool.as_ref())
+        .unwrap_or(&ToolData::HAND);
     let quality_multiplier = match item {
         Some(item) => item
             .components
@@ -2112,7 +2155,12 @@ pub fn compute_tool_damage(item: Option<&ItemStack>, stats: &EntityStats) -> Dam
         None => 1.,
     };
     let strength_multiplier = stats.strength() / 100.;
-    let mut damage_table = DamageTable::default();
-    damage_table[tool.damage_type] = Some(tool.damage * quality_multiplier * strength_multiplier);
+
+    let mut damage_table = tool.damage_table.clone();
+    for damage_type in DamageType::list() {
+        if let Some(value) = &mut damage_table[*damage_type] {
+            *value *= quality_multiplier * strength_multiplier;
+        }
+    }
     damage_table
 }

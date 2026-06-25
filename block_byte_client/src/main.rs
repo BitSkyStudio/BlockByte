@@ -1693,11 +1693,11 @@ impl ClientGame {
     pub fn held_item(&self) -> &Option<ClientItem> {
         &self.hud.slots[self.hotbar_slot]
     }
-    pub fn active_tool(&self) -> ToolData {
+    pub fn active_tool(&self) -> &ToolData {
         self.held_item()
             .as_ref()
-            .and_then(|item| item.item.data().tool)
-            .unwrap_or(ToolData::hand())
+            .and_then(|item| item.item.data().tool.as_ref())
+            .unwrap_or(&ToolData::HAND)
     }
     pub fn get_block(&self, position: BlockPos) -> Option<BlockEntry> {
         let (chunk, offset) = position.to_chunk_pos_offset();

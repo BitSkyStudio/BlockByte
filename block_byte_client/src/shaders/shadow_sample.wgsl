@@ -1,5 +1,5 @@
 fn sample_shadow(world_position: vec3<f32>, normal: vec3<f32>) -> f32{
-    let floored_world_position = world_position;//floor(world_position * 32.) / 32.;
+    let floored_world_position = world_position;//floor(world_position * 16.) / 16.;
     var shadow_space = shadow_camera.view_proj * vec4(floored_world_position, 1.);
     //shadow_space.w -= 0.0001;
     let shadow_undistorted = vec4(shadow_distort_position(shadow_space.xy), shadow_space.zw);

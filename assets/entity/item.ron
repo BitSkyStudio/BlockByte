@@ -6,6 +6,7 @@
     model: "item",
     interact_action: Pickup,
     damage_table: (),
+    loot_table: Key("empty"),
     base_stats: (
         vitality_mul: 0.2,
         speed_mul: 0.5,

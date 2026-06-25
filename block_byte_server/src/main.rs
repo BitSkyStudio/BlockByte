@@ -771,6 +771,7 @@ impl User {
                         WorldEvent::BlockDamage {
                             block: offset,
                             damage: damage_table,
+                            source_entity: Some(entity.uuid),
                         },
                     );
                 }
@@ -926,9 +927,11 @@ impl User {
                             let Ok(drops) = world.break_block(position) else {
                                 continue;
                             };
-                            let view = entity.inventory.full_view();
                             for item in drops {
-                                if let Some(rest) = entity.inventory.add_item(&view, item) {
+                                if let Some(rest) = entity
+                                    .inventory
+                                    .add_item(entity.key.data().pickup_view(), item)
+                                {
                                     world.drop_items(
                                         std::iter::once(rest),
                                         position.to_pos() + Pos::all(0.5),

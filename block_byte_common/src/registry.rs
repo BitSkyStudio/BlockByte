@@ -514,26 +514,25 @@ pub enum ItemModel {
     Block(BlockKey),
     Model(ModelInstance),
 }
-#[derive(Copy, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize)]
 pub struct ToolData {
-    pub damage: f32,
+    pub damage_table: DamageTable,
     pub swing_time: f32,
-    pub damage_type: DamageType,
     pub reach: f32,
     pub knockback: f32,
     pub stamina: f32,
 }
 impl ToolData {
-    pub fn hand() -> ToolData {
-        ToolData {
-            damage: 1.,
-            swing_time: 0.5,
-            damage_type: DamageType::Blunt,
-            reach: 5.,
-            knockback: 2.,
-            stamina: 10.,
-        }
-    }
+    pub const HAND: ToolData = ToolData {
+        damage_table: DamageTable {
+            Blunt: Some(1.),
+            ..DamageTable::empty()
+        },
+        swing_time: 0.5,
+        reach: 5.,
+        knockback: 2.,
+        stamina: 10.,
+    };
 }
 pub type ItemKey = Key<ItemData>;
 
@@ -1265,8 +1264,23 @@ pub struct EntityData {
     pub ai: Option<MobAI>,
     #[serde(default)]
     pub base_stats: EntityStats,
+    pub loot_table: OwnOrKey<LootTableData>,
+    #[serde(skip_deserializing, skip_serializing, default)]
+    pickup_view_cache: Option<InventoryView>,
 }
-impl RegistryRonConfigLoadable for EntityData {}
+impl EntityData {
+    pub fn pickup_view<'a>(&'a self) -> &'a InventoryView {
+        self.pickup_view_cache.as_ref().unwrap()
+    }
+}
+impl RegistryRonConfigLoadable for EntityData {
+    fn preload_hook(&mut self) {
+        let mut view = InventoryView::from_range(0..self.inventory_size);
+        view.slots
+            .retain(|i| !self.equipment_slots.contains(&i.slot));
+        self.pickup_view_cache = Some(view);
+    }
+}
 #[derive(Deserialize)]
 pub struct MobAI {
     #[serde(default)]
