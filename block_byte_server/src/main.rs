@@ -55,8 +55,8 @@ use crate::{
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
         ActiveEffect, BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData,
-        Entity, WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent, compute_tool_damage,
-        tick_chunk,
+        Entity, WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent,
+        compute_tool_damage_and_knockback, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -761,7 +761,7 @@ impl User {
                     }
                 }
                 NetworkMessageC2S::AttackBlock { position, face } => {
-                    let damage_table = compute_tool_damage(
+                    let (damage_table, _) = compute_tool_damage_and_knockback(
                         entity.inventory.get_raw(entity.hand_slot),
                         &entity.current_stats,
                     );
@@ -996,7 +996,7 @@ impl User {
                 NetworkMessageC2S::AttackEntity {
                     entity: other_entity_id,
                 } => {
-                    let damage_table = compute_tool_damage(
+                    let (damage_table, knockback) = compute_tool_damage_and_knockback(
                         entity.inventory.get_raw(entity.hand_slot),
                         &entity.current_stats,
                     );
@@ -1016,10 +1016,7 @@ impl User {
                             world.center_chunk,
                             WorldEvent::EntityKnockback {
                                 entity: other_entity_id,
-                                knockback: (knockback_direction + Pos::Y * 0.3)
-                                //todo: handle knockback
-                                    //* tool.knockback
-                                    * 4.,
+                                knockback: (knockback_direction + Pos::Y * 0.5) * knockback,
                             },
                         )
                         .unwrap();

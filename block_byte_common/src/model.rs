@@ -112,7 +112,24 @@ struct BBFace {
 struct BBAnimation {
     name: String,
     length: f32,
+    #[serde(default)]
     animators: HashMap<String, BBAnimator>,
+    #[serde(rename = "loop")]
+    loop_mode: LoopMode,
+}
+#[derive(Copy, Clone, Deserialize, Debug)]
+pub enum LoopMode {
+    #[serde(rename = "once")]
+    Once,
+    #[serde(rename = "hold")]
+    Hold,
+    #[serde(rename = "loop")]
+    Loop,
+}
+#[derive(Copy, Clone)]
+pub struct AnimationPlayInfo {
+    pub loop_mode: LoopMode,
+    pub length: f32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -349,7 +366,7 @@ struct ResolvedAnimation {
 }
 pub struct Model {
     root_bone: Bone,
-    animations: HashMap<String, usize>,
+    animations: HashMap<String, (usize, AnimationPlayInfo)>,
     pub textures: Vec<(ModelTexture, f32, f32)>,
 }
 pub enum ModelTexture {
@@ -367,6 +384,9 @@ pub enum ModelGeometry {
     Triangle([ModelVertex; 3], usize),
 }
 impl Model {
+    pub fn get_animation_info(&self, animation: &str) -> Option<AnimationPlayInfo> {
+        self.animations.get(animation).map(|(_, info)| *info)
+    }
     pub fn draw(
         &self,
         matrix: Matrix4<f32>,
@@ -377,7 +397,7 @@ impl Model {
         let animations = animations
             .iter()
             .map(|animation| ResolvedAnimation {
-                animation: *self.animations.get(animation.animation).unwrap(),
+                animation: self.animations.get(animation.animation).unwrap().0,
                 time: animation.time,
                 weight: animation.weight,
             })
@@ -398,7 +418,7 @@ impl Model {
         let animations = animations
             .iter()
             .map(|animation| ResolvedAnimation {
-                animation: *self.animations.get(animation.animation).unwrap(),
+                animation: self.animations.get(animation.animation).unwrap().0,
                 time: animation.time,
                 weight: animation.weight,
             })
@@ -428,7 +448,18 @@ impl Model {
                 .unwrap_or(Vec::new())
                 .into_iter()
                 .enumerate()
-                .map(|(i, animation)| (animation.name, i))
+                .map(|(i, animation)| {
+                    (
+                        animation.name,
+                        (
+                            i,
+                            AnimationPlayInfo {
+                                loop_mode: animation.loop_mode,
+                                length: animation.length,
+                            },
+                        ),
+                    )
+                })
                 .collect(),
             textures: bbmodel
                 .textures

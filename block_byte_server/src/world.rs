@@ -524,6 +524,11 @@ pub fn tick_chunk(world: &WorldAccess) {
         } else {
             let mut move_vector = Pos::ZERO;
             entity.tick(&mut move_vector, world);
+            entity.pose = if move_vector.length_squared() > 0. {
+                EntityPose::Walk
+            } else {
+                EntityPose::Stand
+            };
             let mut new_position = entity.position;
             entity.character_controller.tick(
                 &mut new_position,
@@ -895,12 +900,14 @@ impl Entity {
                     let tool = hand_item
                         .and_then(|item| item.item.data().tool.as_ref())
                         .unwrap_or(&ToolData::HAND);
-                    let reach_distance = tool.reach / 3. * 2.;
-                    if target_position.distance(entity_eye_position) <= tool.reach {
+                    let reach_distance = tool.reach * 0.6;
+                    if target_position.distance(entity_eye_position) <= reach_distance {
                         if let Some(timer) = &mut brain.hit_timer {
                             if timer.tick(SERVER_DT) {
-                                let damage_table =
-                                    compute_tool_damage(hand_item, &self.current_stats);
+                                let (damage_table, knockback) = compute_tool_damage_and_knockback(
+                                    hand_item,
+                                    &self.current_stats,
+                                );
                                 world.schedule_event(
                                     target_position.to_chunk_pos(),
                                     WorldEvent::EntityDamage {
@@ -914,8 +921,8 @@ impl Entity {
                                         world.center_chunk,
                                         WorldEvent::EntityKnockback {
                                             entity: target_id,
-                                            knockback: (self.direction.make_front() + Pos::Y * 0.3)
-                                                * 4.,
+                                            knockback: (self.direction.make_front() + Pos::Y * 0.5)
+                                                * knockback,
                                         },
                                     )
                                     .unwrap();
@@ -926,7 +933,7 @@ impl Entity {
                         } else {
                             brain.hit_timer = Some(HitTimer {
                                 current_time: 0.,
-                                swing_time: tool.swing_time,
+                                swing_time: tool.swing_time * 1.4,
                             });
                         }
                     }
@@ -957,7 +964,7 @@ impl Entity {
                             / 100.
                             * NORMAL_SPEED;
 
-                        if brain.path.first().unwrap().distance(self.position) < 2. {
+                        if brain.path.first().unwrap().distance(self.position) < 1. {
                             *move_vector = Pos {
                                 x: 0.,
                                 y: 0.,
@@ -2141,7 +2148,10 @@ impl<T, L: PartialEq> std::ops::DerefMut for WorldAccessRef<'_, T, L> {
     }
 }
 
-pub fn compute_tool_damage(item: Option<&ItemStack>, stats: &EntityStats) -> DamageTable {
+pub fn compute_tool_damage_and_knockback(
+    item: Option<&ItemStack>,
+    stats: &EntityStats,
+) -> (DamageTable, f32) {
     let tool = item
         .as_ref()
         .and_then(|item| item.item.data().tool.as_ref())
@@ -2162,5 +2172,5 @@ pub fn compute_tool_damage(item: Option<&ItemStack>, stats: &EntityStats) -> Dam
             *value *= quality_multiplier * strength_multiplier;
         }
     }
-    damage_table
+    (damage_table, tool.knockback)
 }

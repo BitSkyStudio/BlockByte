@@ -25,7 +25,7 @@ use block_byte_common::{
     ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityPose, EntityStats,
     HitTimer, ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
-    model::{DrawAnimation, ModelGeometry, ModelTexture},
+    model::{DrawAnimation, LoopMode, ModelGeometry, ModelTexture},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     number_approach_smooth,
     registry::{
@@ -1985,15 +1985,43 @@ impl ClientGame {
                             let animation_time =
                                 (self.server_ticks_passed - machine.animation_start_time) as f32
                                     * SERVER_DT;
+
                             let animation = match machine_data.model_animations.is_empty() {
                                 true => None,
-                                false => Some(DrawAnimation {
-                                    animation: machine_data.model_animations
+                                false => {
+                                    let mut animation = machine_data.model_animations
                                         [machine.animation as usize]
-                                        .as_str(),
-                                    time: animation_time,
-                                    weight: 1.,
-                                }),
+                                        .as_str();
+                                    let mut time = animation_time;
+                                    let model_data = &machine_model.model.data().model;
+                                    let animation_info =
+                                        model_data.get_animation_info(animation).unwrap();
+
+                                    if time > animation_info.length {
+                                        match animation_info.loop_mode {
+                                            LoopMode::Once => {
+                                                animation =
+                                                    machine_data.model_animations[0].as_str();
+                                                time -= animation_info.length;
+                                                time %= model_data
+                                                    .get_animation_info(animation)
+                                                    .unwrap()
+                                                    .length;
+                                            }
+                                            LoopMode::Hold => {
+                                                time = animation_info.length;
+                                            }
+                                            LoopMode::Loop => {
+                                                time %= animation_info.length;
+                                            }
+                                        }
+                                    }
+                                    Some(DrawAnimation {
+                                        animation,
+                                        time,
+                                        weight: 1.,
+                                    })
+                                }
                             };
 
                             draw_model(
@@ -2118,8 +2146,22 @@ impl ClientGame {
                     }
                     _ => {}
                 },
+                ItemAction::Plant(_) | ItemAction::RotateBlock | ItemAction::SpawnEntity(_) => {
+                    match raycast {
+                        RayCastResult::Block(position, face) => {
+                            if self.buttons.is_just_down(MouseButton::Right) {
+                                self.viewmodel_player.trigger("build");
+                                connection.tx.send(NetworkMessageC2S::ItemInteraction {
+                                    target: ItemInteractTarget::Block { position, face },
+                                    variant: variant_id,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 ItemAction::Ignore => {}
-                _ => {
+                ItemAction::Consume { .. } => {
                     if self.buttons.is_just_down(MouseButton::Right) {
                         self.viewmodel_player.trigger("build");
                         connection.tx.send(NetworkMessageC2S::ItemInteraction {

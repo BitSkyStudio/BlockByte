@@ -530,7 +530,7 @@ impl ToolData {
         },
         swing_time: 0.5,
         reach: 5.,
-        knockback: 2.,
+        knockback: 8.,
         stamina: 10.,
     };
 }
