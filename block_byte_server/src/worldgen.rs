@@ -1,6 +1,7 @@
 use std::{
     cell::{OnceCell, RefCell, UnsafeCell},
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    fmt::Debug,
     num::{NonZero, NonZeroU32},
     rc::Rc,
     sync::Arc,
@@ -9,13 +10,14 @@ use std::{
 
 use block_byte_common::{
     WeightedList,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Pos},
     registry::{
         BiomeKey, BlockEntry, BlockKey, BlockPalette, KeyGroup, PrefabKey, WorldGenStructureKey,
         WorldGenStructureRoom, air_block,
     },
     rotation::BlockRotation,
 };
+use fast_poisson::Poisson2D;
 use moka::sync::Cache;
 use noise::{NoiseFn, Perlin};
 use ordered_float::OrderedFloat;
@@ -109,6 +111,93 @@ impl RegionGeneration {
                 NonZero::new(self.structure_grid_prefabs.len() as u32);
         }
     }
+    pub fn generate_biome_list(
+        x: i16,
+        z: i16,
+        world_generator: &WorldGenerator,
+    ) -> Arc<Vec<RegionBiomePoint>> {
+        world_generator
+            .region_biome_list_cache
+            .get_with((x, z), || {
+                let mut rng = Xoshiro256PlusPlus::from_seed(
+                    Seeder::from((world_generator.seed as u32, x, z)).make_seed(),
+                );
+                let mut poisson = Poisson2D::new().with_seed(rng.next_u64()).with_dimensions(
+                    [
+                        RegionGeneration::REGION_BLOCK_SIZE as f64,
+                        RegionGeneration::REGION_BLOCK_SIZE as f64,
+                    ],
+                    world_generator.config.biome_size as f64,
+                );
+                let biomes = BiomeKey::entries().collect::<Vec<_>>();
+                let mut list = Vec::new();
+                for [point_x, point_z] in poisson.iter() {
+                    let biome = *biomes.get_random((), &mut rng).unwrap();
+                    list.push(RegionBiomePoint {
+                        x: x as i32 * RegionGeneration::REGION_BLOCK_SIZE as i32 + point_x as i32,
+                        z: z as i32 * RegionGeneration::REGION_BLOCK_SIZE as i32 + point_z as i32,
+                        biome,
+                    });
+                }
+                Arc::new(list)
+            })
+    }
+    pub fn get_biome_list_for_chunk(
+        chunk_x: i16,
+        chunk_z: i16,
+        world_generator: &WorldGenerator,
+    ) -> (Vec<RegionBiomePoint>, Vec<BiomeKey>) {
+        let mut shortest_distance = f32::INFINITY;
+        let point_x = chunk_x as f32 * CHUNK_SIZE as f32 + 16.;
+        let point_z = chunk_z as f32 * CHUNK_SIZE as f32 + 16.;
+        let region_x = chunk_x.div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16);
+        let region_z = chunk_z.div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16);
+        let mut relevant_biome_points: Vec<RegionBiomePoint> = Vec::new();
+        for x in -1..=1 {
+            for z in -1..=1 {
+                let biome_points = RegionGeneration::generate_biome_list(
+                    region_x + x,
+                    region_z + z,
+                    world_generator,
+                );
+                for biome_point in biome_points.iter() {
+                    let distance = ((point_x - biome_point.x as f32).powi(2)
+                        + (point_z - biome_point.z as f32).powi(2))
+                    .sqrt();
+                    if distance < shortest_distance {
+                        shortest_distance = distance;
+                        relevant_biome_points.retain(|biome_point| {
+                            let distance = ((point_x - biome_point.x as f32).powi(2)
+                                + (point_z - biome_point.z as f32).powi(2))
+                            .sqrt();
+                            distance < shortest_distance + 32.
+                        });
+                    }
+                    if distance < shortest_distance + 32. {
+                        relevant_biome_points.push(*biome_point);
+                    }
+                }
+            }
+        }
+        let mut unique_biomes = Vec::new();
+        for biome_point in &relevant_biome_points {
+            if !unique_biomes.contains(&biome_point.biome) {
+                unique_biomes.push(biome_point.biome);
+            }
+        }
+        (relevant_biome_points, unique_biomes)
+    }
+}
+#[derive(Copy, Clone)]
+struct RegionBiomePoint {
+    x: i32,
+    z: i32,
+    biome: BiomeKey,
+}
+impl Debug for RegionBiomePoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} {}", self.x, self.z, self.biome.text_id())
+    }
 }
 struct StructureGridPrefab {
     pub position: BlockPos,
@@ -187,12 +276,14 @@ struct ChunkColumnDecoration {
 #[derive(Deserialize)]
 pub struct WorldGeneratorConfig {
     pub region_structure_spawn_attempts: u32,
+    pub biome_size: f32,
 }
 pub struct WorldGenerator {
     pub seed: u64,
     pub config: WorldGeneratorConfig,
     pub chunk_column_cache: Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
     pub region_cache: Cache<(i16, i16), Arc<RegionGeneration>>,
+    pub region_biome_list_cache: Cache<(i16, i16), Arc<Vec<RegionBiomePoint>>>,
     pub design_world: bool,
 }
 impl WorldGenerator {
@@ -202,6 +293,7 @@ impl WorldGenerator {
             config,
             chunk_column_cache: Cache::new(1024),
             region_cache: Cache::new(64),
+            region_biome_list_cache: Cache::new(64),
             design_world: false,
         }
     }
@@ -385,13 +477,12 @@ impl WorldGenerator {
                             Some((neighbor, OrderedFloat(cost)))
                         })
                     },
-                    |node| OrderedFloat(2.*((node.x-second_road.0.x).pow(2) as f32 + (node.z-second_road.0.z).pow(2) as f32).sqrt()),
+                    |node| OrderedFloat(5.*((node.x-second_road.0.x).pow(2) as f32 + (node.z-second_road.0.z).pow(2) as f32).sqrt()),
                     |node| {
                         *node == second_road.0
                     },
                 ).unwrap().0;
                 for segment in solution{
-                    //println!("segment {:?}", segment);
                     region.roads[segment.x][segment.z] = region.roads[segment.x][segment.z].max(first_road.1.min(second_road.1));
                 }
             }
@@ -405,8 +496,24 @@ impl WorldGenerator {
             let height_noise = Perlin::new(self.seed as u32);
             let density_noise = Perlin::new(self.seed as u32 ^ 583279234);
             let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
-            let forest = BiomeKey::id("forest").unwrap();
-            let mut biome_map = [[forest; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
+            let (biome_points, unique_biomes) =
+                RegionGeneration::get_biome_list_for_chunk(chunk_x, chunk_z, self);
+            let mut biome_map = std::array::from_fn(|x| {
+                std::array::from_fn(|z| {
+                    biome_points
+                        .iter()
+                        .min_by_key(|biome_point| {
+                            let point_x = chunk_x as f32 * CHUNK_SIZE as f32 + x as f32;
+                            let point_z = chunk_z as f32 * CHUNK_SIZE as f32 + z as f32;
+                            let distance = ((point_x - biome_point.x as f32).powi(2)
+                                + (point_z - biome_point.z as f32).powi(2))
+                            .sqrt();
+                            OrderedFloat(distance)
+                        })
+                        .unwrap()
+                        .biome
+                })
+            });
             let mountain_spline = Spline::from_vec(vec![
                 splines::Key::new(-1., 60., Interpolation::Linear),
                 splines::Key::new(0., 80., Interpolation::Linear),
@@ -441,7 +548,6 @@ impl WorldGenerator {
                 splines::Key::new(200., 0., Interpolation::Linear),
             ]);
             //todo: this is probably broken between runs
-            let unique_biomes = vec![forest];
             let mut rng = Xoshiro256PlusPlus::from_seed(
                 Seeder::from((self.seed as u32, chunk_x, chunk_z)).make_seed(),
             );
@@ -502,6 +608,34 @@ impl WorldGenerator {
         let generation = self.get_column_generation(chunk.x, chunk.z);
         let offset = offset.xyz();
         generation.biomes[offset.x as usize][offset.z as usize]
+    }
+    pub fn is_valid_spawn(&self, x: i32, z: i32) -> Option<u16> {
+        let chunk_x = x.div_euclid(CHUNK_SIZE as i32) as i16;
+        let chunk_z = x.div_euclid(CHUNK_SIZE as i32) as i16;
+        for (ox, oz) in ChunkColumnGeneration::NEIGHBOR_CHUNK_BLOCKERS {
+            if self
+                .get_column_generation(chunk_x + ox as i16, chunk_z + oz as i16)
+                .is_blocked(x, z, 2)
+            {
+                return None;
+            }
+        }
+        Some(self.get_height_at(x, z))
+    }
+    pub fn find_valid_spawn(&self) -> Pos {
+        let mut initial_x = 0;
+        let mut initial_z = 0;
+        loop {
+            initial_x += rand::rng().random_range(-10..=10);
+            initial_z += rand::rng().random_range(-10..=10);
+            if let Some(height) = self.is_valid_spawn(initial_x, initial_z) {
+                return Pos {
+                    x: initial_x as f32 + 0.5,
+                    y: height as f32 + 1.,
+                    z: initial_z as f32 + 0.5,
+                };
+            }
+        }
     }
 }
 pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {

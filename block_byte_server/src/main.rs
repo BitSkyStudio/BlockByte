@@ -271,11 +271,7 @@ fn main() {
             match event {
                 ServerEvent::ClientConnected { client_id } => {
                     println!("Client {client_id} connected");
-                    let spawn_position = Pos {
-                        x: 0.,
-                        y: 90.,
-                        z: 0.,
-                    };
+                    let spawn_position = world_generator.find_valid_spawn();
                     let user = server.users.insert(User {
                         client_id,
                         view_position: Mutex::new(spawn_position.to_chunk_pos()),

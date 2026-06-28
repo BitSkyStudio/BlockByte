@@ -1379,24 +1379,26 @@ pub struct BiomeData {
     pub plants: Vec<PlantSpawner>,
     pub decorators: Vec<BiomeDecorator>,
     pub structures: Vec<BiomeStructureEntry>,
-    #[serde(default)]
-    pub debug_color: Color,
-    pub temperature: BiomeNoiseConfig,
-    pub moisture: BiomeNoiseConfig,
-    pub elevation: BiomeNoiseConfig,
+    pub weight: f32,
     pub road: RoadPlacementInfo,
 }
-impl RegistryRonConfigLoadable for BiomeData {}
-#[derive(Deserialize)]
-pub struct BiomeNoiseConfig {
-    pub target: f32,
-    pub weight: f32,
-}
-impl BiomeNoiseConfig {
-    pub fn get_error(&self, value: f32) -> f32 {
-        (self.target - value).abs() * self.weight
+impl WeightedEntry for BiomeData {
+    type WeightModifier = ();
+    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+        self.weight
     }
 }
+impl<T: WeightedEntry + 'static> WeightedEntry for Key<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
+{
+    type WeightModifier = T::WeightModifier;
+    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+        self.data().get_weight(modifier)
+    }
+}
+impl RegistryRonConfigLoadable for BiomeData {}
 #[derive(Deserialize)]
 pub struct PlantSpawner {
     pub chance: f32,

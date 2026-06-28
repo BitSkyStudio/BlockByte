@@ -1,0 +1,31 @@
+(
+    top_block: "nature.grass",
+    middle_block: "nature.dirt",
+    bottom_block: "nature.dirt",
+    weight: 5,
+    plants: [(
+        chance: 0.3,
+        plant: "grass",
+    )],
+    decorators: [
+        
+    ],
+    structures: [],
+    road: ([
+        (
+            weight: 20,
+            weight_center_distance_bias: -15,
+            block: "rock.limestone.cobble"
+        ),
+        (
+            weight: 7,
+            weight_center_distance_bias: -1,
+            block: "nature.dirt"
+        ),
+        (
+            weight: -3,
+            weight_center_distance_bias: 2,
+            block: None,
+        ),
+    ])
+)

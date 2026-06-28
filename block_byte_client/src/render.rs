@@ -65,6 +65,7 @@ pub struct RenderState {
     time_uniform: GPUUniform<f32>,
     material_texture: GPUTexture,
     entity_gpu_mesh: GPUMesh,
+    local_player_gpu_mesh: GPUMesh,
     damage_gpu_mesh: GPUMesh,
     viewmodel_gpu_mesh: GPUMesh,
     gui_gpu_mesh: GPUMesh,
@@ -392,6 +393,7 @@ impl RenderState {
             entity_gpu_mesh: GPUMesh::empty(),
             gui_gpu_mesh: GPUMesh::empty(),
             viewmodel_gpu_mesh: GPUMesh::empty(),
+            local_player_gpu_mesh: GPUMesh::empty(),
         }
     }
 
@@ -425,14 +427,16 @@ impl RenderState {
         game: &mut ClientGame,
         aspect_ratio: f32,
         entity_mesh: BaseMesh,
+        local_player_mesh: BaseMesh,
         gui_mesh: GUIMesh,
         viewmodel_mesh: BaseMesh,
         damage_mesh: DamageMesh,
         frustum: &Frustum,
         delta_time: f32,
     ) -> Result<(), SurfaceError> {
-        let should_update_shadowmap =
-            (self.animation_time * 20.) as u32 != ((self.animation_time + delta_time) * 20.) as u32;
+        let should_update_shadowmap = (self.animation_time * 20.) as u32
+            != ((self.animation_time + delta_time) * 20.) as u32
+            || true;
 
         let ps = profiler::profiler_scope("load uniforms");
         self.animation_time += delta_time;
@@ -484,6 +488,12 @@ impl RenderState {
         );
         self.damage_gpu_mesh.upload(
             &damage_mesh,
+            &self.device,
+            &mut self.staging_belt,
+            &mut encoder,
+        );
+        self.local_player_gpu_mesh.upload(
+            &local_player_mesh,
             &self.device,
             &mut self.staging_belt,
             &mut encoder,
@@ -618,6 +628,7 @@ impl RenderState {
             render_pass.set_pipeline(&self.shadow_base_render_pipeline.render_pipeline);
 
             self.entity_gpu_mesh.draw(&mut render_pass);
+            self.local_player_gpu_mesh.draw(&mut render_pass);
         }
         ps.end();
         if true {

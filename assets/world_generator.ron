@@ -1,3 +1,4 @@
 (
     region_structure_spawn_attempts: 100,
+    biome_size: 400,
 )

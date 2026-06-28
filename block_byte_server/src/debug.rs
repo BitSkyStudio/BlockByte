@@ -20,7 +20,7 @@ pub fn visualise() {
 }
 
 fn visualise_biome_graph() {
-    let mut image = image::DynamicImage::new(100, 100, image::ColorType::Rgb8);
+    /*let mut image = image::DynamicImage::new(100, 100, image::ColorType::Rgb8);
     for x in 0..100 {
         for y in 0..100 {
             let biome = BiomeKey::entries()
@@ -38,10 +38,10 @@ fn visualise_biome_graph() {
             image.put_pixel(x, y, image::Rgba(biome_color.into()));
         }
     }
-    image.save(Path::new(PATH).join("vis.png")).unwrap();
+    image.save(Path::new(PATH).join("vis.png")).unwrap();*/
 }
 fn visualise_map() {
-    let mut image = image::DynamicImage::new(2000, 2000, image::ColorType::Rgb8);
+    /*let mut image = image::DynamicImage::new(2000, 2000, image::ColorType::Rgb8);
     let land_noise = Fbm::<Perlin>::new(3)
         .set_octaves(6)
         .set_frequency(2.0)
@@ -72,7 +72,7 @@ fn visualise_map() {
             );
         }
     }
-    image.save(Path::new(PATH).join("map.png")).unwrap();
+    image.save(Path::new(PATH).join("map.png")).unwrap();*/
 }
 
 pub fn generate_tree(

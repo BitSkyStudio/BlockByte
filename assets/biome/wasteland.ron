@@ -1,0 +1,23 @@
+(
+    top_block: "rock.limestone.cobble",
+    middle_block: "nature.dirt",
+    bottom_block: "nature.dirt",
+    weight: 1,
+    plants: [],
+    decorators: [
+        
+    ],
+    structures: [],
+    road: ([
+        (
+            weight: 7,
+            weight_center_distance_bias: -1,
+            block: "nature.dirt"
+        ),
+        (
+            weight: -3,
+            weight_center_distance_bias: 2,
+            block: None,
+        ),
+    ])
+)

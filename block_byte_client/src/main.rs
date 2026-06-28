@@ -394,6 +394,7 @@ impl ApplicationHandler for App {
                         )
                         * self.camera.create_view_matrix(self.game.get_player_data()),
                 );
+                let mut local_player_mesh = Mesh::default();
                 let mut entity_mesh = Mesh::default();
                 let mut gui_mesh = Mesh::default();
                 let mut viewmodel_mesh = Mesh::default();
@@ -402,6 +403,7 @@ impl ApplicationHandler for App {
                     &render_state.device,
                     &render_state.queue,
                     &self.camera,
+                    &mut local_player_mesh,
                     &mut entity_mesh,
                     &mut gui_mesh,
                     &mut viewmodel_mesh,
@@ -570,6 +572,7 @@ impl ApplicationHandler for App {
                     &mut self.game,
                     aspect_ratio,
                     entity_mesh,
+                    local_player_mesh,
                     gui_mesh,
                     viewmodel_mesh,
                     damage_mesh,
@@ -1717,6 +1720,7 @@ impl ClientGame {
         device: &Device,
         queue: &Queue,
         camera: &ClientPlayer,
+        local_player_mesh: &mut BaseMesh,
         entity_mesh: &mut BaseMesh,
         gui_mesh: &mut GUIMesh,
         viewmodel_mesh: &mut BaseMesh,
@@ -1849,27 +1853,45 @@ impl ClientGame {
         for (id, entity) in &self.entities {
             if Some(*id) == self.player_entity {
                 continue;
+                render::draw_model(
+                    &entity.key.data().model,
+                    Matrix4::from_translation(Vector3::new(
+                        camera.position.x,
+                        camera.position.y,
+                        camera.position.z,
+                    )) * Matrix4::from_angle_y(Rad(-camera.direction.yaw)),
+                    &mut local_player_mesh.consumer(Color::WHITE),
+                    &[],
+                    |slot, _| {
+                        entity
+                            .hand_item
+                            .as_ref()
+                            .map(|item| Cow::Borrowed(&item.item.data().model))
+                    },
+                );
+            } else {
+                let lerp_time =
+                    (entity.update_timestamp.elapsed().as_secs_f32() / SERVER_DT).min(1.);
+                let position = entity.previous_position.lerp(entity.position, lerp_time);
+                let rotation = -block_byte_common::coord::lerp_number(
+                    entity.previous_direction.yaw,
+                    entity.direction.yaw,
+                    lerp_time,
+                );
+                render::draw_model(
+                    &entity.key.data().model,
+                    Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
+                        * Matrix4::from_angle_y(Rad(rotation)),
+                    &mut entity_mesh.consumer(Color::WHITE),
+                    &[],
+                    |slot, _| {
+                        entity
+                            .hand_item
+                            .as_ref()
+                            .map(|item| Cow::Borrowed(&item.item.data().model))
+                    },
+                );
             }
-            let lerp_time = (entity.update_timestamp.elapsed().as_secs_f32() / SERVER_DT).min(1.);
-            let position = entity.previous_position.lerp(entity.position, lerp_time);
-            let rotation = -block_byte_common::coord::lerp_number(
-                entity.previous_direction.yaw,
-                entity.direction.yaw,
-                lerp_time,
-            );
-            render::draw_model(
-                &entity.key.data().model,
-                Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
-                    * Matrix4::from_angle_y(Rad(rotation)),
-                &mut entity_mesh.consumer(Color::WHITE),
-                &[],
-                |slot, _| {
-                    entity
-                        .hand_item
-                        .as_ref()
-                        .map(|item| Cow::Borrowed(&item.item.data().model))
-                },
-            );
         }
 
         let ps = profiler::profiler_scope("draw block component");

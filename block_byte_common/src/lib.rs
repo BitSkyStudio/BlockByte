@@ -648,14 +648,13 @@ pub trait WeightedList {
         rng: &mut impl Rng,
     ) -> impl Iterator<Item = &'a Self::Entry>;
 }
-impl<T: WeightedEntry> WeightedList for Vec<T> {
+impl<T: WeightedEntry> WeightedList for [T] {
     type Entry = T;
-    fn get_random<'a>(
-        &'a self,
-        modifier: T::WeightModifier,
-        rng: &mut impl Rng,
-    ) -> Option<&'a Self::Entry> {
+    fn get_random<'a>(&'a self, modifier: T::WeightModifier, rng: &mut impl Rng) -> Option<&'a T> {
         let sum_weights = self.iter().map(|e| e.get_weight(modifier)).sum();
+        if sum_weights == 0. {
+            return None;
+        }
         let mut selection = rng.random_range((0.)..sum_weights);
         for entry in self {
             let weight = entry.get_weight(modifier);
@@ -670,7 +669,7 @@ impl<T: WeightedEntry> WeightedList for Vec<T> {
         &'a self,
         modifier: T::WeightModifier,
         rng: &mut impl Rng,
-    ) -> impl Iterator<Item = &'a Self::Entry> {
+    ) -> impl Iterator<Item = &'a T> {
         let mut list: Vec<_> = self
             .iter()
             .map(|entry| {
@@ -682,5 +681,18 @@ impl<T: WeightedEntry> WeightedList for Vec<T> {
             .collect();
         list.sort_by(|(_, a), (_, b)| b.total_cmp(a));
         list.into_iter().map(|(e, _)| e)
+    }
+}
+impl<T: WeightedEntry> WeightedList for Vec<T> {
+    type Entry = T;
+    fn get_random<'a>(&'a self, modifier: T::WeightModifier, rng: &mut impl Rng) -> Option<&'a T> {
+        self.as_slice().get_random(modifier, rng)
+    }
+    fn get_random_weighted_list<'a>(
+        &'a self,
+        modifier: T::WeightModifier,
+        rng: &mut impl Rng,
+    ) -> impl Iterator<Item = &'a T> {
+        self.as_slice().get_random_weighted_list(modifier, rng)
     }
 }
