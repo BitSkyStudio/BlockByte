@@ -396,10 +396,12 @@ impl Model {
     ) {
         let animations = animations
             .iter()
-            .map(|animation| ResolvedAnimation {
-                animation: self.animations.get(animation.animation).unwrap().0,
-                time: animation.time,
-                weight: animation.weight,
+            .filter_map(|animation| {
+                Some(ResolvedAnimation {
+                    animation: self.animations.get(animation.animation)?.0,
+                    time: animation.time,
+                    weight: animation.weight,
+                })
             })
             .collect::<Vec<_>>();
         self.root_bone.draw(
@@ -417,10 +419,12 @@ impl Model {
     ) -> Option<Matrix4<f32>> {
         let animations = animations
             .iter()
-            .map(|animation| ResolvedAnimation {
-                animation: self.animations.get(animation.animation).unwrap().0,
-                time: animation.time,
-                weight: animation.weight,
+            .filter_map(|animation| {
+                Some(ResolvedAnimation {
+                    animation: self.animations.get(animation.animation)?.0,
+                    time: animation.time,
+                    weight: animation.weight,
+                })
             })
             .collect::<Vec<_>>();
         self.root_bone.anchor(name, matrix, &animations[..])

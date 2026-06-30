@@ -612,12 +612,14 @@ impl WorldGenerator {
     pub fn is_valid_spawn(&self, x: i32, z: i32) -> Option<u16> {
         let chunk_x = x.div_euclid(CHUNK_SIZE as i32) as i16;
         let chunk_z = x.div_euclid(CHUNK_SIZE as i32) as i16;
-        for (ox, oz) in ChunkColumnGeneration::NEIGHBOR_CHUNK_BLOCKERS {
-            if self
-                .get_column_generation(chunk_x + ox as i16, chunk_z + oz as i16)
-                .is_blocked(x, z, 2)
-            {
-                return None;
+        for ox in -1..=1 {
+            for oz in -1..=1 {
+                if self
+                    .get_column_generation(chunk_x + ox as i16, chunk_z + oz as i16)
+                    .is_blocked(x, z, 1)
+                {
+                    return None;
+                }
             }
         }
         Some(self.get_height_at(x, z))
@@ -625,9 +627,10 @@ impl WorldGenerator {
     pub fn find_valid_spawn(&self) -> Pos {
         let mut initial_x = 0;
         let mut initial_z = 0;
+        let mut jump_size = 20;
         loop {
-            initial_x += rand::rng().random_range(-10..=10);
-            initial_z += rand::rng().random_range(-10..=10);
+            initial_x += rand::rng().random_range(-jump_size..=jump_size);
+            initial_z += rand::rng().random_range(-jump_size..=jump_size);
             if let Some(height) = self.is_valid_spawn(initial_x, initial_z) {
                 return Pos {
                     x: initial_x as f32 + 0.5,

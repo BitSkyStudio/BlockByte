@@ -12,8 +12,8 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, Color, DamageTable, EntityPose, EntityStats, InventoryView, LookDirection,
-    MoveMode, SERVER_DT, SERVER_TPS, ViewSlot,
+    ClientItem, Color, DamageTable, EntityAction, EntityPose, EntityStats, InventoryView,
+    LookDirection, MoveMode, SERVER_DT, SERVER_TPS, ViewSlot,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -772,11 +772,13 @@ impl User {
                     );
                 }
                 NetworkMessageC2S::ItemInteraction { target, variant } => {
+                    let mut is_place = false;
                     let mut item_stack = &mut entity.inventory.items[entity.hand_slot];
                     if let Some(item) = &mut item_stack {
                         match &item.item.data().action {
                             ItemAction::Ignore => {}
                             ItemAction::Place(placements) => {
+                                is_place = true;
                                 let ItemInteractTarget::Block { position, face } = target else {
                                     continue;
                                 };
@@ -887,6 +889,17 @@ impl User {
                             *item_stack = None;
                         }
                     }
+                    world.send_viewers(
+                        entity.position.to_chunk_pos(),
+                        NetworkMessageS2C::EntityAction {
+                            entity: entity.uuid,
+                            action: if is_place {
+                                EntityAction::Place
+                            } else {
+                                EntityAction::Interact
+                            },
+                        },
+                    );
                 }
                 NetworkMessageC2S::CloseUI => {
                     if let Some(screen) = self.screen.lock().as_mut() {

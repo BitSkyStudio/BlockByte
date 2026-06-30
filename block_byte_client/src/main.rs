@@ -22,8 +22,9 @@ use std::{
 use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityPose, EntityStats,
-    HitTimer, ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
+    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityAction, EntityPose,
+    EntityStats, HitTimer, ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
+    TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, LoopMode, ModelGeometry, ModelTexture},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
@@ -50,6 +51,7 @@ use rayon::{
 };
 use renet::{ConnectionConfig, DefaultChannel, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
+use smallvec::SmallVec;
 use uuid::Uuid;
 use wgpu::{
     Buffer, CommandEncoder, Device, Queue,
@@ -193,7 +195,7 @@ impl ApplicationHandler for App {
                                                 .entry(held_item.item)
                                                 .or_insert(0);
                                             if *variation != slot {
-                                                self.game.viewmodel_player.trigger("equip");
+                                                self.game.needs_equip = true;
                                             }
                                             *variation = slot;
                                         }
@@ -205,7 +207,7 @@ impl ApplicationHandler for App {
                                         if self.game.held_item().is_some()
                                             || self.game.swap_hand_item.is_some()
                                         {
-                                            self.game.viewmodel_player.trigger("equip");
+                                            self.game.needs_equip = true;
                                         }
                                     }
                                 }
@@ -219,7 +221,8 @@ impl ApplicationHandler for App {
                                     match &block.interact_action {
                                         BlockInteractAction::Ignore => {}
                                         _ => {
-                                            self.game.viewmodel_player.trigger("interact");
+                                            self.game.current_local_action =
+                                                Some(EntityAction::Interact);
                                             self.send_message(NetworkMessageC2S::InteractBlock {
                                                 position,
                                             });
@@ -232,7 +235,8 @@ impl ApplicationHandler for App {
                                     match &entity_data.interact_action {
                                         EntityInteractAction::Ignore => {}
                                         _ => {
-                                            self.game.viewmodel_player.trigger("interact");
+                                            self.game.current_local_action =
+                                                Some(EntityAction::Interact);
                                             self.send_message(NetworkMessageC2S::InteractEntity {
                                                 entity,
                                             });
@@ -319,7 +323,7 @@ impl ApplicationHandler for App {
                                     self.game
                                         .item_variation
                                         .insert(held_item.item, new_variant as usize);
-                                    self.game.viewmodel_player.trigger("equip");
+                                    self.game.needs_equip = true;
                                 }
                             }
                         } else {
@@ -332,7 +336,7 @@ impl ApplicationHandler for App {
                             });
                             if self.game.held_item().is_some() || self.game.swap_hand_item.is_some()
                             {
-                                self.game.viewmodel_player.trigger("equip");
+                                self.game.needs_equip = true;
                             }
                         }
                     }
@@ -594,6 +598,10 @@ impl ApplicationHandler for App {
                     .window()
                     .request_redraw();
                 if self.connection.state() == ClientConnectionState::Connected {
+                    if self.game.needs_equip {
+                        self.game.needs_equip = false;
+                        self.game.current_local_action = Some(EntityAction::Equip);
+                    }
                     if self.game.buttons.is_just_down(MouseButton::Left)
                         && self.game.screen.is_none()
                         && match &self.game.hit_timer {
@@ -605,16 +613,19 @@ impl ApplicationHandler for App {
                     {
                         self.game.is_attack_queued = true;
                     }
-                    if self.game.is_attack_queued && self.game.hit_timer.is_none() {
-                        self.game.is_attack_queued = false;
-                        let stamina_cost = self.game.active_tool().stamina;
-                        if self.game.stamina >= stamina_cost {
-                            self.game.stamina -= stamina_cost;
-                            self.game.hit_timer = Some(HitTimer {
-                                current_time: 0.,
-                                swing_time: self.game.active_tool().swing_time
-                                    / (self.game.player_stats.haste() / 100.),
-                            });
+                    if self.game.current_local_action.is_none() {
+                        if self.game.is_attack_queued && self.game.hit_timer.is_none() {
+                            self.game.is_attack_queued = false;
+                            let stamina_cost = self.game.active_tool().stamina;
+                            if self.game.stamina >= stamina_cost {
+                                self.game.stamina -= stamina_cost;
+                                self.game.current_local_action = Some(EntityAction::Attack);
+                                self.game.hit_timer = Some(HitTimer {
+                                    current_time: 0.,
+                                    swing_time: self.game.active_tool().swing_time
+                                        / (self.game.player_stats.haste() / 100.),
+                                });
+                            }
                         }
                     }
                     self.camera.update_position(dt, &mut self.game);
@@ -750,6 +761,8 @@ impl ApplicationHandler for App {
                                         update_timestamp: Instant::now(),
                                         hand_item,
                                         pose,
+                                        pose_player: AnimationPlayer::new(pose.base_animation()),
+                                        action_player: AnimationPlayer::new("empty"),
                                     },
                                 );
                             }
@@ -765,7 +778,12 @@ impl ApplicationHandler for App {
                                     entity.update_timestamp = time;
                                     entity.position = position;
                                     entity.direction = direction;
-                                    entity.pose = pose;
+                                    if entity.pose != pose {
+                                        entity.pose = pose;
+                                        entity
+                                            .pose_player
+                                            .play_animation(pose.base_animation(), 0.1);
+                                    }
                                 }
                             }
                             NetworkMessageS2C::RemoveEntity { uuid } => {
@@ -842,6 +860,12 @@ impl ApplicationHandler for App {
                                     .set_cursor_visible(false);
                             }
                             NetworkMessageS2C::HUDSlot { slot, item } => {
+                                if self.game.hotbar_slot == slot
+                                    && self.game.hud.slots[slot].as_ref().map(|item| item.item)
+                                        != item.as_ref().map(|item| item.item)
+                                {
+                                    self.game.needs_equip = true;
+                                }
                                 self.game.hud.slots[slot] = item;
                                 /*match (&self.game.held_item, &held_item) {
                                     (None, None) => {}
@@ -876,6 +900,11 @@ impl ApplicationHandler for App {
                             NetworkMessageS2C::UISetProperty { property, value } => {
                                 if let Some(screen) = &mut self.game.screen {
                                     screen.properties.0.insert(property, value);
+                                }
+                            }
+                            NetworkMessageS2C::EntityAction { entity, action } => {
+                                if let Some(entity) = self.game.entities.get_mut(&entity) {
+                                    entity.action_player.play_animation(action.animation(), 0.1);
                                 }
                             }
                         }
@@ -1520,6 +1549,7 @@ pub struct ClientGame {
     pub hotbar_slot: usize,
     pub item_variation: HashMap<ItemKey, usize>,
     pub viewmodel_player: AnimationPlayer,
+    pub current_local_action: Option<EntityAction>,
     pub swap_hand_item: Option<(ItemKey, usize)>,
     pub chunk_mesh_channels: (
         std::sync::mpsc::Sender<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
@@ -1533,6 +1563,7 @@ pub struct ClientGame {
     pub chunk_buffer_pool: ChunkBufferPool,
     pub is_attack_queued: bool,
     pub placement_visualize_toggled: bool,
+    pub needs_equip: bool,
 }
 #[derive(Default)]
 struct ChunkBufferPool {
@@ -1661,7 +1692,7 @@ impl Default for ClientGame {
             hotbar_slot: 0,
             item_variation: HashMap::new(),
             chunk_mesh_channels: std::sync::mpsc::channel(),
-            viewmodel_player: AnimationPlayer::new(viewmodel_graph()),
+            viewmodel_player: AnimationPlayer::new("idle"),
             swap_hand_item: None,
             researched: HashSet::new(),
             stamina: 0.,
@@ -1671,6 +1702,8 @@ impl Default for ClientGame {
             chunk_buffer_pool: ChunkBufferPool::default(),
             is_attack_queued: false,
             placement_visualize_toggled: false,
+            current_local_action: None,
+            needs_equip: false,
         }
     }
 }
@@ -1730,52 +1763,82 @@ impl ClientGame {
         connection: &ClientConnection,
         world_animation_time: f32,
     ) {
-        if self.held_item().is_none() {
-            self.viewmodel_player.trigger("empty_hand");
-        }
-        if camera.running {
-            self.viewmodel_player.trigger("run");
-        }
-        let (mut animation, observers) = self.viewmodel_player.evaluate(viewmodel_graph(), dt);
-        if let Some(hit_timer) = &self.hit_timer {
-            let weight = (((hit_timer.progress() - 0.5) * 2.).abs() - 0.6).max(0.) * 1.5;
-            animation.iter_mut().for_each(|a| {
-                a.weight *= weight;
-            });
-            animation.push(DrawAnimation {
-                animation: "hit",
-                time: hit_timer.progress() / 2.,
-                weight: 1. - weight,
-            });
-        }
-        let mut update_hand_item = false;
-        for observer in observers {
-            if observer == "swap_hand_item" {
-                update_hand_item = true;
-            }
-            if observer == "place" {
-                if let Some(message) = self.place_message.take() {
-                    connection.tx.send(message);
-                }
-            }
-        }
-        if (self.viewmodel_player.current_animation == "idle"
-            || self.viewmodel_player.current_animation == "running")
-            && self.viewmodel_player.transition.is_none()
-            || self.viewmodel_player.current_animation == "down"
-            || update_hand_item
-        {
-            self.swap_hand_item = match self.held_item() {
-                Some(item) => {
-                    let item = item.item;
-                    Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
-                }
-                None => None,
-            };
-        }
         let viewmodel = self
             .get_player_data()
             .and_then(|data| data.viewmodel.as_ref());
+        let mut viewmodel_animations: Vec<DrawAnimation<'static>> = Vec::new();
+        let (animation, time) = self.viewmodel_player.get_animation();
+        let idle_or_run = if camera.running { "running" } else { "idle" };
+        if let Some(action) = self.current_local_action {
+            match animation {
+                "idle" | "running" => {
+                    self.viewmodel_player
+                        .play_animation(action.animation(), 0.1);
+                }
+                "hit" => {
+                    let swing_time = self
+                        .hit_timer
+                        .as_ref()
+                        .map(|hit_timer| hit_timer.swing_time)
+                        .unwrap_or(0.);
+                    if time >= swing_time {
+                        match self.current_local_action {
+                            Some(EntityAction::Attack) => {
+                                self.current_local_action = None;
+                            }
+                            _ => {}
+                        }
+                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
+                    }
+                }
+                _ => {
+                    if time >= 0.25 {
+                        self.current_local_action = None;
+                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
+                    }
+                    if time >= 0.1 {
+                        self.swap_hand_item = match self.held_item() {
+                            Some(item) => {
+                                let item = item.item;
+                                Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
+                            }
+                            None => None,
+                        };
+                    }
+                }
+            }
+        } else {
+            match animation {
+                "idle" => {
+                    if camera.running {
+                        self.viewmodel_player.play_animation("running", 0.1);
+                    } else if time > 2. {
+                        self.viewmodel_player.restart_animation();
+                    }
+                }
+                "running" => {
+                    if !camera.running {
+                        self.viewmodel_player.play_animation("idle", 0.1);
+                    } else if time > 1. {
+                        self.viewmodel_player.restart_animation();
+                    }
+                }
+                _ => {}
+            }
+        }
+        for entry in &mut viewmodel_animations {
+            if entry.animation == "hit" {
+                let swing_time = self
+                    .hit_timer
+                    .as_ref()
+                    .map(|hit_timer| hit_timer.swing_time)
+                    .unwrap_or(1.);
+                entry.time = entry.time / swing_time * 0.58;
+            }
+        }
+
+        self.viewmodel_player.tick(dt, &mut viewmodel_animations);
+
         if let Some(viewmodel) = viewmodel {
             render::draw_model(
                 viewmodel,
@@ -1784,7 +1847,7 @@ impl ClientGame {
                 )) * Matrix4::from_angle_y(Rad(-camera.direction.yaw))
                     * Matrix4::from_angle_x(Rad(camera.direction.pitch)),
                 &mut viewmodel_mesh.consumer(Color::WHITE),
-                &animation,
+                &viewmodel_animations[..],
                 |binding, vc| match binding {
                     "hand" => {
                         let (item, variant) = match self.swap_hand_item.as_ref() {
@@ -1850,18 +1913,39 @@ impl ClientGame {
             }
         }
         ps.end();
-        for (id, entity) in &self.entities {
+        for (id, entity) in &mut self.entities {
+            let mut animations: SmallVec<[DrawAnimation<'static>; 8]> = SmallVec::new();
+            entity.action_player.tick(dt, &mut animations);
+            match entity.action_player.get_animation() {
+                ("empty", _) => {}
+                (_, time) => {
+                    if time > 1. {
+                        entity.action_player.play_animation("empty", 0.1);
+                    }
+                }
+            }
+            let model = &entity.key.data().model;
+            let (pose_animation, pose_time) = entity.pose_player.get_animation();
+            match model.model.data().model.get_animation_info(pose_animation) {
+                Some(info) => {
+                    if pose_time >= info.length {
+                        entity.pose_player.restart_animation();
+                    }
+                }
+                None => {}
+            }
+            entity.pose_player.tick(dt, &mut animations);
             if Some(*id) == self.player_entity {
                 continue;
                 render::draw_model(
-                    &entity.key.data().model,
+                    model,
                     Matrix4::from_translation(Vector3::new(
                         camera.position.x,
                         camera.position.y,
                         camera.position.z,
                     )) * Matrix4::from_angle_y(Rad(-camera.direction.yaw)),
                     &mut local_player_mesh.consumer(Color::WHITE),
-                    &[],
+                    &animations[..],
                     |slot, _| {
                         entity
                             .hand_item
@@ -1879,11 +1963,11 @@ impl ClientGame {
                     lerp_time,
                 );
                 render::draw_model(
-                    &entity.key.data().model,
+                    model,
                     Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
                         * Matrix4::from_angle_y(Rad(rotation)),
                     &mut entity_mesh.consumer(Color::WHITE),
-                    &[],
+                    &animations[..],
                     |slot, _| {
                         entity
                             .hand_item
@@ -2156,8 +2240,11 @@ impl ClientGame {
                                 if self.buttons.is_just_down(MouseButton::Right)
                                     && self.screen.is_none()
                                     && !blocked
+                                    && self.hit_timer.is_none()
                                 {
-                                    self.viewmodel_player.trigger("build");
+                                    self.current_local_action = Some(EntityAction::Place);
+                                    self.viewmodel_player
+                                        .play_animation(EntityAction::Place.animation(), 0.1);
                                     connection.tx.send(NetworkMessageC2S::ItemInteraction {
                                         target: ItemInteractTarget::Block { position, face },
                                         variant: variant_id,
@@ -2172,7 +2259,7 @@ impl ClientGame {
                     match raycast {
                         RayCastResult::Block(position, face) => {
                             if self.buttons.is_just_down(MouseButton::Right) {
-                                self.viewmodel_player.trigger("build");
+                                self.current_local_action = Some(EntityAction::Interact);
                                 connection.tx.send(NetworkMessageC2S::ItemInteraction {
                                     target: ItemInteractTarget::Block { position, face },
                                     variant: variant_id,
@@ -2185,7 +2272,7 @@ impl ClientGame {
                 ItemAction::Ignore => {}
                 ItemAction::Consume { .. } => {
                     if self.buttons.is_just_down(MouseButton::Right) {
-                        self.viewmodel_player.trigger("build");
+                        self.current_local_action = Some(EntityAction::Interact);
                         connection.tx.send(NetworkMessageC2S::ItemInteraction {
                             target: match raycast {
                                 RayCastResult::Empty => ItemInteractTarget::Empty,
@@ -2229,6 +2316,8 @@ pub struct ClientEntity {
     update_timestamp: Instant,
     hand_item: Option<ClientItem>,
     pose: EntityPose,
+    action_player: AnimationPlayer,
+    pose_player: AnimationPlayer,
 }
 struct ChunkMeshBuildData {
     pub blocks: RwLock<BlockPalette>,
@@ -2626,278 +2715,6 @@ pub mod clipping {
     }
 }
 
-pub struct AnimationTransition {
-    pub to: String,
-    pub condition: String,
-    pub inverted: bool,
-    pub reset: bool,
-    pub time: f32,
-}
-pub struct AnimationNode {
-    pub next: String,
-    pub model_animation: String,
-    pub length: f32,
-    pub speed: f32,
-    pub transitions: Vec<AnimationTransition>,
-    pub observers: Vec<(f32, String)>,
-}
-pub struct AnimationGraph {
-    pub default_animation: String,
-    pub animations: HashMap<String, AnimationNode>,
-}
-struct AnimationPlayerTransition {
-    pub time: f32,
-    pub length: f32,
-    pub to: String,
-}
-pub struct AnimationPlayer {
-    pub current_animation: String,
-    pub time: f32,
-    pub triggers: HashSet<String>,
-    pub transition: Option<AnimationPlayerTransition>,
-}
-impl AnimationPlayer {
-    pub fn new(graph: &AnimationGraph) -> AnimationPlayer {
-        AnimationPlayer {
-            current_animation: graph.default_animation.clone(),
-            time: 0.,
-            triggers: HashSet::new(),
-            transition: None,
-        }
-    }
-    pub fn trigger(&mut self, name: impl ToString) {
-        self.triggers.insert(name.to_string());
-    }
-    pub fn evaluate<'a>(
-        &mut self,
-        graph: &'a AnimationGraph,
-        dt: f32,
-    ) -> (Vec<DrawAnimation<'a>>, Vec<String>) {
-        let mut activated_observers = Vec::new();
-        match &mut self.transition {
-            Some(transition) => {
-                transition.time += dt;
-                if transition.time > transition.length {
-                    self.current_animation = self.transition.take().unwrap().to;
-                    self.time = 0.;
-                }
-            }
-            None => {
-                let current_node = graph.animations.get(&self.current_animation).unwrap();
-                let previous_time = self.time;
-                self.time += dt * current_node.speed;
-                for (time, observer) in &current_node.observers {
-                    if previous_time < *time * current_node.speed
-                        && self.time >= *time * current_node.speed
-                    {
-                        activated_observers.push(observer.to_string());
-                    }
-                }
-                if self.time > current_node.length * current_node.speed {
-                    self.current_animation = current_node.next.clone();
-                    self.time = 0.;
-                }
-                for trigger in &current_node.transitions {
-                    if self.triggers.contains(&trigger.condition) ^ trigger.inverted {
-                        self.transition = Some(AnimationPlayerTransition {
-                            time: 0.,
-                            length: trigger.time,
-                            to: trigger.to.clone(),
-                        });
-                    }
-                }
-                self.triggers.clear();
-            }
-        }
-        match &self.transition {
-            Some(transition) => {
-                let progress = transition.time / transition.length;
-                (
-                    vec![
-                        DrawAnimation {
-                            animation: &graph
-                                .animations
-                                .get(&self.current_animation)
-                                .unwrap()
-                                .model_animation,
-                            time: self.time,
-                            weight: 1. - progress,
-                        },
-                        DrawAnimation {
-                            animation: &graph
-                                .animations
-                                .get(&transition.to)
-                                .unwrap()
-                                .model_animation,
-                            time: 0.,
-                            weight: progress,
-                        },
-                    ],
-                    Vec::new(),
-                )
-            }
-            None => (
-                vec![DrawAnimation {
-                    animation: &graph
-                        .animations
-                        .get(&self.current_animation)
-                        .unwrap()
-                        .model_animation,
-                    time: self.time,
-                    weight: 1.,
-                }],
-                activated_observers,
-            ),
-        }
-    }
-}
-static VIEWMODEL_GRAPH: OnceLock<AnimationGraph> = OnceLock::new();
-pub fn viewmodel_graph() -> &'static AnimationGraph {
-    VIEWMODEL_GRAPH.get_or_init(|| {
-        let mut animations = HashMap::new();
-        animations.insert(
-            "idle".to_string(),
-            AnimationNode {
-                next: "idle".to_string(),
-                model_animation: "idle".to_string(),
-                length: 8.,
-                speed: 0.25,
-                transitions: vec![
-                    AnimationTransition {
-                        condition: "build".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "place".to_string(),
-                        time: 0.0,
-                    },
-                    AnimationTransition {
-                        condition: "interact".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "interact".to_string(),
-                        time: 0.1,
-                    },
-                    AnimationTransition {
-                        condition: "equip".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "equip".to_string(),
-                        time: 0.,
-                    },
-                    AnimationTransition {
-                        condition: "run".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "running".to_string(),
-                        time: 0.1,
-                    },
-                ],
-                observers: vec![],
-            },
-        );
-        animations.insert(
-            "place".to_string(),
-            AnimationNode {
-                next: "idle".to_string(),
-                model_animation: "place".to_string(),
-                length: 0.38,
-                speed: 2.,
-                transitions: vec![AnimationTransition {
-                    condition: "build".to_string(),
-                    inverted: false,
-                    reset: true,
-                    to: "place".to_string(),
-                    time: 0.,
-                }],
-                observers: vec![
-                    //(0.1, "place".to_string()),
-                    (0.07, "swap_hand_item".to_string()),
-                ],
-            },
-        );
-        animations.insert(
-            "interact".to_string(),
-            AnimationNode {
-                next: "idle".to_string(),
-                model_animation: "place".to_string(),
-                length: 0.38,
-                speed: 1.,
-                transitions: vec![],
-                observers: vec![(0.1, "swap_hand_item".to_string())],
-            },
-        );
-        animations.insert(
-            "equip".to_string(),
-            AnimationNode {
-                next: "idle".to_string(),
-                model_animation: "equip".to_string(),
-                length: 0.5,
-                speed: 1.,
-                transitions: vec![
-                    AnimationTransition {
-                        condition: "build".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "place".to_string(),
-                        time: 0.,
-                    },
-                    AnimationTransition {
-                        condition: "equip".to_string(),
-                        reset: true,
-                        inverted: false,
-                        to: "equip".to_string(),
-                        time: 0.,
-                    },
-                ],
-                observers: vec![(0.25, "swap_hand_item".to_string())],
-            },
-        );
-        animations.insert(
-            "running".to_string(),
-            AnimationNode {
-                next: "running".to_string(),
-                model_animation: "running".to_string(),
-                length: 1.,
-                speed: 1.,
-                transitions: vec![
-                    AnimationTransition {
-                        condition: "run".to_string(),
-                        reset: true,
-                        inverted: true,
-                        to: "idle".to_string(),
-                        time: 0.1,
-                    },
-                    AnimationTransition {
-                        condition: "build".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "place".to_string(),
-                        time: 0.,
-                    },
-                    AnimationTransition {
-                        condition: "interact".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "interact".to_string(),
-                        time: 0.1,
-                    },
-                    AnimationTransition {
-                        condition: "equip".to_string(),
-                        inverted: false,
-                        reset: true,
-                        to: "equip".to_string(),
-                        time: 0.,
-                    },
-                ],
-                observers: vec![],
-            },
-        );
-        AnimationGraph {
-            default_animation: "idle".to_string(),
-            animations,
-        }
-    })
-}
 pub struct ClientConnection {
     rx: std::sync::mpsc::Receiver<(NetworkMessageS2C, Instant)>,
     tx: std::sync::mpsc::Sender<NetworkMessageC2S>,
@@ -3021,5 +2838,76 @@ mod profiler {
                 profiler.entries.push((self.name, self.time.elapsed()));
             });
         }
+    }
+}
+pub struct AnimationPlayer {
+    current: AnimationPlayerEntry,
+    previous_animations: Vec<AnimationPlayerEntry>,
+}
+struct AnimationPlayerEntry {
+    animation: &'static str,
+    animation_time: f32,
+    interpolation_time: f32,
+    total_interpolation_time: f32,
+}
+impl AnimationPlayerEntry {
+    pub fn interpolation_progress(&self) -> f32 {
+        if self.total_interpolation_time == 0. {
+            1.
+        } else {
+            self.interpolation_time / self.total_interpolation_time
+        }
+    }
+}
+impl AnimationPlayer {
+    pub fn new(current_animation: &'static str) -> AnimationPlayer {
+        AnimationPlayer {
+            current: AnimationPlayerEntry {
+                animation: current_animation,
+                animation_time: 0.,
+                interpolation_time: 0.,
+                total_interpolation_time: 0.,
+            },
+            previous_animations: Vec::new(),
+        }
+    }
+    pub fn play_animation(&mut self, animation: &'static str, interpolation_time: f32) {
+        let mut new_entry = AnimationPlayerEntry {
+            animation,
+            animation_time: 0.,
+            interpolation_time: 0.,
+            total_interpolation_time: interpolation_time,
+        };
+        std::mem::swap(&mut new_entry, &mut self.current);
+
+        new_entry.interpolation_time = interpolation_time * new_entry.interpolation_progress();
+        new_entry.total_interpolation_time = interpolation_time;
+
+        self.previous_animations.push(new_entry);
+    }
+    pub fn get_animation(&self) -> (&'static str, f32) {
+        (self.current.animation, self.current.animation_time)
+    }
+    pub fn restart_animation(&mut self) {
+        self.current.animation_time = 0.;
+    }
+    pub fn tick(&mut self, dt: f32, output: &mut impl Extend<DrawAnimation<'static>>) {
+        self.current.animation_time += dt;
+        self.current.interpolation_time =
+            (self.current.interpolation_time + dt).min(self.current.total_interpolation_time);
+        self.previous_animations.retain_mut(|entry| {
+            entry.animation_time += dt;
+            entry.interpolation_time -= dt;
+            entry.interpolation_time > 0.
+        });
+        output.extend(
+            std::iter::once(&self.current)
+                .chain(self.previous_animations.iter())
+                .map(|entry| DrawAnimation {
+                    animation: entry.animation,
+                    time: entry.animation_time,
+                    weight: entry.interpolation_progress(),
+                }),
+        );
     }
 }

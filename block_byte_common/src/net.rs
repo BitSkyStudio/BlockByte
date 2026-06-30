@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ClientItem, EntityPose, EntityStats, ItemMoveMode, LookDirection,
+    ClientItem, EntityAction, EntityPose, EntityStats, ItemMoveMode, LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{
         BlockEntry, BlockKey, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey, ToolData,
@@ -171,6 +171,10 @@ pub enum NetworkMessageS2C {
     },
     UpdateResearch {
         research: HashSet<ResearchKey>,
+    },
+    EntityAction {
+        entity: Uuid,
+        action: EntityAction,
     },
 }
 impl NetworkMessageS2C {

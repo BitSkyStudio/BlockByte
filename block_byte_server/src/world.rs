@@ -15,9 +15,9 @@ use std::{
 };
 
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, Color, DamageTable, DamageType, EntityPose,
-    EntityStats, HitTimer, InventoryView, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
-    SERVER_TPS,
+    ACCELERATION_COEFFICIENT, CharacterController, Color, DamageTable, DamageType, EntityAction,
+    EntityPose, EntityStats, HitTimer, InventoryView, LookDirection, MoveMode, NORMAL_SPEED,
+    SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
@@ -560,6 +560,13 @@ pub fn tick_chunk(world: &WorldAccess) {
                         item: new_hand_item.as_ref().map(|item| item.client()),
                     },
                 );
+                world.send_viewers(
+                    entity.position.to_chunk_pos(),
+                    NetworkMessageS2C::EntityAction {
+                        entity: entity.uuid,
+                        action: EntityAction::Equip,
+                    },
+                );
                 entity.last_hand_item = new_hand_item;
             }
         }
@@ -931,6 +938,13 @@ impl Entity {
                                 brain.hit_timer = None;
                             }
                         } else {
+                            world.send_viewers(
+                                self.position.to_chunk_pos(),
+                                NetworkMessageS2C::EntityAction {
+                                    entity: self.uuid,
+                                    action: EntityAction::Attack,
+                                },
+                            );
                             brain.hit_timer = Some(HitTimer {
                                 current_time: 0.,
                                 swing_time: tool.swing_time * 1.4,

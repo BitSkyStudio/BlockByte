@@ -614,6 +614,44 @@ pub enum EntityPose {
     Mantle,
 }
 impl EntityPose {
+    pub fn base_animation(&self) -> &'static str {
+        match self {
+            EntityPose::Stand => "idle",
+            EntityPose::Walk => "walk",
+            EntityPose::Run => "run",
+            EntityPose::Crouch => "crouch",
+            EntityPose::CrouchWalk => "crouch_walk",
+            EntityPose::Slide => "slide",
+            EntityPose::Levitate => "levitate",
+            EntityPose::Fly => "fly",
+            EntityPose::Fall => "fall",
+            EntityPose::Sleeping => "sleep",
+            EntityPose::Mantle => "mantle",
+        }
+    }
+    pub fn upper_animation(&self) -> Option<&'static str> {
+        match self {
+            EntityPose::Walk => Some("upper_walk"),
+            EntityPose::Run => Some("upper_run"),
+            EntityPose::CrouchWalk => Some("upper_walk"),
+            EntityPose::Stand => None,
+            EntityPose::Crouch => None,
+            EntityPose::Slide => None,
+            EntityPose::Levitate => None,
+            EntityPose::Fly => None,
+            EntityPose::Fall => None,
+            EntityPose::Sleeping => None,
+            EntityPose::Mantle => None,
+        }
+    }
+    pub fn disables_upper_animation(&self) -> bool {
+        match self {
+            EntityPose::Slide | EntityPose::Fall | EntityPose::Sleeping | EntityPose::Mantle => {
+                true
+            }
+            _ => false,
+        }
+    }
     pub fn height(self, data: &EntityData) -> f32 {
         data.hitbox_height
             - (match self {
@@ -629,6 +667,23 @@ impl EntityPose {
                     data.crouch_height_difference
                 }
             })
+    }
+}
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub enum EntityAction {
+    Attack,
+    Place,
+    Interact,
+    Equip,
+}
+impl EntityAction {
+    pub fn animation(&self) -> &'static str {
+        match self {
+            EntityAction::Attack => "hit",
+            EntityAction::Place => "place",
+            EntityAction::Interact => "place",
+            EntityAction::Equip => "equip",
+        }
     }
 }
 pub trait WeightedEntry {
