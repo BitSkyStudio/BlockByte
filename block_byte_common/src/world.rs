@@ -264,6 +264,7 @@ pub struct ClientBlockMachine {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct BlockTickList {
     pub tick_mask: Vec<u64>,
+    pub ticking_count: usize,
     pub wakeup_timer: PriorityQueue<ChunkOffset, u64>,
 }
 impl BlockTickList {
@@ -271,6 +272,16 @@ impl BlockTickList {
         let (index, shift) = id.div_mod_floor(&(u64::BITS as usize));
         if index >= self.tick_mask.len() {
             self.tick_mask.resize(index + 1, 0);
+        }
+        let previous = ((self.tick_mask[index] >> shift) & 1) != 0;
+        match (previous, ticking) {
+            (false, true) => {
+                self.ticking_count += 1;
+            }
+            (true, false) => {
+                self.ticking_count -= 1;
+            }
+            _ => {}
         }
         if ticking {
             self.tick_mask[index] |= 1 << shift;

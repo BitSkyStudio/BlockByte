@@ -1534,7 +1534,7 @@ fn default_prefab_replace() -> KeyGroup<BlockData> {
     KeyGroup::parse("#prefab_replacable").unwrap()
 }
 #[derive(Serialize, Deserialize)]
-pub struct PrefabEntry {
+pub struct PrefabBlockEntry {
     //we unfortunately cannot flatten here
     pub x: i32,
     pub y: i32,
@@ -1550,12 +1550,21 @@ pub struct PrefabEntry {
     pub rotation: BlockRotation,
     #[serde(default, skip_serializing_if = "skip_if_default")]
     pub color: BlockColor,
-    #[serde(default, skip_serializing_if = "skip_if_default")]
-    pub loot_table: Option<LootTableKey>,
+    #[serde(default, skip_serializing)]
+    pub loot_table: Option<OwnOrKey<LootTableData>>,
 }
 #[derive(Serialize, Deserialize)]
+pub struct PrefabEntityEntry {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub entity: EntityKey,
+}
+#[derive(Serialize, Deserialize, Default)]
 pub struct PrefabData {
-    pub blocks: Vec<PrefabEntry>,
+    pub blocks: Vec<PrefabBlockEntry>,
+    #[serde(default)]
+    pub entities: Vec<PrefabEntityEntry>,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub bb: OnceLock<AABB<i32>>,
 }
@@ -1576,7 +1585,8 @@ impl PrefabData {
         position: BlockPos,
         rotation: HorizontalFace,
         seed: u64,
-        mut callback: impl FnMut(BlockPos, BlockEntry, &PrefabEntry),
+        mut block_callback: impl FnMut(BlockPos, BlockEntry, &PrefabBlockEntry),
+        mut entity_callback: impl FnMut(Pos, EntityKey),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
@@ -1584,7 +1594,7 @@ impl PrefabData {
         let mut random = Xoshiro256PlusPlus::seed_from_u64(seed);
         for entry in &self.blocks {
             if random.random_bool(entry.chance as f64) {
-                callback(
+                block_callback(
                     position
                         + rotation.rotate_block_pos(BlockPos {
                             x: entry.x,
@@ -1603,6 +1613,17 @@ impl PrefabData {
                     entry,
                 );
             }
+        }
+        for entry in &self.entities {
+            entity_callback(
+                position.to_pos()
+                    + rotation.rotate_pos(Pos {
+                        x: entry.x,
+                        y: entry.y,
+                        z: entry.z,
+                    }),
+                entry.entity,
+            );
         }
     }
 }

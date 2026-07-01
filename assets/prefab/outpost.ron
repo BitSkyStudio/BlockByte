@@ -17,5 +17,13 @@
         z: 0,
         
         block: "rock.limestone.bricks",
-    )]
+    )],
+    entities: [
+        (
+            x: 0,
+            y: 3,
+            z: 0,
+            entity: "pocong",
+        )
+    ]
 )

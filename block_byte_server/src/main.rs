@@ -18,8 +18,8 @@ use block_byte_common::{
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
-        EntityInteractAction, EntityKey, ItemAction, ItemKey, KeyGroup, PrefabData, PrefabEntry,
-        PrefabKey, ToolData, air_block, load_registries,
+        EntityInteractAction, EntityKey, ItemAction, ItemKey, KeyGroup, PrefabBlockEntry,
+        PrefabData, PrefabKey, ToolData, air_block, load_registries,
     },
     rotation::BlockRotation,
     scripts::{ScriptState, ScriptValue},
@@ -352,10 +352,7 @@ fn main() {
                 "design_export" => {
                     let origin = BlockPos { x: 0, y: 80, z: 0 };
                     let origin_chunk = origin.to_chunk_pos();
-                    let mut prefab = PrefabData {
-                        bb: OnceLock::new(),
-                        blocks: Vec::new(),
-                    };
+                    let mut prefab = PrefabData::default();
                     for x in -1..=1 {
                         for y in -1..=1 {
                             for z in -1..=1 {
@@ -377,7 +374,7 @@ fn main() {
                                                 let block_position =
                                                     chunk_position.to_block_pos() + offset.xyz();
                                                 let local_position = block_position - origin;
-                                                prefab.blocks.push(PrefabEntry {
+                                                prefab.blocks.push(PrefabBlockEntry {
                                                     x: local_position.x,
                                                     y: local_position.y,
                                                     z: local_position.z,
@@ -426,6 +423,9 @@ fn main() {
                                     },
                                 );
                             }
+                        },
+                        |_, _| {
+                            //todo
                         },
                     );
                 }
@@ -632,7 +632,7 @@ impl ChunkViewingManager {
             let mut stmt = db
                 .prepare_cached("SELECT data FROM chunks WHERE x=?1 and y=?2 and z=?3")
                 .unwrap();
-            for (position, users, load_message, (mut chunk, entities)) in self
+            for (position, users, load_message, mut chunk) in self
                 .load
                 .into_iter()
                 .map(move |(position, users)| {
@@ -657,26 +657,27 @@ impl ChunkViewingManager {
                             }
                         }
                     }) {
-                        Some(data) => (
-                            Chunk {
-                                blocks: RefCell::new(data.blocks),
-                                events: RefCell::new(data.block_events),
-                                components: data.components,
-                                position,
-                                viewers: HashSet::new(),
-                                entities: BTreeMap::new(),
-                            },
-                            data.entities,
-                        ),
-                        None => (generate_chunk(position, world_generator), Vec::new()),
+                        Some(data) => Chunk {
+                            blocks: RefCell::new(data.blocks),
+                            events: RefCell::new(data.block_events),
+                            components: data.components,
+                            position,
+                            viewers: HashSet::new(),
+                            entities: data
+                                .entities
+                                .into_iter()
+                                .map(|entity| (entity.uuid, WorldAccessCell::new(entity)))
+                                .collect(),
+                        },
+                        None => generate_chunk(position, world_generator),
                     };
                     (
                         position,
                         users,
                         MessageQueue::encode_message(NetworkMessageS2C::LoadChunk {
                             position,
-                            blocks: chunk.0.blocks.get_mut().clone(),
-                            components: chunk.0.components.client(),
+                            blocks: chunk.blocks.get_mut().clone(),
+                            components: chunk.components.client(),
                         }),
                         chunk,
                     )
@@ -684,13 +685,10 @@ impl ChunkViewingManager {
                 .collect::<Vec<_>>()
             {
                 chunk.viewers = users.iter().cloned().collect();
-                for entity in entities {
+                for entity in chunk.entities.values_mut() {
                     server
                         .message_queue
-                        .send_message(users.iter(), entity.create_add_message());
-                    chunk
-                        .entities
-                        .insert(entity.uuid, WorldAccessCell::new(entity));
+                        .send_message(users.iter(), entity.get_mut().create_add_message());
                 }
                 for user in &users {
                     server

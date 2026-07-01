@@ -31,7 +31,7 @@ use splines::{Interpolation, Spline};
 
 use crate::{
     inventory::{LootGenerationContext, generate_loot_table},
-    world::{BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, WorldAccessCell},
+    world::{BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, Entity, WorldAccessCell},
 };
 
 pub struct RegionGeneration {
@@ -656,6 +656,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
     );
     let mut components = ChunkBlockComponents::default();
+    let mut entities = BTreeMap::new();
 
     if generator.design_world {
         let (base_chunk, base_offset) = (BlockPos { x: 0, y: 79, z: 0 }).to_chunk_pos_offset();
@@ -671,7 +672,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             viewers: HashSet::new(),
             events: RefCell::new(VecDeque::new()),
             components,
-            entities: BTreeMap::new(),
+            entities,
         };
     }
 
@@ -779,6 +780,13 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                             }
                         }
                     },
+                    |entity_position, entity| {
+                        if entity_position.to_chunk_pos() != position {
+                            return;
+                        }
+                        let entity = Entity::new(entity, entity_position);
+                        entities.insert(entity.uuid, WorldAccessCell::new(entity));
+                    },
                 );
             }
         }
@@ -826,6 +834,13 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                             }
                         }
                     }
+                },
+                |entity_position, entity| {
+                    if entity_position.to_chunk_pos() != position {
+                        return;
+                    }
+                    let entity = Entity::new(entity, entity_position);
+                    entities.insert(entity.uuid, WorldAccessCell::new(entity));
                 },
             );
             next_placement = placement.next;
@@ -952,6 +967,6 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         viewers: HashSet::new(),
         events: RefCell::new(VecDeque::new()),
         components,
-        entities: BTreeMap::new(),
+        entities,
     }
 }
