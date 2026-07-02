@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use block_byte_common::{
-    ClientItem, EntityStats, InventoryView, ViewSlot,
+    ClientItem, EntityStats, InventoryView, ViewSlot, WeightedList,
     registry::{
         ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierInteger, LootTableData,
         LootTableKey,
@@ -550,25 +550,30 @@ pub fn generate_loot_table(
 ) -> Vec<ItemStack> {
     let mut items = Vec::new();
     let mut rng = Xoshiro256PlusPlus::seed_from_u64(context.seed);
-    for entry in &loot_table.entries {
-        let mut item = ItemStack {
-            item: entry.item,
-            count: 1,
-            components: ItemComponentStorage::new(),
-        };
-        for modifier in &entry.modifiers {
-            match modifier {
-                LootItemModifier::SetCount(value) => {
-                    item.count = context.generate_integer(value) as u16;
-                }
-                LootItemModifier::ApplyQuality => {
-                    //todo: randomness
-                    item.components.set_component(ItemQuality::Good);
+    for pool in &loot_table.pools {
+        for _ in 0..context.generate_integer(&pool.rolls) {
+            let Some(entry) = pool.entries.get_random((), &mut rng) else {
+                continue;
+            };
+            let mut item = ItemStack {
+                item: entry.item,
+                count: 1,
+                components: ItemComponentStorage::new(),
+            };
+            for modifier in &entry.modifiers {
+                match modifier {
+                    LootItemModifier::SetCount(value) => {
+                        item.count = context.generate_integer(value) as u16;
+                    }
+                    LootItemModifier::ApplyQuality => {
+                        //todo: randomness
+                        item.components.set_component(ItemQuality::Good);
+                    }
                 }
             }
-        }
-        if item.count > 0 {
-            items.push(item);
+            if item.count > 0 {
+                items.push(item);
+            }
         }
     }
     items

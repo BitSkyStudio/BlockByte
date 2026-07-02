@@ -54,8 +54,8 @@ use crate::{
     },
     registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
     world::{
-        ActiveEffect, BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkSaveData,
-        Entity, WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent,
+        ActiveEffect, BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkBlocks,
+        ChunkSaveData, Entity, WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent,
         compute_tool_damage_and_knockback, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
@@ -404,7 +404,7 @@ fn main() {
                         BlockPos { x: 0, y: 80, z: 0 },
                         HorizontalFace::Front,
                         0,
-                        |place_position, block, entry| {
+                        |place_position, block, entry, _| {
                             let (place_chunk, place_chunk_offset) =
                                 place_position.to_chunk_pos_offset();
                             let Some(chunk) = server.chunks.get_mut(&place_chunk) else {
@@ -412,7 +412,7 @@ fn main() {
                             };
                             chunk
                                 .blocks
-                                .borrow_mut()
+                                .get_mut()
                                 .set(place_chunk_offset.index(), &block);
                             for viewer in &chunk.viewers {
                                 server.message_queue.send_message(
@@ -424,7 +424,7 @@ fn main() {
                                 );
                             }
                         },
-                        |_, _| {
+                        |_, _, _| {
                             //todo
                         },
                     );
@@ -546,7 +546,7 @@ impl ChunkViewingManager {
             chunk.viewers.insert(user);
             let message = NetworkMessageS2C::LoadChunk {
                 position,
-                blocks: chunk.blocks.borrow().clone(),
+                blocks: chunk.blocks.get_mut().clone(),
                 components: chunk.components.client(),
             };
             for (_, entity) in &mut chunk.entities {
@@ -658,7 +658,7 @@ impl ChunkViewingManager {
                         }
                     }) {
                         Some(data) => Chunk {
-                            blocks: RefCell::new(data.blocks),
+                            blocks: ChunkBlocks::new(data.blocks),
                             events: RefCell::new(data.block_events),
                             components: data.components,
                             position,
@@ -676,7 +676,7 @@ impl ChunkViewingManager {
                         users,
                         MessageQueue::encode_message(NetworkMessageS2C::LoadChunk {
                             position,
-                            blocks: chunk.blocks.get_mut().clone(),
+                            blocks: chunk.blocks.get_mut().clone(), //todo: this should be cow and not cloned
                             components: chunk.components.client(),
                         }),
                         chunk,

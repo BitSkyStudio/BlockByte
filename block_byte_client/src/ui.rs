@@ -519,7 +519,12 @@ fn render_element(
                             area,
                             match &recipe_data.icon_override {
                                 Some(icon) => icon,
-                                None => &recipe_data.outputs.data().entries[0].item.data().model,
+                                None => {
+                                    &recipe_data.outputs.data().pools[0].entries[0]
+                                        .item
+                                        .data()
+                                        .model
+                                }
                             },
                         );
                         if let Some(input) = input {
@@ -545,12 +550,16 @@ fn render_element(
                                     )
                                     .as_str();
                                 }
-                                for loot_entry in &recipe_data.outputs.data().entries {
+                                for loot_entry in &recipe_data.outputs.data().pools {
                                     //todo: somehow do modifiers
                                     text += format!(
                                         "\n+{}",
                                         translate(
-                                            format!("item.{}", loot_entry.item.text_id()).as_str()
+                                            format!(
+                                                "item.{}",
+                                                loot_entry.entries[0].item.text_id()
+                                            )
+                                            .as_str()
                                         )
                                     )
                                     .as_str();

@@ -6,10 +6,20 @@
         table: ()
     ),
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "wood.§%{woodType}.stick",
-                chance: 0.5,
+                entries: [
+                    (
+                        item: "wood.§%{woodType}.stick",
+                    ),
+                    (
+                        item: "wood.§%{woodType}.stick",
+                        modifiers: [
+                            SetCount(Constant(0))
+                        ]
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

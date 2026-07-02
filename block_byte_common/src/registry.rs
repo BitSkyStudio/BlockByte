@@ -12,7 +12,7 @@ use image_overlay::overlay_dyn_img;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
-use rand::{SeedableRng, random_bool};
+use rand::{Rng, SeedableRng, random_bool};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
 use serde::de::{DeserializeSeed, Visitor};
@@ -1416,15 +1416,28 @@ pub type BiomeKey = Key<BiomeData>;
 
 #[derive(Deserialize)]
 pub struct LootTableData {
-    pub entries: Vec<LootTableEntry>,
+    pub pools: Vec<LootTablePool>,
 }
 impl RegistryRonConfigLoadable for LootTableData {}
 pub type LootTableKey = Key<LootTableData>;
+#[derive(Deserialize)]
+pub struct LootTablePool {
+    pub entries: Vec<LootTableEntry>,
+    pub rolls: LootModifierInteger,
+}
 #[derive(Deserialize)]
 pub struct LootTableEntry {
     pub item: ItemKey,
     #[serde(default)]
     pub modifiers: Vec<LootItemModifier>,
+    #[serde(default = "default_prefab_entry_true_chance")]
+    pub weight: f32,
+}
+impl WeightedEntry for LootTableEntry {
+    type WeightModifier = ();
+    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+        self.weight
+    }
 }
 #[derive(Deserialize)]
 pub enum LootItemModifier {
@@ -1585,8 +1598,8 @@ impl PrefabData {
         position: BlockPos,
         rotation: HorizontalFace,
         seed: u64,
-        mut block_callback: impl FnMut(BlockPos, BlockEntry, &PrefabBlockEntry),
-        mut entity_callback: impl FnMut(Pos, EntityKey),
+        mut block_callback: impl FnMut(BlockPos, BlockEntry, &PrefabBlockEntry, &mut Xoshiro256PlusPlus),
+        mut entity_callback: impl FnMut(Pos, EntityKey, &mut Xoshiro256PlusPlus),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
@@ -1611,6 +1624,7 @@ impl PrefabData {
                             .get_nearest_valid(rotation.compose(entry.rotation)),
                     },
                     entry,
+                    &mut random,
                 );
             }
         }
@@ -1623,6 +1637,7 @@ impl PrefabData {
                         z: entry.z,
                     }),
                 entry.entity,
+                &mut random,
             );
         }
     }

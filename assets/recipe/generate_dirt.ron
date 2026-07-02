@@ -1,10 +1,14 @@
 (
     inputs: {},
     outputs: Own((
-        entries: [
+        pools: [
             (
-                item: "dirt",
-                
+                entries: [
+                    (
+                        item: "dirt",
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

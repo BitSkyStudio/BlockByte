@@ -12,8 +12,8 @@ use block_byte_common::{
     WeightedList,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Pos},
     registry::{
-        BiomeKey, BlockEntry, BlockKey, BlockPalette, KeyGroup, PrefabKey, WorldGenStructureKey,
-        WorldGenStructureRoom, air_block,
+        BiomeKey, BlockEntry, BlockKey, BlockPalette, KeyGroup, PrefabData, PrefabKey,
+        WorldGenStructureKey, WorldGenStructureRoom, air_block,
     },
     rotation::BlockRotation,
 };
@@ -31,7 +31,10 @@ use splines::{Interpolation, Spline};
 
 use crate::{
     inventory::{LootGenerationContext, generate_loot_table},
-    world::{BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, Entity, WorldAccessCell},
+    world::{
+        BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkBlocks, Entity,
+        WorldAccessCell,
+    },
 };
 
 pub struct RegionGeneration {
@@ -651,29 +654,24 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
 
     let column_data = generator.get_column_generation(position.x, position.z);
 
-    let mut blocks = BlockPalette::filled(
-        BlockEntry::simple(air_block()),
-        CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
-    );
-    let mut components = ChunkBlockComponents::default();
-    let mut entities = BTreeMap::new();
+    let mut chunk = Chunk {
+        position,
+        blocks: ChunkBlocks::empty(),
+        viewers: HashSet::new(),
+        events: RefCell::new(VecDeque::new()),
+        components: ChunkBlockComponents::default(),
+        entities: BTreeMap::new(),
+    };
 
     if generator.design_world {
         let (base_chunk, base_offset) = (BlockPos { x: 0, y: 79, z: 0 }).to_chunk_pos_offset();
         if position == base_chunk {
-            blocks.set(
-                base_offset.index(),
-                &BlockEntry::simple(BlockKey::id("rock.limestone.rock").unwrap()),
+            chunk.blocks.set(
+                base_offset,
+                BlockEntry::simple(BlockKey::id("rock.limestone.rock").unwrap()),
             );
         }
-        return Chunk {
-            position,
-            blocks: RefCell::new(blocks),
-            viewers: HashSet::new(),
-            events: RefCell::new(VecDeque::new()),
-            components,
-            entities,
-        };
+        return chunk;
     }
 
     let mut rng =
@@ -704,14 +702,76 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     );
                 }*/
                 if y_pos == height {
-                    blocks.set(offset.index(), &BlockEntry::simple(biome.top_block));
+                    chunk
+                        .blocks
+                        .set(offset, BlockEntry::simple(biome.top_block));
                 } else if y_pos < height - 3 {
-                    blocks.set(offset.index(), &BlockEntry::simple(biome.bottom_block));
+                    chunk
+                        .blocks
+                        .set(offset, BlockEntry::simple(biome.bottom_block));
                 } else if y_pos < height {
-                    blocks.set(offset.index(), &BlockEntry::simple(biome.middle_block));
+                    chunk
+                        .blocks
+                        .set(offset, BlockEntry::simple(biome.middle_block));
                 }
             }
         }
+    }
+    fn place_prefab_inside_chunk(
+        chunk_position: ChunkPos,
+        prefab: &PrefabData,
+        position: BlockPos,
+        rotation: HorizontalFace,
+        seed: u64,
+        chunk: &mut Chunk,
+    ) {
+        prefab.build(
+            position,
+            rotation,
+            seed as u64,
+            |place_position, block, entry, rng| {
+                let (place_chunk, place_chunk_offset) = place_position.to_chunk_pos_offset();
+                if place_chunk == chunk_position {
+                    if entry
+                        .replace
+                        .contains(chunk.blocks.get(place_chunk_offset).block)
+                        ^ entry.replace_inverted
+                    {
+                        chunk.blocks.set(place_chunk_offset, block);
+                        if let Some(machine_data) = &block.block.data().machine {
+                            let mut machine = BlockMachine::new(machine_data, 0);
+                            if let Some(loot_table) = &entry.loot_table {
+                                for item in generate_loot_table(
+                                    loot_table.data(),
+                                    &LootGenerationContext {
+                                        seed: rng.next_u64(),
+                                    },
+                                ) {
+                                    machine
+                                        .inventory
+                                        .add_item(&machine.inventory.full_view(), item);
+                                }
+                                use rand::seq::SliceRandom;
+                                machine.inventory.items.shuffle(rng);
+                            }
+                            chunk
+                                .components
+                                .machine
+                                .set(place_chunk_offset, WorldAccessCell::new(machine));
+                        }
+                    }
+                }
+            },
+            |entity_position, entity, rng| {
+                if entity_position.to_chunk_pos() != chunk_position {
+                    return;
+                }
+                let entity = Entity::new(entity, entity_position);
+                chunk
+                    .entities
+                    .insert(entity.uuid, WorldAccessCell::new(entity));
+            },
+        );
     }
     let region = generator.get_region_generation(
         position
@@ -763,30 +823,13 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 .offset(block_position)
                 .intersects(chunk_aabb)
             {
-                prefab.build(
+                place_prefab_inside_chunk(
+                    position,
+                    prefab,
                     block_position,
                     placed_decoration.rotation,
                     placed_decoration.seed,
-                    |place_position, block, entry| {
-                        let (place_chunk, place_chunk_offset) =
-                            place_position.to_chunk_pos_offset();
-                        if place_chunk == position {
-                            if entry
-                                .replace
-                                .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
-                                ^ entry.replace_inverted
-                            {
-                                blocks.set(place_chunk_offset.index(), &block);
-                            }
-                        }
-                    },
-                    |entity_position, entity| {
-                        if entity_position.to_chunk_pos() != position {
-                            return;
-                        }
-                        let entity = Entity::new(entity, entity_position);
-                        entities.insert(entity.uuid, WorldAccessCell::new(entity));
-                    },
+                    &mut chunk,
                 );
             }
         }
@@ -803,45 +846,13 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         let mut next_placement = region.structure_grid[region_x][region_z];
         while let Some(placement) = next_placement {
             let placement = &region.structure_grid_prefabs[(placement.get() - 1) as usize];
-            placement.prefab.data().build(
+            place_prefab_inside_chunk(
+                position,
+                placement.prefab.data(),
                 placement.position,
                 placement.rotation,
                 placement.seed as u64,
-                |place_position, block, entry| {
-                    let (place_chunk, place_chunk_offset) = place_position.to_chunk_pos_offset();
-                    if place_chunk == position {
-                        if entry
-                            .replace
-                            .contains(blocks.get(place_chunk_offset.index()).unwrap().block)
-                            ^ entry.replace_inverted
-                        {
-                            blocks.set(place_chunk_offset.index(), &block);
-                            if let Some(machine_data) = &block.block.data().machine {
-                                let mut machine = BlockMachine::new(machine_data, 0);
-                                if let Some(loot_table) = &entry.loot_table {
-                                    for item in generate_loot_table(
-                                        loot_table.data(),
-                                        &LootGenerationContext::default(),
-                                    ) {
-                                        machine
-                                            .inventory
-                                            .add_item(&machine.inventory.full_view(), item);
-                                    }
-                                }
-                                components
-                                    .machine
-                                    .set(place_chunk_offset, WorldAccessCell::new(machine));
-                            }
-                        }
-                    }
-                },
-                |entity_position, entity| {
-                    if entity_position.to_chunk_pos() != position {
-                        return;
-                    }
-                    let entity = Entity::new(entity, entity_position);
-                    entities.insert(entity.uuid, WorldAccessCell::new(entity));
-                },
+                &mut chunk,
             );
             next_placement = placement.next;
         }
@@ -902,14 +913,13 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                     continue;
                                 };
                                 if let Some(block) = entry.block {
-                                    blocks.set(
+                                    chunk.blocks.set(
                                         ChunkOffset::new(
                                             offset_x as u8,
                                             height.rem_euclid(CHUNK_SIZE as i32) as u8,
                                             offset_z as u8,
-                                        )
-                                        .index(),
-                                        &BlockEntry::simple(block),
+                                        ),
+                                        BlockEntry::simple(block),
                                     );
                                 }
                             }
@@ -941,7 +951,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                     })
                                     .collect();
                                 if !spawned_plants.is_empty() {
-                                    components.plant.set(
+                                    chunk.components.plant.set(
                                         ChunkOffset::new(
                                             offset_x as u8,
                                             height_offset as u8,
@@ -959,14 +969,5 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             }
         }
     }
-
-    //blocks.set(ChunkOffset::new(16, 16, 16).index(), &grass);
-    Chunk {
-        position,
-        blocks: RefCell::new(blocks),
-        viewers: HashSet::new(),
-        events: RefCell::new(VecDeque::new()),
-        components,
-        entities,
-    }
+    chunk
 }

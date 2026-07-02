@@ -67,9 +67,35 @@ pub struct ChunkSaveData {
     pub components: ChunkBlockComponents,
     pub entities: Vec<Entity>,
 }
+pub struct ChunkBlocks(UnsafeCell<BlockPalette>);
+impl ChunkBlocks {
+    pub fn empty() -> ChunkBlocks {
+        ChunkBlocks::new(BlockPalette::filled(
+            BlockEntry::simple(air_block()),
+            CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE,
+        ))
+    }
+    pub fn new(palette: BlockPalette) -> ChunkBlocks {
+        ChunkBlocks(UnsafeCell::new(palette))
+    }
+    pub fn get(&self, offset: ChunkOffset) -> BlockEntry {
+        let blocks = unsafe { &mut *self.0.get() };
+        *blocks.get(offset.index()).unwrap()
+    }
+    pub fn set(&self, offset: ChunkOffset, block: BlockEntry) {
+        let blocks = unsafe { &mut *self.0.get() };
+        blocks.set(offset.index(), &block);
+    }
+    pub fn get_mut(&mut self) -> &mut BlockPalette {
+        self.0.get_mut()
+    }
+    pub fn into_inner(self) -> BlockPalette {
+        self.0.into_inner()
+    }
+}
 pub struct Chunk {
     pub position: ChunkPos,
-    pub blocks: RefCell<BlockPalette>,
+    pub blocks: ChunkBlocks,
     pub viewers: HashSet<UserIndex>,
     pub events: RefCell<VecDeque<WorldEvent>>,
     pub components: ChunkBlockComponents,
@@ -1568,10 +1594,7 @@ impl WorldAccess<'_> {
             self.grid[self.get_grid_index(chunk)?]
                 .as_ref()?
                 .blocks
-                .borrow()
-                .get(offset.index())
-                .unwrap()
-                .clone(),
+                .get(offset),
         )
     }
     pub fn replace_block(&self, position: BlockPos, block: BlockEntry) -> Result<BlockEntry, ()> {
@@ -1582,9 +1605,8 @@ impl WorldAccess<'_> {
             .and_then(|chunk| self.grid[chunk].as_ref())
         {
             Some(chunk) => {
-                let mut blocks = chunk.blocks.borrow_mut();
-                let previous = *blocks.get(offset.index()).unwrap();
-                blocks.set(offset.index(), &block);
+                let previous = chunk.blocks.get(offset);
+                chunk.blocks.set(offset, block);
                 Ok(previous)
             }
             None => Err(()),

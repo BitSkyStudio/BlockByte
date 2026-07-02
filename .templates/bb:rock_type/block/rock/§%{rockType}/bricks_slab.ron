@@ -2,13 +2,17 @@
     render_data: Model(model:"slab;rock.§%{rockType}_bricks;rock.§%{rockType}_bricks;rock.§%{rockType}_bricks"),
     health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "rock.§%{rockType}.brick",
-                
-                modifiers: [
-                    SetCount(Constant(2))
-                ]
+                entries: [
+                    (
+                        item: "rock.§%{rockType}.brick",
+                        modifiers: [
+                            SetCount(Constant(2))
+                        ]
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

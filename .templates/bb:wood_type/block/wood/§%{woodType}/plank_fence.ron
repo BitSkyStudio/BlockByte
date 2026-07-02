@@ -22,13 +22,14 @@
     ),
     rotation: Axis,
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "wood.§%{woodType}.plank",
-                
-                modifiers: [
-                    SetCount(Constant(1))
+                entries: [
+                    (
+                        item: "wood.§%{woodType}.plank",
+                    ),
                 ],
+                rolls: Constant(1),
             )
         ]
     )),

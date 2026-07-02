@@ -3,10 +3,14 @@
         "rock.limestone.stone": 1,
     },
     outputs: Own((
-        entries: [
+        pools: [
             (
-                item: "rock.limestone.brick",
-                
+                entries: [
+                    (
+                        item: "rock.limestone.brick",
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

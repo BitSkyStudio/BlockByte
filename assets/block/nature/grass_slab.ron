@@ -2,10 +2,14 @@
     render_data: Model(model:"slab;dirt.grass_block_side;dirt.dirt;dirt.grass"),
     health: (health: 5., health_regen: 0.05, table: ()),
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "dirt",
-                
+                entries: [
+                    (
+                        item: "dirt",
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

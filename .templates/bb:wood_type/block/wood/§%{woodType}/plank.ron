@@ -15,13 +15,17 @@
         table: ()
     ),
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "wood.§%{woodType}.plank",
-                
-                modifiers: [
-                    SetCount(Constant(4))
+                entries: [
+                    (
+                        item: "wood.§%{woodType}.plank",
+                        modifiers: [
+                            SetCount(Constant(4))
+                        ],
+                    ),
                 ],
+                rolls: Constant(1),
             )
         ]
     )),

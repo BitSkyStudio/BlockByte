@@ -4,10 +4,14 @@
         "wood.oak.stick": 1,
     },
     outputs: Own((
-        entries: [
+        pools: [
             (
-                item: "pickaxe",
-                
+                entries: [
+                    (
+                        item: "pickaxe",
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

@@ -16,10 +16,14 @@
         table: ()
     ),
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "wood.§%{woodType}.log",
-                
+                entries: [
+                    (
+                        item: "wood.§%{woodType}.log",
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

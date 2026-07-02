@@ -2,10 +2,14 @@
     render_data: Model(model:"stone;rock.§%{rockType}",lod_hidden: true),
     health: (health: 5., health_regen: 0.05, table: (Pierce: 2.)),
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "rock.§%{rockType}.stone",
-                
+                entries: [
+                    (
+                        item: "rock.§%{rockType}.stone",
+                    ),
+                ],
+                rolls: Constant(1),
             )
         ]
     )),

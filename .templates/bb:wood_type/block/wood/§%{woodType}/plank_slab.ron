@@ -9,13 +9,17 @@
     collision: [(0., 0., 0., 1., 1., 0.5)],
     selection: [(0., 0., 0., 1., 1., 0.5)],
     loot_table: Own((
-        entries: [
+        pools: [
             (
-                item: "wood.§%{woodType}.plank",
-                
-                modifiers: [
-                    SetCount(Constant(2))
+                entries: [
+                    (
+                        item: "wood.§%{woodType}.plank",
+                        modifiers: [
+                            SetCount(Constant(2))
+                        ],
+                    ),
                 ],
+                rolls: Constant(1),
             )
         ]
     )),
