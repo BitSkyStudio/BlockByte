@@ -1,6 +1,5 @@
 use std::{collections::HashSet, time::Duration};
 
-use palettevec::PaletteVec;
 use renet::{ChannelConfig, ConnectionConfig, SendType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -9,7 +8,7 @@ use crate::{
     ClientItem, EntityAction, EntityPose, EntityStats, ItemMoveMode, LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{
-        BlockEntry, BlockKey, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey, ToolData,
+        BlockEntry, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey,
     },
     scripts::ScriptValue,
     ui::{PropertyMap, UIScreenKey},

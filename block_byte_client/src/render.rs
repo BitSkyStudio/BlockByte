@@ -423,28 +423,22 @@ impl RenderState {
 
     pub fn render(
         &mut self,
-        camera: &ClientPlayer,
         game: &mut ClientGame,
-        aspect_ratio: f32,
         entity_mesh: BaseMesh,
         local_player_mesh: BaseMesh,
         gui_mesh: GUIMesh,
         viewmodel_mesh: BaseMesh,
         damage_mesh: DamageMesh,
         frustum: &Frustum,
-        delta_time: f32,
     ) -> Result<(), SurfaceError> {
-        let should_update_shadowmap = (self.animation_time * 20.) as u32
-            != ((self.animation_time + delta_time) * 20.) as u32
-            || true;
+        let should_update_shadowmap = true;
 
         let ps = profiler::profiler_scope("load uniforms");
-        self.animation_time += delta_time;
         self.time_uniform.write(&self.queue, &self.animation_time);
 
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.load_camera_proj_matrix(
-            camera,
+            &game.camera,
             self.size.width as f32 / self.size.height as f32,
             90.,
             game.get_player_data(),
@@ -455,7 +449,7 @@ impl RenderState {
         self.gui_camera_uniform.write(&self.queue, &camera_uniform);
 
         if should_update_shadowmap {
-            camera_uniform.load_light(camera.position);
+            camera_uniform.load_light(game.camera.position);
             self.shadow_camera.write(&self.queue, &camera_uniform);
         }
         ps.end();
@@ -589,7 +583,7 @@ impl RenderState {
             });
 
         let ps = profiler::profiler_scope("render shadow");
-        let camera_chunk_position = camera.position.to_chunk_pos();
+        let camera_chunk_position = game.camera.position.to_chunk_pos();
         if should_update_shadowmap {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
@@ -853,6 +847,98 @@ impl RenderState {
 
         Ok(())
     }
+    pub fn render_gui(&mut self, gui_mesh: GUIMesh) -> Result<(), SurfaceError> {
+        let ps = profiler::profiler_scope("load uniforms");
+        self.time_uniform.write(&self.queue, &self.animation_time);
+
+        let mut camera_uniform = CameraUniform::new();
+        camera_uniform.load_gui_matrix(self.size.height as f32 / self.size.width as f32);
+        self.gui_camera_uniform.write(&self.queue, &camera_uniform);
+        ps.end();
+
+        let ps = profiler::profiler_scope("render mesh alloc");
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Upload Encoder"),
+            });
+
+        self.gui_gpu_mesh.upload(
+            &gui_mesh,
+            &self.device,
+            &mut self.staging_belt,
+            &mut encoder,
+        );
+        self.staging_belt.finish();
+        self.queue.submit(iter::once(encoder.finish()));
+        ps.end();
+        self.staging_belt.recall();
+
+        let ps = profiler::profiler_scope("render texture");
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
+                ps.end();
+                return Err(SurfaceError::Recreate);
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                return Err(SurfaceError::Crash);
+            }
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Validation
+            | wgpu::CurrentSurfaceTexture::Occluded => {
+                ps.end();
+                return Ok(());
+            }
+        };
+        ps.end();
+
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+
+        if !gui_mesh.vertices.is_empty() {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("GUI Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.,
+                            g: 0.,
+                            b: 0.,
+                            a: 1.,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            render_pass.set_pipeline(&self.gui_render_pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.gui_camera_uniform.bind_group, &[]);
+
+            self.gui_gpu_mesh.draw(&mut render_pass);
+        }
+        let ps = profiler::profiler_scope("render queue");
+        self.queue.submit(iter::once(encoder.finish()));
+        output.present();
+        ps.end();
+
+        Ok(())
+    }
 }
 
 #[repr(C)]
@@ -1060,12 +1146,10 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::clipping::Frustum;
+use crate::atlas::{TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
+use crate::game::clipping::Frustum;
+use crate::game::{ClientGame, ClientPlayer, ModifiedChunkEntry, profiler};
 use crate::ui::{ScreenData, UIPos, UIRect, render_screen, text_renderer};
-use crate::{
-    ClientGame, ClientPlayer, ModifiedChunkEntry, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt,
-    profiler,
-};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,

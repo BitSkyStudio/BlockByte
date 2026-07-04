@@ -1,7 +1,4 @@
-use std::cell::OnceCell;
 use std::collections::HashSet;
-#[cfg(feature = "client")]
-use std::default;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
@@ -12,14 +9,14 @@ use image_overlay::overlay_dyn_img;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
-use rand::{Rng, SeedableRng, random_bool};
+use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
-use serde::de::{DeserializeSeed, Visitor};
+use serde::de::Visitor;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos, Vec3};
+use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos};
 use crate::model::Model;
 use crate::net::PropertyModifyMode;
 use crate::rotation::BlockRotation;
@@ -29,8 +26,8 @@ use crate::scripts::{
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
-    Color, DamageTable, DamageType, EntityPose, EntityStats, GRAVITY_ACCELERATION, InventoryView,
-    LookDirection, ViewSlot, WeightedEntry,
+    Color, DamageTable, EntityPose, EntityStats, InventoryView,
+    LookDirection, WeightedEntry,
 };
 
 use serde_default_utils::*;
@@ -202,7 +199,7 @@ macro_rules! create_registries{
                     let mut data_list = Vec::with_capacity(load_registry.data_list.len());
                     for (i, data) in load_registry.data_list.iter().enumerate(){
                         match <$type as RegistryConfigLoadable>::registry_load_from_config(&data,Key(unsafe{NonZero::new_unchecked(i as u32+1)}, PhantomData)){
-                            Ok(mut data) => {data_list.push(data);},
+                            Ok(data) => {data_list.push(data);},
                             Err(error) => {
                                 eprintln!("error loading {} {} - {}", stringify!($id), load_registry.id_list[i], error);
                                 encountered_error = true;
@@ -301,7 +298,7 @@ where
 
 pub trait RegistryConfigLoadable: Sized {
     fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self>;
-    fn should_skip(path: &Path) -> bool {
+    fn should_skip(_path: &Path) -> bool {
         false
     }
 }
@@ -311,7 +308,7 @@ pub trait RegistryRonConfigLoadable: for<'a> Deserialize<'a> {
 }
 
 impl<T: RegistryRonConfigLoadable> RegistryConfigLoadable for T {
-    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
         let data = std::fs::read_to_string(config).unwrap();
         let mut data = ron::Options::default()
             .with_default_extension(Extensions::IMPLICIT_SOME)
@@ -605,7 +602,7 @@ impl RegistryRonConfigLoadable for BlockData {
                 if let Some(machine) = self.machine.as_mut() {
                     for face in Face::all() {
                         let connector = match machine.faces.by_face(face) {
-                            BlockMachineFace::InventoryAccess { input, output } => {
+                            BlockMachineFace::InventoryAccess { input: _, output: _ } => {
                                 Some("inventory")
                             }
                             BlockMachineFace::LogicInput => Some("logic_input"),
@@ -752,7 +749,7 @@ impl BlockInteractAction {
     pub fn tooltip(&self) -> Option<&str> {
         match self {
             BlockInteractAction::Ignore => None,
-            BlockInteractAction::OpenInventory { screen, view } => {
+            BlockInteractAction::OpenInventory { screen: _, view: _ } => {
                 Some("block_action.open_inventory")
             }
             BlockInteractAction::Pickup => Some("block_action.pickup"),
@@ -1198,7 +1195,7 @@ impl ComposedTexture {
                 Arc::new(base)
             }
             ComposedTexture::Color { base, color } => {
-                let mut base = Arc::unwrap_or_clone(base.resolve(load_texture_type)?);
+                let base = Arc::unwrap_or_clone(base.resolve(load_texture_type)?);
                 let mut base = base.to_rgba8();
                 for pixel in base.pixels_mut() {
                     for (i, v) in Into::<[u8; 4]>::into(*color).into_iter().enumerate() {
@@ -1215,7 +1212,7 @@ impl ComposedTexture {
             } => {
                 let mut image = DynamicImage::new_rgba8(*width, *height);
                 let rgba = image::Rgba((*color).into());
-                for mut pixel in image.as_mut_rgba8().unwrap().pixels_mut() {
+                for pixel in image.as_mut_rgba8().unwrap().pixels_mut() {
                     *pixel = rgba;
                 }
                 Arc::new(image)
@@ -1366,7 +1363,7 @@ pub struct RoadPlacementInfo(pub Vec<RoadPlacementEntry>);
 pub struct BiomeStructureEntry(pub WorldGenStructureKey, pub u32);
 impl WeightedEntry for BiomeStructureEntry {
     type WeightModifier = ();
-    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+    fn get_weight(&self, _modifier: Self::WeightModifier) -> f32 {
         self.1 as f32
     }
 }
@@ -1384,7 +1381,7 @@ pub struct BiomeData {
 }
 impl WeightedEntry for BiomeData {
     type WeightModifier = ();
-    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+    fn get_weight(&self, _modifier: Self::WeightModifier) -> f32 {
         self.weight
     }
 }
@@ -1435,7 +1432,7 @@ pub struct LootTableEntry {
 }
 impl WeightedEntry for LootTableEntry {
     type WeightModifier = ();
-    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
+    fn get_weight(&self, _modifier: Self::WeightModifier) -> f32 {
         self.weight
     }
 }
@@ -1454,7 +1451,7 @@ pub struct ModelData {
 }
 pub type ModelKey = Key<ModelData>;
 impl RegistryConfigLoadable for ModelData {
-    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
         let json = std::fs::read_to_string(config).map_err(|_| anyhow!("error loading"))?;
         Ok(ModelData {
             model: serde_json::from_str(&json).map_err(|err| anyhow!("error loading {:?}", err))?,
@@ -1514,7 +1511,7 @@ impl TranslationLanguageData {
     }
 }
 impl RegistryConfigLoadable for TranslationLanguageData {
-    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
         let mut translation = TranslationLanguageData {
             translations: HashMap::new(),
         };

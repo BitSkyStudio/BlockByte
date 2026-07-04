@@ -2,10 +2,9 @@ use std::{
     fmt::Debug,
     marker::PhantomData,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
-    sync::OnceLock,
 };
 
-use cgmath::{EuclideanSpace, Matrix4, Point3, Transform, Vector3};
+use cgmath::{Matrix4, Point3, Transform, Vector3};
 use num_integer::{Integer, Roots};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

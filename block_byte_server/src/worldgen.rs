@@ -1,19 +1,18 @@
 use std::{
-    cell::{OnceCell, RefCell, UnsafeCell},
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    cell::RefCell,
+    collections::{BTreeMap, HashSet, VecDeque},
     fmt::Debug,
     num::{NonZero, NonZeroU32},
     rc::Rc,
     sync::Arc,
-    time::Instant,
 };
 
 use block_byte_common::{
     WeightedList,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Pos},
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     registry::{
-        BiomeKey, BlockEntry, BlockKey, BlockPalette, KeyGroup, PrefabData, PrefabKey,
-        WorldGenStructureKey, WorldGenStructureRoom, air_block,
+        BiomeKey, BlockEntry, BlockKey, PrefabData, PrefabKey,
+        WorldGenStructureKey, WorldGenStructureRoom,
     },
     rotation::BlockRotation,
 };
@@ -57,7 +56,7 @@ impl RegionGeneration {
             Seeder::from((world_generator.seed as u32, x, z)).make_seed(),
         );
         for _ in 0..world_generator.config.region_structure_spawn_attempts {
-            let index = rng.next_u32() as usize % WorldGenStructureKey::entries().count();
+            let _index = rng.next_u32() as usize % WorldGenStructureKey::entries().count();
             let x = x as i32 * Self::REGION_BLOCK_SIZE as i32
                 + (rng.next_u32() % Self::REGION_BLOCK_SIZE as u32) as i32;
             let z = z as i32 * Self::REGION_BLOCK_SIZE as i32
@@ -125,7 +124,7 @@ impl RegionGeneration {
                 let mut rng = Xoshiro256PlusPlus::from_seed(
                     Seeder::from((world_generator.seed as u32, x, z)).make_seed(),
                 );
-                let mut poisson = Poisson2D::new().with_seed(rng.next_u64()).with_dimensions(
+                let poisson = Poisson2D::new().with_seed(rng.next_u64()).with_dimensions(
                     [
                         RegionGeneration::REGION_BLOCK_SIZE as f64,
                         RegionGeneration::REGION_BLOCK_SIZE as f64,
@@ -238,10 +237,10 @@ pub struct ChunkColumnGeneration {
 impl ChunkColumnGeneration {
     pub fn is_blocked(&self, x: i32, z: i32, exclusion_radius: u8) -> bool {
         for decoration in &self.decorations {
-            let decoration_x = (decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32);
-            let decoration_z = (decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32);
+            let decoration_x = decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32 ;
+            let decoration_z = decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32 ;
             let distance = (decoration_x - x).pow(2) + (decoration_z - z).pow(2);
-            let decoration_data = decoration.key.data();
+            let _decoration_data = decoration.key.data();
             if distance <= (decoration.exclusion_zone as i32 + exclusion_radius as i32).pow(2) {
                 return true;
             }
@@ -435,7 +434,7 @@ impl WorldGenerator {
                 }
             }
             let road_noise_cache = Rc::new(road_noise_cache);
-            for i in 0..100{
+            for _i in 0..100{
                 let first_road = road_connectors[rand::random_range(0..road_connectors.len())];
                 let second_road = road_connectors[rand::random_range(0..road_connectors.len())];
                 if first_road == second_road {
@@ -497,11 +496,11 @@ impl WorldGenerator {
     pub fn get_column_generation(&self, chunk_x: i16, chunk_z: i16) -> Arc<ChunkColumnGeneration> {
         self.chunk_column_cache.get_with((chunk_x, chunk_z), || {
             let height_noise = Perlin::new(self.seed as u32);
-            let density_noise = Perlin::new(self.seed as u32 ^ 583279234);
+            let _density_noise = Perlin::new(self.seed as u32 ^ 583279234);
             let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
             let (biome_points, unique_biomes) =
                 RegionGeneration::get_biome_list_for_chunk(chunk_x, chunk_z, self);
-            let mut biome_map = std::array::from_fn(|x| {
+            let biome_map = std::array::from_fn(|x| {
                 std::array::from_fn(|z| {
                     biome_points
                         .iter()
@@ -539,13 +538,13 @@ impl WorldGenerator {
                     let small_noise = height_noise
                         .get([block_x as f64 / 30., block_z as f64 / 30.])
                         .clamp(-0.99, 0.99);
-                    let height = (mountain_spline.sample(mountain_height).unwrap()
-                        + small_spline.sample(small_noise).unwrap());
+                    let height = mountain_spline.sample(mountain_height).unwrap()
+                        + small_spline.sample(small_noise).unwrap() ;
                     height_map[x as usize][z as usize] = height as u16;
                     //biome_map[x as usize][z as usize] = biome;
                 }
             }
-            let hole_spline = Spline::from_vec(vec![
+            let _hole_spline = Spline::from_vec(vec![
                 splines::Key::new(100., 0., Interpolation::Linear),
                 splines::Key::new(120., 0.8, Interpolation::Linear),
                 splines::Key::new(200., 0., Interpolation::Linear),
@@ -564,7 +563,7 @@ impl WorldGenerator {
             };
             for biome in &chunk_column_generation.unique_biomes {
                 for decorator in &biome.data().decorators {
-                    for i in 0..decorator.count {
+                    for _i in 0..decorator.count {
                         if !rng.random_bool(decorator.chance as f64) {
                             continue;
                         }
@@ -630,7 +629,7 @@ impl WorldGenerator {
     pub fn find_valid_spawn(&self) -> Pos {
         let mut initial_x = 0;
         let mut initial_z = 0;
-        let mut jump_size = 20;
+        let jump_size = 20;
         loop {
             initial_x += rand::rng().random_range(-jump_size..=jump_size);
             initial_z += rand::rng().random_range(-jump_size..=jump_size);
@@ -762,7 +761,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     }
                 }
             },
-            |entity_position, entity, rng| {
+            |entity_position, entity, _rng| {
                 if entity_position.to_chunk_pos() != chunk_position {
                     return;
                 }

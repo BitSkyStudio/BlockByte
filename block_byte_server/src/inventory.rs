@@ -1,19 +1,15 @@
-use std::path::Path;
 
 use block_byte_common::{
     ClientItem, EntityStats, InventoryView, ViewSlot, WeightedList,
     registry::{
         ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierInteger, LootTableData,
-        LootTableKey,
     },
 };
-use parking_lot::{RwLock, RwLockWriteGuard};
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::registry::{Key, RegistryConfigLoadable};
 
 pub type ItemCount = u16;
 
@@ -350,7 +346,7 @@ impl ItemComponentManipulation for ItemQuality {
     fn merge(&self, other: &Self) -> Option<Self> {
         if *self == *other { Some(*self) } else { None }
     }
-    fn split(&self, first_count: ItemCount, second_count: ItemCount) -> (Self, Self) {
+    fn split(&self, _first_count: ItemCount, _second_count: ItemCount) -> (Self, Self) {
         (*self, *self)
     }
     fn description(&self) -> String {
@@ -360,10 +356,10 @@ impl ItemComponentManipulation for ItemQuality {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemCraftStats(pub Box<EntityStats>);
 impl ItemComponentManipulation for ItemCraftStats {
-    fn merge(&self, other: &Self) -> Option<Self> {
+    fn merge(&self, _other: &Self) -> Option<Self> {
         None
     }
-    fn split(&self, first_count: ItemCount, second_count: ItemCount) -> (Self, Self) {
+    fn split(&self, _first_count: ItemCount, _second_count: ItemCount) -> (Self, Self) {
         (self.clone(), self.clone())
     }
     fn description(&self) -> String {
@@ -428,7 +424,7 @@ impl Inventory {
             if !slot_index.input {
                 continue;
             }
-            let mut slot = &mut self.items[slot_index.slot];
+            let slot = &mut self.items[slot_index.slot];
             if let Some(slot) = slot {
                 if let Some((stack, rest)) = item.merge(&slot, slot_index) {
                     *slot = stack;
@@ -450,7 +446,7 @@ impl Inventory {
                     continue;
                 }
             }
-            let mut slot = &mut self.items[slot_index.slot];
+            let slot = &mut self.items[slot_index.slot];
             let slot_stack_size = match slot_index.stack_size_override {
                 Some(overriden_value) => overriden_value,
                 None => stack_size,
@@ -499,9 +495,9 @@ impl Inventory {
             if !slot_index.output {
                 continue;
             }
-            let mut slot = &mut self.items[slot_index.slot];
+            let slot = &mut self.items[slot_index.slot];
             if slot.is_some() {
-                let mut item_slot = slot.as_mut().unwrap();
+                let item_slot = slot.as_mut().unwrap();
                 if !item.matches(item_slot) {
                     continue;
                 }

@@ -5,12 +5,10 @@ use std::{
 };
 
 use anyhow::anyhow;
-use rand::Rng;
 use roxmltree::Node;
 use serde::{Deserialize, Serialize};
 use taffy::{
-    AlignContent, AlignItems, AlignSelf, Dimension, Display, FlexDirection, FlexWrap,
-    JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Size,
+    AlignContent, AlignItems, Dimension, Display, FlexDirection, FlexWrap, LengthPercentage, LengthPercentageAuto, Position,
 };
 use uuid::Uuid;
 
@@ -31,7 +29,7 @@ pub struct UIScreen {
 }
 pub type UIScreenKey = Key<UIScreen>;
 impl RegistryConfigLoadable for UIScreen {
-    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
         let input = std::fs::read_to_string(config).unwrap();
         let doc = roxmltree::Document::parse(&input)?;
         let mut context = UIParseContext::default();
@@ -462,7 +460,7 @@ impl UIStyleList {
     }
 }
 impl RegistryConfigLoadable for UIStyleList {
-    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
         Self::parse(&std::fs::read_to_string(config).unwrap())
     }
 }

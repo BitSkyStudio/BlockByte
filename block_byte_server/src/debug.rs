@@ -1,14 +1,9 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    path::Path,
-    sync::OnceLock,
-};
+use std::collections::{HashMap, VecDeque};
 
 use block_byte_common::{
     coord::{BlockPos, Face},
-    registry::{BiomeKey, BlockColor, BlockEntry, BlockKey, PrefabBlockEntry, PrefabData},
+    registry::{BlockKey, PrefabData},
 };
-use image::GenericImage;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 const PATH: &'static str = "worldgen_vis";
@@ -76,10 +71,10 @@ fn visualise_map() {
 }
 
 pub fn generate_tree(
-    log_block: BlockKey,
-    slab_block: BlockKey,
-    branch_block: BlockKey,
-    leave_block: BlockKey,
+    _log_block: BlockKey,
+    _slab_block: BlockKey,
+    _branch_block: BlockKey,
+    _leave_block: BlockKey,
 ) -> PrefabData {
     #[derive(Clone, Copy, Debug)]
     enum TreeBlockType {

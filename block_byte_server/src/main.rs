@@ -1,60 +1,51 @@
 use std::{
-    cell::{RefCell, UnsafeCell},
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    cell::RefCell,
+    collections::{HashMap, HashSet, VecDeque},
     env::args,
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
     path::Path,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
 
 use block_byte_common::{
-    ClientItem, Color, DamageTable, EntityAction, EntityPose, EntityStats, InventoryView,
-    LookDirection, MoveMode, SERVER_DT, SERVER_TPS, ViewSlot,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, HorizontalFace, Pos},
+    ClientItem, EntityAction, InventoryView,
+    LookDirection, SERVER_DT, SERVER_TPS, ViewSlot,
+    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
+        self, BlockColor, BlockEntry, BlockInteractAction, BlockKey,
         EntityInteractAction, EntityKey, ItemAction, ItemKey, KeyGroup, PrefabBlockEntry,
-        PrefabData, PrefabKey, ToolData, air_block, load_registries,
+        PrefabData, PrefabKey, air_block, load_registries,
     },
     rotation::BlockRotation,
-    scripts::{ScriptState, ScriptValue},
     time_to_ticks,
     ui::{PropertyMap, UIScreenKey},
-    world::{
-        BlockComponentStorage, BlockTickList, ClientBlockComponentUpdate, ClientBlockDamage,
-        ClientBlockPlants,
-    },
+    world::BlockTickList,
 };
-use palettevec::PaletteVec;
-use parking_lot::{Mutex, RwLock};
-use rand::{Rng, rngs::StdRng};
-use rand_seeder::Seeder;
+use parking_lot::Mutex;
 use rayon::iter::{
-    IntoParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator,
+    IntoParallelIterator, ParallelBridge, ParallelIterator,
 };
 use renet::{
-    Bytes, ChannelConfig, ClientId, ConnectionConfig, DefaultChannel, RenetServer, ServerEvent,
+    Bytes, ClientId, RenetServer, ServerEvent,
 };
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication};
-use ron::ser::PrettyConfig;
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
-use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::{
     inventory::{
-        Inventory, ItemCount, ItemDurability, ItemQuality, ItemStack, LootGenerationContext,
+        Inventory, ItemCount, ItemStack, LootGenerationContext,
         generate_loot_table,
     },
-    registry::{Key, REGISTRIES, Registry, RegistryProvider, RegistryStorage},
+    registry::Key,
     world::{
-        ActiveEffect, BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkBlocks,
+        ActiveEffect, BlockMachine, Chunk, ChunkBlocks,
         ChunkSaveData, Entity, WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent,
         compute_tool_damage_and_knockback, tick_chunk,
     },
@@ -173,7 +164,7 @@ fn main() {
         rx
     };
     {
-        let mut config: ServerConfig = ron::from_str(
+        let config: ServerConfig = ron::from_str(
             std::fs::read_to_string("server_config.ron")
                 .unwrap_or("()".to_string())
                 .as_str(),
@@ -240,12 +231,12 @@ fn main() {
                 .unwrap(),
                 spawn_position,
             );
-            let full_view = entity.inventory.full_view();
+            let _full_view = entity.inventory.full_view();
             entity.controlling_user = Some(user);
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
             let chunk_position = entity.position.to_chunk_pos();
-            let mut chunk = server.chunks.get_mut(&chunk_position).unwrap();
+            let chunk = server.chunks.get_mut(&chunk_position).unwrap();
             chunk
                 .entities
                 .insert(entity.uuid, WorldAccessCell::new(entity));
@@ -313,7 +304,7 @@ fn main() {
                 }
             }
         }
-        for (user_id, user) in &server.users {
+        for (_user_id, user) in &server.users {
             while let Some(message) = network_server.receive_message(user.client_id, 0) {
                 let message: NetworkMessageC2S = serde_cbor::from_slice(&message).unwrap();
                 user.message_queue.lock().push_front(message);
@@ -404,7 +395,7 @@ fn main() {
                         BlockPos { x: 0, y: 80, z: 0 },
                         HorizontalFace::Front,
                         0,
-                        |place_position, block, entry, _| {
+                        |place_position, block, _entry, _| {
                             let (place_chunk, place_chunk_offset) =
                                 place_position.to_chunk_pos_offset();
                             let Some(chunk) = server.chunks.get_mut(&place_chunk) else {
@@ -437,7 +428,7 @@ fn main() {
 
         let chunks: Vec<_> = server.chunks.keys().cloned().collect();
         for center in chunks {
-            let mut world_access = WorldAccess::lock(
+            let world_access = WorldAccess::lock(
                 center,
                 &mut server.chunks,
                 server.ticks_passed,
@@ -504,7 +495,7 @@ pub struct MessageQueue(Mutex<Vec<(UserIndex, renet::Bytes, bool)>>);
 impl MessageQueue {
     pub fn encode_message(message: NetworkMessageS2C) -> Bytes {
         let mut wtr = lz4_flex::frame::FrameEncoder::new(Vec::new());
-        let mut message = serde_cbor::to_writer(&mut wtr, &message).unwrap();
+        let _message = serde_cbor::to_writer(&mut wtr, &message).unwrap();
         wtr.finish().unwrap().into()
     }
     pub fn send_message<T: std::borrow::Borrow<UserIndex>>(
@@ -648,7 +639,7 @@ impl ChunkViewingManager {
                 .map(|(position, users, data)| {
                     let mut chunk = match data.and_then(|data| {
                         let mut data = &data[..];
-                        let mut rdr = lz4_flex::frame::FrameDecoder::new(&mut data);
+                        let rdr = lz4_flex::frame::FrameDecoder::new(&mut data);
                         match serde_cbor::from_reader::<ChunkSaveData, _>(rdr) {
                             Ok(data) => Some(data),
                             Err(_) => {
@@ -754,7 +745,7 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::AttackBlock { position, face } => {
+                NetworkMessageC2S::AttackBlock { position, face: _ } => {
                     let (damage_table, _) = compute_tool_damage_and_knockback(
                         entity.inventory.get_raw(entity.hand_slot),
                         &entity.current_stats,
@@ -826,7 +817,7 @@ impl User {
                                 }
                             }
                             ItemAction::SpawnEntity(key) => {
-                                let ItemInteractTarget::Block { position, face } = target else {
+                                let ItemInteractTarget::Block { position, face: _ } = target else {
                                     continue;
                                 };
                                 world
@@ -837,9 +828,9 @@ impl User {
                                     .unwrap();
                                 item.count -= 1;
                             }
-                            ItemAction::Plant(key) => todo!(),
+                            ItemAction::Plant(_key) => todo!(),
                             ItemAction::RotateBlock => {
-                                let ItemInteractTarget::Block { position, face } = target else {
+                                let ItemInteractTarget::Block { position, face: _ } = target else {
                                     continue;
                                 };
                                 let Some(mut block) = world.get_block(position) else {
@@ -1150,7 +1141,7 @@ impl User {
                             }
                         }
                     };
-                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let user_inventory = RefCell::new(&mut entity.inventory);
                     let mut from_provided = ProvidedInventory::lock(
                         &from_provider,
                         world,
@@ -1187,7 +1178,7 @@ impl User {
                     let Some(screen) = &*screen else {
                         continue;
                     };
-                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let user_inventory = RefCell::new(&mut entity.inventory);
                     let Ok(mut list) = ProvidedInventoryList::lock_screen(
                         screen,
                         world,
@@ -1236,7 +1227,7 @@ impl User {
                     let Some(screen) = &*screen else {
                         continue;
                     };
-                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let user_inventory = RefCell::new(&mut entity.inventory);
                     let Ok(mut list) = ProvidedInventoryList::lock_screen(
                         screen,
                         world,
@@ -1282,13 +1273,13 @@ impl User {
                         )],
                     );
                 }
-                NetworkMessageC2S::HarvestPlant { position, index } => todo!(),
+                NetworkMessageC2S::HarvestPlant { position: _, index: _ } => todo!(),
                 NetworkMessageC2S::UIButtonPress {
                     property,
                     value,
                     modify_mode,
                 } => {
-                    let mut screen_lock = self.screen.lock();
+                    let screen_lock = self.screen.lock();
                     if let Some(screen_lock) = screen_lock.as_ref() {
                         if !screen_lock
                             .screen
@@ -1300,7 +1291,7 @@ impl User {
                         }
                         for (provider, _) in &screen_lock.inventories {
                             match provider {
-                                InventoryProvider::Entity(uuid) => {}
+                                InventoryProvider::Entity(_uuid) => {}
                                 InventoryProvider::Block(position) => {
                                     let Some(mut machine) =
                                         world.get_block_component::<BlockMachine>(*position)
@@ -1332,7 +1323,7 @@ impl User {
                     let Some(screen) = &*screen else {
                         continue;
                     };
-                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let user_inventory = RefCell::new(&mut entity.inventory);
                     let Some((provider, index, slot)) = screen.get_slot(slot) else {
                         continue;
                     };
@@ -1342,7 +1333,7 @@ impl User {
                     let mut provided =
                         ProvidedInventory::lock(&provider, world, entity.uuid, &user_inventory)
                             .unwrap();
-                    let mut item_slot = &mut provided.get_mut().items[index];
+                    let item_slot = &mut provided.get_mut().items[index];
                     if let Some(item) = item_slot {
                         item.count -= mode.get_count(item.count);
                         if item.count <= 0 {
@@ -1356,7 +1347,7 @@ impl User {
                     let Some(screen) = &*screen else {
                         continue;
                     };
-                    let mut user_inventory = RefCell::new(&mut entity.inventory);
+                    let user_inventory = RefCell::new(&mut entity.inventory);
                     let Ok(mut list) = ProvidedInventoryList::lock_screen(
                         screen,
                         world,
@@ -1429,7 +1420,7 @@ impl ProvidedInventory<'_> {
                 }
             }
             InventoryProvider::Block(position) => {
-                let Some(mut machine) = world.get_block_component::<BlockMachine>(*position) else {
+                let Some(machine) = world.get_block_component::<BlockMachine>(*position) else {
                     return Err(());
                 };
                 Ok(ProvidedInventory::Block(machine))

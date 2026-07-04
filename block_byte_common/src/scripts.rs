@@ -90,7 +90,7 @@ impl<E: ExternalScriptByteCode> CompiledScript<E> {
         let mut parse_context = ScriptParseContext::default();
         for (line_num, line) in input.lines().enumerate() {
             let line = match line.split_once("#") {
-                Some((line, comment)) => line,
+                Some((line, _comment)) => line,
                 None => line,
             };
             let line = line.trim();

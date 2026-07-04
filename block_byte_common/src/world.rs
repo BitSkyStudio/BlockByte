@@ -1,4 +1,4 @@
-use std::{cell::RefCell, num::NonZero, sync::Mutex};
+use std::{num::NonZero, sync::Mutex};
 
 use num_integer::Integer;
 use priority_queue::PriorityQueue;

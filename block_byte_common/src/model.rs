@@ -1,14 +1,12 @@
 use cgmath::{
-    Deg, ElementWise, EuclideanSpace, Euler, InnerSpace, Matrix4, Point3, SquareMatrix, Transform,
-    Vector2, Vector3, VectorSpace, Zero,
+    Deg, EuclideanSpace, Euler, InnerSpace, Matrix4, SquareMatrix, Vector3, VectorSpace, Zero,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
-use uuid::Uuid;
 
 use crate::{
     TexCoords,
-    coord::{Face, FaceMap, Pos, Vec3},
+    coord::{Face, FaceMap, Pos},
     registry::TextureKey,
 };
 
@@ -214,8 +212,8 @@ impl Bone {
         &self,
         parent: Matrix4<f32>,
         animations: &[ResolvedAnimation],
-        mut geometry_consumer: &mut impl FnMut(ModelGeometry),
-        mut binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
+        geometry_consumer: &mut impl FnMut(ModelGeometry),
+        binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
     ) {
         let world = parent * self.animation_transform(animations);
 
@@ -442,7 +440,7 @@ impl Model {
             .map(|g| (g.uuid.clone(), g.clone()))
             .collect();
 
-        let mut root_bone =
+        let root_bone =
             Self::build_bone(&bbmodel.outliner, None, &element_map, &group_map, &bbmodel);
         let mut embed_texture_id = 0;
         Model {
@@ -494,7 +492,7 @@ impl Model {
         model: &BBModel,
     ) -> Bone {
         let group = uuid.and_then(|uuid| group_map.get(uuid));
-        let name = group.map(|group| group.name.as_str()).unwrap_or("");
+        let _name = group.map(|group| group.name.as_str()).unwrap_or("");
         let mut bone = Bone {
             origin: group
                 .map(|group| Vector3::from(group.origin) / BLOCKBENCH_SIZE)
@@ -562,7 +560,7 @@ impl Model {
                     }
                     match bbelement {
                         BBElement::Cube {
-                            uuid,
+                            uuid: _,
                             from,
                             to,
                             faces,
@@ -604,7 +602,7 @@ impl Model {
                             });
                         }
                         BBElement::Locator {
-                            uuid,
+                            uuid: _,
                             position,
                             rotation,
                             name,
@@ -621,7 +619,7 @@ impl Model {
                             });
                         }
                         BBElement::Mesh {
-                            uuid,
+                            uuid: _,
                             origin,
                             rotation,
                             vertices,

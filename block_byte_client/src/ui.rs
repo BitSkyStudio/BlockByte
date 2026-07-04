@@ -23,10 +23,13 @@ use winit::{
 };
 
 use crate::{
-    ClientGame, ClientPlayer, GUIMesh, InputContainer, TEXTURE_ATLAS, TexCoordsExt,
-    TexCoordsIndexExt,
+    ClientGame, GUIMesh, InputContainer, InputManager,
+    atlas::TEXTURE_ATLAS,
     render::{CameraUniform, GUIVertex, MeshVertexConsumer, item_model_icon_view},
-    translate,
+};
+use crate::{
+    atlas::{TexCoordsExt, TexCoordsIndexExt},
+    game::translate,
 };
 
 pub struct ScreenData {
@@ -36,24 +39,9 @@ pub struct ScreenData {
     pub selected_slot: Option<(usize, MouseButton)>,
     pub slot_action_prediction: HashMap<usize, (MouseButton, f32)>,
 }
-pub struct UIInput<'a> {
-    pub mouse_position: UIPos,
-    pub last_mouse_position: UIPos,
-    pub last_scroll: UIPos,
-    pub buttons: &'a InputContainer<MouseButton>,
-    pub keys: &'a InputContainer<KeyCode>,
-}
-impl UIInput<'_> {
-    pub fn mouse_delta(&self) -> UIPos {
-        UIPos {
-            x: self.mouse_position.x - self.last_mouse_position.x,
-            y: self.mouse_position.y - self.last_mouse_position.y,
-        }
-    }
-}
 pub fn render_screen(
     screen_data: &mut ScreenData,
-    input: Option<&UIInput>,
+    input: Option<&InputManager>,
     size: PhysicalSize<u32>,
     mesh: &mut GUIMesh,
     dt: f32,
@@ -170,7 +158,7 @@ fn render_element(
     data: &mut ScreenData,
     mesh: &mut GUIMesh,
     overlay_mesh: &mut GUIMesh,
-    input: Option<&UIInput>,
+    input: Option<&InputManager>,
     message_queue: &mut Vec<NetworkMessageC2S>,
 ) {
     let layout = taffy.layout(node).unwrap();
@@ -308,7 +296,7 @@ fn render_element(
         }
         UIElementType::ItemSlot { slot } => {
             if let Some(input) = input {
-                if context.content.contains(input.mouse_position) {
+                if context.content.contains(input.cursor_position) {
                     let target_slot = *slot;
                     match data.selected_slot {
                         Some((slot, button)) => {
@@ -365,12 +353,12 @@ fn render_element(
                 SlotId::Id(slot) => {
                     if let Some(item) = data.slots.get(*slot).cloned().flatten() {
                         if let Some(input) = input
-                            && context.content.contains(input.mouse_position)
+                            && context.content.contains(input.cursor_position)
                             && data.selected_slot.is_none()
                         {
                             let mut shift = overlay_context
                                 .draw_text(
-                                    input.mouse_position,
+                                    input.cursor_position,
                                     translate(format!("item.{}", item.item.text_id()).as_str()),
                                     40.,
                                     Color::WHITE,
@@ -380,8 +368,8 @@ fn render_element(
                                 shift += overlay_context
                                     .draw_text(
                                         UIPos {
-                                            x: input.mouse_position.x,
-                                            y: input.mouse_position.y + shift,
+                                            x: input.cursor_position.x,
+                                            y: input.cursor_position.y + shift,
                                         },
                                         line,
                                         40.,
@@ -426,8 +414,8 @@ fn render_element(
                                         draw_slot(
                                             &mut overlay_context,
                                             UIPos {
-                                                x: input.mouse_position.x + border - 25.,
-                                                y: input.mouse_position.y + border - 25.,
+                                                x: input.cursor_position.x + border - 25.,
+                                                y: input.cursor_position.y + border - 25.,
                                             },
                                             item.count,
                                         );
@@ -442,8 +430,8 @@ fn render_element(
                                         draw_slot(
                                             &mut overlay_context,
                                             UIPos {
-                                                x: input.mouse_position.x + border - 25.,
-                                                y: input.mouse_position.y + border - 25.,
+                                                x: input.cursor_position.x + border - 25.,
+                                                y: input.cursor_position.y + border - 25.,
                                             },
                                             move_count,
                                         );
@@ -484,11 +472,11 @@ fn render_element(
                                 },
                                 size: UIPos::all(craft_size),
                             })
-                            .contains(input.mouse_position)
+                            .contains(input.cursor_position)
                                 && data.selected_slot.is_none()
                             {
                                 overlay_context.draw_text(
-                                    input.mouse_position,
+                                    input.cursor_position,
                                     translate(format!("item.{}", item.text_id()).as_str()),
                                     40.,
                                     Color::WHITE,
@@ -535,7 +523,7 @@ fn render_element(
                                 },
                                 size: UIPos::all(craft_size),
                             })
-                            .contains(input.mouse_position)
+                            .contains(input.cursor_position)
                             {
                                 let mut text =
                                     translate(format!("recipe.{}", recipe.text_id()).as_str())
@@ -565,7 +553,7 @@ fn render_element(
                                     .as_str();
                                 }
                                 overlay_context.draw_multiline_text(
-                                    input.mouse_position,
+                                    input.cursor_position,
                                     text.as_str(),
                                     40.,
                                     Color::WHITE,
@@ -606,10 +594,10 @@ fn render_element(
                         },
                         size: UIPos::all(research_size),
                     })
-                    .contains(input.mouse_position)
+                    .contains(input.cursor_position)
                     {
                         overlay_context.draw_text(
-                            input.mouse_position,
+                            input.cursor_position,
                             translate(format!("research.{}", research.text_id()).as_str()),
                             40.,
                             Color::WHITE,
@@ -636,7 +624,7 @@ fn render_element(
                 Color::WHITE,
             );
             if let Some(input) = input
-                && context.content.contains(input.mouse_position)
+                && context.content.contains(input.cursor_position)
             {
                 if input.buttons.is_just_down(MouseButton::Left) {
                     message_queue.push(NetworkMessageC2S::UIButtonPress {
@@ -1031,7 +1019,7 @@ impl TextRenderer {
 pub fn text_renderer() -> &'static TextRenderer {
     &TEXTURE_ATLAS.get().unwrap().text_renderer
 }
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct UIPos {
     pub x: f32,
     pub y: f32,

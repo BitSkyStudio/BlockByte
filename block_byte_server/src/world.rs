@@ -2,35 +2,24 @@ use std::{
     cell::{RefCell, UnsafeCell},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     marker::PhantomData,
-    mem::MaybeUninit,
-    num::{NonZero, NonZeroU32},
-    ops::{Deref, DerefMut},
-    path::Path,
     ptr::NonNull,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Instant,
 };
 
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, Color, DamageTable, DamageType, EntityAction,
-    EntityPose, EntityStats, HitTimer, InventoryView, LookDirection, MoveMode, NORMAL_SPEED,
+    ACCELERATION_COEFFICIENT, CharacterController, DamageTable, DamageType, EntityAction,
+    EntityPose, EntityStats, HitTimer, LookDirection, MoveMode, NORMAL_SPEED,
     SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
     },
-    net::{NetworkMessageC2S, NetworkMessageS2C, PropertyModifyMode},
+    net::{NetworkMessageS2C, PropertyModifyMode},
     registry::{
-        BiomeKey, BlockColor, BlockData, BlockEntry, BlockInteractAction, BlockKey,
-        BlockMachineData, BlockMachineFace, BlockPalette, EntityInteractAction, EntityKey,
-        ItemAction, KeyGroup, MachineInstrution, PlantKey, PrefabKey, ResearchKey, ToolData,
+        BlockEntry,
+        BlockMachineData, BlockMachineFace, BlockPalette, EntityKey, MachineInstrution, PlantKey, ResearchKey, ToolData,
         air_block,
     },
-    rotation::BlockRotation,
-    scripts::{self, CallbackResult, ExternalScriptByteCode, RunResult, ScriptState, ScriptValue},
+    scripts::{CallbackResult, RunResult, ScriptState, ScriptValue},
     time_to_ticks,
     ui::PropertyMap,
     world::{
@@ -38,27 +27,21 @@ use block_byte_common::{
         ClientBlockPlants, ClientChunkBlockComponents, ComponentTypeAccess,
     },
 };
-use noise::{BasicMulti, NoiseFn, Perlin};
+use noise::NoiseFn;
 use ordered_float::OrderedFloat;
-use palettevec::{PaletteVec, index_buffer::AlignedIndexBuffer, palette::HybridPalette};
-use parking_lot::{Mutex, RwLock};
-use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
-use rand_seeder::Seeder;
 use serde::{Deserialize, Serialize};
 use serde_default_utils::default_bool;
-use slotmap::{SlotMap, new_key_type};
+use slotmap::SlotMap;
 use smallvec::SmallVec;
-use splines::{Interpolation, Spline};
 use uuid::Uuid;
 
 use crate::{
-    InventoryProvider, MessageQueue, ProvidedInventory, ProvidedInventoryList, Server, User,
+    InventoryProvider, MessageQueue, User,
     UserIndex, UserScreenState,
     inventory::{
         Inventory, ItemCraftStats, ItemQuality, ItemStack, LootGenerationContext,
         generate_loot_table,
     },
-    registry::{Key, RegistryConfigLoadable},
 };
 #[derive(Serialize, Deserialize)]
 pub struct ChunkSaveData {
@@ -348,7 +331,7 @@ pub fn tick_chunk(world: &WorldAccess) {
     }
     for mut entity_ref in world.iter_entities(&[], true) {
         let entity_data = entity_ref.key.data();
-        let mut entity = &mut *entity_ref;
+        let entity = &mut *entity_ref;
         entity.effects.retain_mut(|effect| {
             if effect.timer <= 1 {
                 entity.current_stats_dirty = true;
@@ -646,7 +629,7 @@ pub fn tick_chunk(world: &WorldAccess) {
         % (10 * SERVER_TPS)
         == 0
     {
-        for mut plants in world.iter_block_components::<BlockPlants>(&[], true) {
+        for plants in world.iter_block_components::<BlockPlants>(&[], true) {
             let Some(block) = world.get_block(plants.lock_key + BlockPos::Y) else {
                 continue;
             };
@@ -897,7 +880,7 @@ impl Entity {
             Some(ai) => {
                 let entity_eye_position = self.get_eye();
                 let current_health_regen = self.current_stats.regen();
-                let mut brain = self.brain.as_mut().unwrap();
+                let brain = self.brain.as_mut().unwrap();
                 brain.received_attacks.retain(|_, damage| {
                     *damage -= current_health_regen * SERVER_DT;
                     *damage > 0.
@@ -924,7 +907,7 @@ impl Entity {
                             None
                         }
                     })
-                    .max_by_key(|(id, position, received_damage)| {
+                    .max_by_key(|(_id, position, received_damage)| {
                         ((10. + *received_damage) / (position.distance(*position)) * 1000.) as u32
                     });
                 if let Some((target_id, target_position, _)) = target_entity {
@@ -1106,7 +1089,7 @@ macro_rules! create_chunk_block_components{
                 {
                     let (chunk, offset) = position.to_chunk_pos_offset();
                     let chunk = WorldAccess::get_grid_index_center(world.center_chunk, chunk).unwrap();
-                    let mut components = &mut world.grid[chunk].as_mut().unwrap().components.$id;
+                    let components = &mut world.grid[chunk].as_mut().unwrap().components.$id;
                     components.set(offset, *component);
                     if $autotick {
                         components.tick_list.lock().unwrap().set_ticking(components.tree.get(offset).unwrap() as usize, true);
@@ -1196,9 +1179,9 @@ impl Into<ClientBlockPlants> for &BlockPlants {
                 .iter()
                 .map(|(plant, growth)| {
                     let plant_data = plant.data();
-                    let stage = (((*growth / plant_data.growth_length)
+                    let stage = ((*growth / plant_data.growth_length)
                         * (plant_data.stages.len() - 1) as f32)
-                        as usize);
+                        as usize ;
                     (*plant, stage as u8)
                 })
                 .collect(),
@@ -1283,7 +1266,7 @@ impl BlockMachine {
                                 if *pull {
                                     std::mem::swap(&mut first_inventory, &mut second_inventory);
                                 }
-                                let mut exit = false;
+                                let _exit = false;
                                 for slot in &view.slots {
                                     if let Some(item) = first_inventory.get_slot_mut_raw(slot.slot)
                                     {
@@ -1371,7 +1354,7 @@ impl BlockMachine {
                 }
                 MachineInstrution::WriteLogic { face, value } => {
                     let value = state.resolve_value(value);
-                    let mut logic_state = self.logic_state.by_face_mut(*face);
+                    let logic_state = self.logic_state.by_face_mut(*face);
                     if let Some(previous) = logic_state {
                         if *previous == value {
                             return CallbackResult::Continue;
@@ -1493,7 +1476,7 @@ impl BlockMachine {
             .iter()
             .position(|r| *r == property)
         {
-            let mut register = &mut self.script_state.registers[property];
+            let register = &mut self.script_state.registers[property];
             match mode {
                 PropertyModifyMode::Add => {
                     *register = register.wrapping_add(value);
@@ -1987,7 +1970,7 @@ impl WorldAccess<'_> {
         position: Pos,
     ) -> Result<(), ()> {
         let item_entity_key = EntityKey::id("item").unwrap();
-        for mut item in items {
+        for item in items {
             let mut item_entity = Entity::new(item_entity_key, position);
             let angle = rand::random::<f32>() * 2. * std::f32::consts::PI;
             item_entity.character_controller.velocity = Pos {
@@ -2047,7 +2030,7 @@ impl Drop for WorldAccess<'_> {
         for entity in removals.drain(..) {
             let chunk = self.get_entity(entity).unwrap().position.to_chunk_pos();
             let chunk_id = Self::get_grid_index_center(self.center_chunk, chunk).unwrap();
-            let entity = self.grid[chunk_id]
+            let _entity = self.grid[chunk_id]
                 .as_mut()
                 .unwrap()
                 .entities
@@ -2111,7 +2094,7 @@ impl<T> WorldAccessCell<T> {
         self.0.into_inner()
     }
     pub unsafe fn get_ref(&self) -> &T {
-        (unsafe { &*self.0.get() })
+        unsafe { &*self.0.get() } 
     }
     pub fn get_mut(&mut self) -> &mut T {
         self.0.get_mut()

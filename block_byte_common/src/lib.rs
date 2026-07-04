@@ -397,7 +397,7 @@ impl CharacterController {
             MoveMode::Normal => ground_multiplier,
             MoveMode::Fly | MoveMode::NoClip => 1.,
         } * acceleration;
-        let mut error = (move_vector - self.velocity);
+        let mut error = move_vector - self.velocity ;
         match move_mode {
             MoveMode::Normal => {
                 error.y = 0.;
@@ -405,9 +405,9 @@ impl CharacterController {
             MoveMode::Fly | MoveMode::NoClip => {}
         }
         if error.length() > 0. {
-            self.velocity += (error.normalize() * (error.length().min(acceleration * delta_time)));
+            self.velocity += error.normalize() * (error.length().min(acceleration * delta_time)) ;
         }
-        self.velocity *= ((1_f32 - 0.1 * ground_multiplier).powf(delta_time));
+        self.velocity *= (1_f32 - 0.1 * ground_multiplier).powf(delta_time) ;
         let total_move = self.velocity * delta_time;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
