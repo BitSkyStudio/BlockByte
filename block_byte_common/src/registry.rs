@@ -26,8 +26,7 @@ use crate::scripts::{
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
-    Color, DamageTable, EntityPose, EntityStats, InventoryView,
-    LookDirection, WeightedEntry,
+    Color, DamageTable, EntityPose, EntityStats, InventoryView, LookDirection, WeightedEntry,
 };
 
 use serde_default_utils::*;
@@ -57,7 +56,7 @@ impl<T> Hash for Key<T> {
 }
 pub struct LoadRegistry<T> {
     id_map: HashMap<String, Key<T>>,
-    data_list: Vec<PathBuf>,
+    data_list: Vec<Vec<PathBuf>>,
     id_list: Vec<String>,
     group_id_map: HashMap<String, KeyGroup<T>>,
     groups: Vec<(Vec<Key<T>>, HashSet<Key<T>>)>,
@@ -75,11 +74,12 @@ impl<T> Default for LoadRegistry<T> {
 }
 impl<T> LoadRegistry<T> {
     fn register(&mut self, id: String, data: PathBuf) -> Key<T> {
-        if self.id_map.contains_key(&id) {
-            panic!("double registration of {}", id);
+        if let Some(key) = self.id_map.get(&id) {
+            self.data_list.get_mut(key.numeric_id()).unwrap().push(data);
+            return *key;
         }
         self.id_list.push(id.clone());
-        self.data_list.push(data);
+        self.data_list.push(vec![data]);
         let key = Key(
             unsafe { NonZero::new_unchecked(self.id_list.len() as u32) },
             PhantomData,
@@ -198,7 +198,7 @@ macro_rules! create_registries{
                     let load_registry = &load_registry.$id;
                     let mut data_list = Vec::with_capacity(load_registry.data_list.len());
                     for (i, data) in load_registry.data_list.iter().enumerate(){
-                        match <$type as RegistryConfigLoadable>::registry_load_from_config(&data,Key(unsafe{NonZero::new_unchecked(i as u32+1)}, PhantomData)){
+                        match <$type as RegistryConfigLoadable>::registry_load_from_config(data,Key(unsafe{NonZero::new_unchecked(i as u32+1)}, PhantomData)){
                             Ok(data) => {data_list.push(data);},
                             Err(error) => {
                                 eprintln!("error loading {} {} - {}", stringify!($id), load_registry.id_list[i], error);
@@ -286,8 +286,8 @@ where
             .get(id)
             .cloned()
     }
-    pub fn path(self) -> &'static Path {
-        LOAD_REGISTRIES.get().unwrap().get_load_registry().data_list[self.numeric_id()].as_path()
+    pub fn paths(self) -> &'static Vec<PathBuf> {
+        &LOAD_REGISTRIES.get().unwrap().get_load_registry().data_list[self.numeric_id()]
     }
     pub fn entries() -> impl Iterator<Item = Self> {
         let load_registry = LOAD_REGISTRIES.get().unwrap().get_load_registry();
@@ -297,7 +297,7 @@ where
 }
 
 pub trait RegistryConfigLoadable: Sized {
-    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<Self>;
+    fn registry_load_from_config(config: &Vec<PathBuf>, key: Key<Self>) -> anyhow::Result<Self>;
     fn should_skip(_path: &Path) -> bool {
         false
     }
@@ -308,8 +308,8 @@ pub trait RegistryRonConfigLoadable: for<'a> Deserialize<'a> {
 }
 
 impl<T: RegistryRonConfigLoadable> RegistryConfigLoadable for T {
-    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
-        let data = std::fs::read_to_string(config).unwrap();
+    fn registry_load_from_config(config: &Vec<PathBuf>, _key: Key<Self>) -> anyhow::Result<Self> {
+        let data = std::fs::read_to_string(config.last().unwrap()).unwrap();
         let mut data = ron::Options::default()
             .with_default_extension(Extensions::IMPLICIT_SOME)
             .from_str::<T>(&data)
@@ -602,9 +602,10 @@ impl RegistryRonConfigLoadable for BlockData {
                 if let Some(machine) = self.machine.as_mut() {
                     for face in Face::all() {
                         let connector = match machine.faces.by_face(face) {
-                            BlockMachineFace::InventoryAccess { input: _, output: _ } => {
-                                Some("inventory")
-                            }
+                            BlockMachineFace::InventoryAccess {
+                                input: _,
+                                output: _,
+                            } => Some("inventory"),
                             BlockMachineFace::LogicInput => Some("logic_input"),
                             BlockMachineFace::LogicOutput => Some("logic_output"),
                             BlockMachineFace::SignalInput => Some("signal_input"),
@@ -1064,7 +1065,10 @@ pub struct TextureData {
 }
 pub type TextureKey = Key<TextureData>;
 impl RegistryConfigLoadable for TextureData {
-    fn registry_load_from_config(config: &Path, key: Key<Self>) -> anyhow::Result<TextureData> {
+    fn registry_load_from_config(
+        config: &Vec<PathBuf>,
+        key: Key<Self>,
+    ) -> anyhow::Result<TextureData> {
         if let Some(cached) = image_cache().get(&key) {
             return Ok(cached.clone());
         }
@@ -1086,10 +1090,10 @@ impl RegistryConfigLoadable for TextureData {
                 _ => panic!(),
             }
         }
-        let texture = load_image(config, LoadTextureType::Texture)?;
+        let texture = load_image(config.last().unwrap(), LoadTextureType::Texture)?;
         let mut material = HashMap::new();
         for texture_type in [LoadTextureType::ColorMask, LoadTextureType::Emissive] {
-            let mut path_search = config.to_path_buf();
+            let mut path_search = config.last().unwrap().clone();
             path_search.set_extension(match texture_type {
                 LoadTextureType::Texture => unreachable!(),
                 LoadTextureType::ColorMask => "color_mask",
@@ -1169,7 +1173,7 @@ impl ComposedTexture {
     pub fn resolve(&self, load_texture_type: LoadTextureType) -> anyhow::Result<Arc<DynamicImage>> {
         Ok(match self {
             ComposedTexture::Image(key) => {
-                let texture = TextureData::registry_load_from_config(key.path(), *key)
+                let texture = TextureData::registry_load_from_config(key.paths(), *key)
                     .map_err(|_| anyhow!("error loading texture {}", key.text_id()))?;
                 match load_texture_type {
                     LoadTextureType::Texture => texture.texture,
@@ -1451,8 +1455,9 @@ pub struct ModelData {
 }
 pub type ModelKey = Key<ModelData>;
 impl RegistryConfigLoadable for ModelData {
-    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
-        let json = std::fs::read_to_string(config).map_err(|_| anyhow!("error loading"))?;
+    fn registry_load_from_config(config: &Vec<PathBuf>, _key: Key<Self>) -> anyhow::Result<Self> {
+        let json = std::fs::read_to_string(config.last().unwrap())
+            .map_err(|_| anyhow!("error loading"))?;
         Ok(ModelData {
             model: serde_json::from_str(&json).map_err(|err| anyhow!("error loading {:?}", err))?,
         })
@@ -1511,15 +1516,17 @@ impl TranslationLanguageData {
     }
 }
 impl RegistryConfigLoadable for TranslationLanguageData {
-    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
+    fn registry_load_from_config(config: &Vec<PathBuf>, _key: Key<Self>) -> anyhow::Result<Self> {
         let mut translation = TranslationLanguageData {
             translations: HashMap::new(),
         };
-        for line in std::fs::read_to_string(config).unwrap().lines() {
-            let (key, value) = line.split_once("=").unwrap();
-            translation
-                .translations
-                .insert(key.trim().to_string(), value.trim().to_string());
+        for source in config {
+            for line in std::fs::read_to_string(source).unwrap().lines() {
+                let (key, value) = line.split_once("=").unwrap();
+                translation
+                    .translations
+                    .insert(key.trim().to_string(), value.trim().to_string());
+            }
         }
         Ok(translation)
     }

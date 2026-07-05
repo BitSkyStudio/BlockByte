@@ -1,14 +1,15 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::anyhow;
 use roxmltree::Node;
 use serde::{Deserialize, Serialize};
 use taffy::{
-    AlignContent, AlignItems, Dimension, Display, FlexDirection, FlexWrap, LengthPercentage, LengthPercentageAuto, Position,
+    AlignContent, AlignItems, Dimension, Display, FlexDirection, FlexWrap, LengthPercentage,
+    LengthPercentageAuto, Position,
 };
 use uuid::Uuid;
 
@@ -29,8 +30,8 @@ pub struct UIScreen {
 }
 pub type UIScreenKey = Key<UIScreen>;
 impl RegistryConfigLoadable for UIScreen {
-    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
-        let input = std::fs::read_to_string(config).unwrap();
+    fn registry_load_from_config(config: &Vec<PathBuf>, _key: Key<Self>) -> anyhow::Result<Self> {
+        let input = std::fs::read_to_string(config.last().unwrap()).unwrap();
         let doc = roxmltree::Document::parse(&input)?;
         let mut context = UIParseContext::default();
         Ok(UIScreen {
@@ -460,8 +461,8 @@ impl UIStyleList {
     }
 }
 impl RegistryConfigLoadable for UIStyleList {
-    fn registry_load_from_config(config: &Path, _key: Key<Self>) -> anyhow::Result<Self> {
-        Self::parse(&std::fs::read_to_string(config).unwrap())
+    fn registry_load_from_config(config: &Vec<PathBuf>, _key: Key<Self>) -> anyhow::Result<Self> {
+        Self::parse(&std::fs::read_to_string(config.last().unwrap()).unwrap())
     }
 }
 pub type UIStyleListKey = Key<UIStyleList>;
