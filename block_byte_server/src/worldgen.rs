@@ -8,11 +8,11 @@ use std::{
 };
 
 use block_byte_common::{
-    WeightedList,
+    BiasWeightProvider, WeightedList,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     registry::{
-        BiomeKey, BlockEntry, BlockKey, PrefabData, PrefabKey,
-        WorldGenStructureKey, WorldGenStructureRoom,
+        BiomeKey, BlockEntry, BlockKey, PrefabData, PrefabKey, WorldGenStructureKey,
+        WorldGenStructureRoom,
     },
     rotation::BlockRotation,
 };
@@ -237,8 +237,8 @@ pub struct ChunkColumnGeneration {
 impl ChunkColumnGeneration {
     pub fn is_blocked(&self, x: i32, z: i32, exclusion_radius: u8) -> bool {
         for decoration in &self.decorations {
-            let decoration_x = decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32 ;
-            let decoration_z = decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32 ;
+            let decoration_x = decoration.x as i32 + self.x as i32 * CHUNK_SIZE as i32;
+            let decoration_z = decoration.z as i32 + self.z as i32 * CHUNK_SIZE as i32;
             let distance = (decoration_x - x).pow(2) + (decoration_z - z).pow(2);
             let _decoration_data = decoration.key.data();
             if distance <= (decoration.exclusion_zone as i32 + exclusion_radius as i32).pow(2) {
@@ -400,7 +400,7 @@ impl WorldGenerator {
                             .unwrap();
                         let connection_rotation =
                             BlockRotation::looking_to_horizontal(connection_facing);
-                        for room in connection.rooms.get_random_weighted_list(entry.depth, &mut rng) {
+                        for room in connection.rooms.get_random_weighted_list(BiasWeightProvider(entry.depth as f32), &mut rng) {
                             let room = structure_data.rooms.get(&room.room).unwrap();
                             let room_bb = connection_rotation
                                 .rotate_block_aabb(room.prefab.data().bounding_box())
@@ -539,7 +539,7 @@ impl WorldGenerator {
                         .get([block_x as f64 / 30., block_z as f64 / 30.])
                         .clamp(-0.99, 0.99);
                     let height = mountain_spline.sample(mountain_height).unwrap()
-                        + small_spline.sample(small_noise).unwrap() ;
+                        + small_spline.sample(small_noise).unwrap();
                     height_map[x as usize][z as usize] = height as u16;
                     //biome_map[x as usize][z as usize] = biome;
                 }
@@ -742,9 +742,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                             if let Some(loot_table) = &entry.loot_table {
                                 for item in generate_loot_table(
                                     loot_table.data(),
-                                    &LootGenerationContext {
-                                        seed: rng.next_u64(),
-                                    },
+                                    &mut LootGenerationContext::new(rng.next_u64()),
                                 ) {
                                     machine
                                         .inventory
@@ -906,9 +904,10 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                 (center_distance_x.pow(2) + center_distance_z.pow(2)).isqrt()
                                     as i32;*/
                                 let center_distance = center_distance_x + center_distance_z;
-                                let Some(entry) =
-                                    road_info.0.get_random(center_distance as u32, &mut rng)
-                                else {
+                                let Some(entry) = road_info.0.get_random(
+                                    BiasWeightProvider(center_distance as f32),
+                                    &mut rng,
+                                ) else {
                                     continue;
                                 };
                                 if let Some(block) = entry.block {

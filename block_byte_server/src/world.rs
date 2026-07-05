@@ -7,17 +7,16 @@ use std::{
 
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, CharacterController, DamageTable, DamageType, EntityAction,
-    EntityPose, EntityStats, HitTimer, LookDirection, MoveMode, NORMAL_SPEED,
-    SERVER_DT, SERVER_TPS,
+    EntityPose, EntityStats, HitTimer, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
+    SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
     },
     net::{NetworkMessageS2C, PropertyModifyMode},
     registry::{
-        BlockEntry,
-        BlockMachineData, BlockMachineFace, BlockPalette, EntityKey, MachineInstrution, PlantKey, ResearchKey, ToolData,
-        air_block,
+        BlockEntry, BlockMachineData, BlockMachineFace, BlockPalette, EntityKey, MachineInstrution,
+        PlantKey, ResearchKey, ToolData, air_block,
     },
     scripts::{CallbackResult, RunResult, ScriptState, ScriptValue},
     time_to_ticks,
@@ -36,8 +35,7 @@ use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::{
-    InventoryProvider, MessageQueue, User,
-    UserIndex, UserScreenState,
+    InventoryProvider, MessageQueue, User, UserIndex, UserScreenState,
     inventory::{
         Inventory, ItemCraftStats, ItemQuality, ItemStack, LootGenerationContext,
         generate_loot_table,
@@ -280,7 +278,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                 if entity.health <= 0. {
                     let mut items = generate_loot_table(
                         &entity.key.data().loot_table.data(),
-                        &LootGenerationContext { seed: 0 },
+                        &mut LootGenerationContext::new(rand::random()),
                     );
                     for item in &mut entity.inventory.items {
                         if let Some(item) = item.take() {
@@ -1181,7 +1179,7 @@ impl Into<ClientBlockPlants> for &BlockPlants {
                     let plant_data = plant.data();
                     let stage = ((*growth / plant_data.growth_length)
                         * (plant_data.stages.len() - 1) as f32)
-                        as usize ;
+                        as usize;
                     (*plant, stage as u8)
                 })
                 .collect(),
@@ -1434,7 +1432,7 @@ impl BlockMachine {
                         }
                         for output in generate_loot_table(
                             recipe.outputs.data(),
-                            &LootGenerationContext::default(),
+                            &mut LootGenerationContext::new(rand::random()),
                         ) {
                             self.inventory.add_item(output_view, output);
                         }
@@ -1604,7 +1602,7 @@ impl WorldAccess<'_> {
 
         let mut drops = generate_loot_table(
             block_data.loot_table.data(),
-            &LootGenerationContext::default(),
+            &mut LootGenerationContext::new(rand::random()),
         );
 
         if let Some(plant) = self.get_block_component::<BlockPlants>(position) {
@@ -2094,7 +2092,7 @@ impl<T> WorldAccessCell<T> {
         self.0.into_inner()
     }
     pub unsafe fn get_ref(&self) -> &T {
-        unsafe { &*self.0.get() } 
+        unsafe { &*self.0.get() }
     }
     pub fn get_mut(&mut self) -> &mut T {
         self.0.get_mut()

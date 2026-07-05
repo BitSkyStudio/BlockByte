@@ -1,15 +1,16 @@
+use std::cell::RefCell;
 
 use block_byte_common::{
-    ClientItem, EntityStats, InventoryView, ViewSlot, WeightedList,
+    ClientItem, EntityStats, InventoryView, ViewSlot, WeightProvider, WeightedList,
     registry::{
         ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierInteger, LootTableData,
+        LootTableEntry,
     },
 };
-use rand::SeedableRng;
+use rand::{Rng, RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-
 
 pub type ItemCount = u16;
 
@@ -528,27 +529,19 @@ impl ItemMatcher for KeyGroup<ItemData> {
         self.contains(item.item)
     }
 }
-#[derive(Default)]
-pub struct LootGenerationContext {
-    pub seed: u64,
-}
-impl LootGenerationContext {
-    pub fn generate_integer(&self, integer: &LootModifierInteger) -> u32 {
-        match integer {
-            LootModifierInteger::Constant(value) => *value,
-            LootModifierInteger::Random(min, max) => rand::random_range(*min..*max),
-        }
-    }
-}
+
 pub fn generate_loot_table(
     loot_table: &LootTableData,
-    context: &LootGenerationContext,
+    context: &mut LootGenerationContext,
 ) -> Vec<ItemStack> {
     let mut items = Vec::new();
-    let mut rng = Xoshiro256PlusPlus::seed_from_u64(context.seed);
+    let mut rng = Xoshiro256PlusPlus::seed_from_u64(context.rng.next_u64());
     for pool in &loot_table.pools {
         for _ in 0..context.generate_integer(&pool.rolls) {
-            let Some(entry) = pool.entries.get_random((), &mut rng) else {
+            let Some(entry) = pool
+                .entries
+                .get_random(WeightLootContext(RefCell::new(&mut *context)), &mut rng)
+            else {
                 continue;
             };
             let mut item = ItemStack {
@@ -573,4 +566,27 @@ pub fn generate_loot_table(
         }
     }
     items
+}
+
+pub struct LootGenerationContext {
+    rng: Xoshiro256PlusPlus,
+}
+impl LootGenerationContext {
+    pub fn new(seed: u64) -> LootGenerationContext {
+        LootGenerationContext {
+            rng: Xoshiro256PlusPlus::seed_from_u64(seed),
+        }
+    }
+    pub fn generate_integer(&mut self, integer: &LootModifierInteger) -> u32 {
+        match integer {
+            LootModifierInteger::Constant(value) => *value,
+            LootModifierInteger::Random(min, max) => self.rng.random_range(*min..*max),
+        }
+    }
+}
+struct WeightLootContext<'a>(RefCell<&'a mut LootGenerationContext>);
+impl<'a> WeightProvider<LootTableEntry> for WeightLootContext<'a> {
+    fn get_weight(&self, weigh: &LootTableEntry) -> f32 {
+        self.0.borrow_mut().generate_integer(&weigh.weight) as f32
+    }
 }

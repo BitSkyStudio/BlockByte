@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -26,7 +27,8 @@ use crate::scripts::{
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
-    Color, DamageTable, EntityPose, EntityStats, InventoryView, LookDirection, WeightedEntry,
+    BiasWeightProvider, Color, DamageTable, EntityPose, EntityStats, InventoryView, LookDirection,
+    WeightProvider,
 };
 
 use serde_default_utils::*;
@@ -1354,21 +1356,20 @@ pub struct RoadPlacementEntry {
     pub weight_center_distance_bias: i32,
     pub block: Option<BlockKey>,
 }
-impl WeightedEntry for RoadPlacementEntry {
-    type WeightModifier = u32;
-    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
-        (self.weight + self.weight_center_distance_bias * modifier as i32).max(0) as f32
+impl WeightProvider<RoadPlacementEntry> for BiasWeightProvider {
+    fn get_weight(&self, weigh: &RoadPlacementEntry) -> f32 {
+        (weigh.weight + weigh.weight_center_distance_bias * self.0 as i32).max(0) as f32
     }
 }
+
 #[derive(Deserialize)]
 pub struct RoadPlacementInfo(pub Vec<RoadPlacementEntry>);
 
 #[derive(Deserialize)]
 pub struct BiomeStructureEntry(pub WorldGenStructureKey, pub u32);
-impl WeightedEntry for BiomeStructureEntry {
-    type WeightModifier = ();
-    fn get_weight(&self, _modifier: Self::WeightModifier) -> f32 {
-        self.1 as f32
+impl WeightProvider<BiomeStructureEntry> for () {
+    fn get_weight(&self, weigh: &BiomeStructureEntry) -> f32 {
+        weigh.1 as f32
     }
 }
 
@@ -1383,20 +1384,20 @@ pub struct BiomeData {
     pub weight: f32,
     pub road: RoadPlacementInfo,
 }
-impl WeightedEntry for BiomeData {
-    type WeightModifier = ();
-    fn get_weight(&self, _modifier: Self::WeightModifier) -> f32 {
-        self.weight
+impl WeightProvider<BiomeData> for () {
+    fn get_weight(&self, weigh: &BiomeData) -> f32 {
+        weigh.weight
     }
 }
-impl<T: WeightedEntry + 'static> WeightedEntry for Key<T>
+
+impl<W: 'static, P> WeightProvider<Key<W>> for P
 where
-    LoadRegistryStorage: LoadRegistryProvider<T>,
-    RegistryStorage: RegistryProvider<T>,
+    P: WeightProvider<W>,
+    LoadRegistryStorage: LoadRegistryProvider<W>,
+    RegistryStorage: RegistryProvider<W>,
 {
-    type WeightModifier = T::WeightModifier;
-    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
-        self.data().get_weight(modifier)
+    fn get_weight(&self, weigh: &Key<W>) -> f32 {
+        self.get_weight(weigh.data())
     }
 }
 impl RegistryRonConfigLoadable for BiomeData {}
@@ -1426,20 +1427,18 @@ pub struct LootTablePool {
     pub entries: Vec<LootTableEntry>,
     pub rolls: LootModifierInteger,
 }
+fn default_loot_modifier_weight() -> LootModifierInteger {
+    LootModifierInteger::Constant(1)
+}
 #[derive(Deserialize)]
 pub struct LootTableEntry {
     pub item: ItemKey,
     #[serde(default)]
     pub modifiers: Vec<LootItemModifier>,
-    #[serde(default = "default_prefab_entry_true_chance")]
-    pub weight: f32,
+    #[serde(default = "default_loot_modifier_weight")]
+    pub weight: LootModifierInteger,
 }
-impl WeightedEntry for LootTableEntry {
-    type WeightModifier = ();
-    fn get_weight(&self, _modifier: Self::WeightModifier) -> f32 {
-        self.weight
-    }
-}
+
 #[derive(Deserialize)]
 pub enum LootItemModifier {
     SetCount(LootModifierInteger),
@@ -1681,10 +1680,9 @@ pub struct WorldGenStructureRoomSelection {
     #[serde(default)]
     pub weight_depth_bias: f32,
 }
-impl WeightedEntry for WorldGenStructureRoomSelection {
-    type WeightModifier = u32;
-    fn get_weight(&self, modifier: Self::WeightModifier) -> f32 {
-        (self.weight + self.weight_depth_bias * modifier as f32).max(0.)
+impl WeightProvider<WorldGenStructureRoomSelection> for BiasWeightProvider {
+    fn get_weight(&self, weigh: &WorldGenStructureRoomSelection) -> f32 {
+        (weigh.weight + weigh.weight_depth_bias * self.0).max(0.) as f32
     }
 }
 #[derive(Deserialize)]

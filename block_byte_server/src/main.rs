@@ -12,14 +12,13 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, EntityAction, InventoryView,
-    LookDirection, SERVER_DT, SERVER_TPS, ViewSlot,
+    ClientItem, EntityAction, InventoryView, LookDirection, SERVER_DT, SERVER_TPS, ViewSlot,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockColor, BlockEntry, BlockInteractAction, BlockKey,
-        EntityInteractAction, EntityKey, ItemAction, ItemKey, KeyGroup, PrefabBlockEntry,
-        PrefabData, PrefabKey, air_block, load_registries,
+        self, BlockColor, BlockEntry, BlockInteractAction, BlockKey, EntityInteractAction,
+        EntityKey, ItemAction, ItemKey, KeyGroup, PrefabBlockEntry, PrefabData, PrefabKey,
+        air_block, load_registries,
     },
     rotation::BlockRotation,
     time_to_ticks,
@@ -27,27 +26,19 @@ use block_byte_common::{
     world::BlockTickList,
 };
 use parking_lot::Mutex;
-use rayon::iter::{
-    IntoParallelIterator, ParallelBridge, ParallelIterator,
-};
-use renet::{
-    Bytes, ClientId, RenetServer, ServerEvent,
-};
+use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
+use renet::{Bytes, ClientId, RenetServer, ServerEvent};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication};
 use serde::Deserialize;
 use slotmap::{SlotMap, new_key_type};
 use uuid::Uuid;
 
 use crate::{
-    inventory::{
-        Inventory, ItemCount, ItemStack, LootGenerationContext,
-        generate_loot_table,
-    },
+    inventory::{Inventory, ItemCount, ItemStack, LootGenerationContext, generate_loot_table},
     registry::Key,
     world::{
-        ActiveEffect, BlockMachine, Chunk, ChunkBlocks,
-        ChunkSaveData, Entity, WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent,
-        compute_tool_damage_and_knockback, tick_chunk,
+        ActiveEffect, BlockMachine, Chunk, ChunkBlocks, ChunkSaveData, Entity, WorldAccess,
+        WorldAccessCell, WorldAccessRef, WorldEvent, compute_tool_damage_and_knockback, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -1252,7 +1243,7 @@ impl User {
                     for _ in 0..count {
                         for item in generate_loot_table(
                             recipe.outputs.data(),
-                            &LootGenerationContext::default(),
+                            &mut LootGenerationContext::new(rand::random()),
                         ) {
                             if let Some(overflow_item) = list.add_item(item) {
                                 world.drop_items(
@@ -1273,7 +1264,10 @@ impl User {
                         )],
                     );
                 }
-                NetworkMessageC2S::HarvestPlant { position: _, index: _ } => todo!(),
+                NetworkMessageC2S::HarvestPlant {
+                    position: _,
+                    index: _,
+                } => todo!(),
                 NetworkMessageC2S::UIButtonPress {
                     property,
                     value,

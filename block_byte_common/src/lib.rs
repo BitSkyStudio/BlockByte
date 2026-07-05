@@ -1,9 +1,10 @@
-use rand::Rng;
+use rand::{Rng, SeedableRng};
+use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     coord::{AABB, BlockPos, Pos},
-    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup},
+    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup, LootModifierInteger},
 };
 use serde_default_utils::*;
 
@@ -397,7 +398,7 @@ impl CharacterController {
             MoveMode::Normal => ground_multiplier,
             MoveMode::Fly | MoveMode::NoClip => 1.,
         } * acceleration;
-        let mut error = move_vector - self.velocity ;
+        let mut error = move_vector - self.velocity;
         match move_mode {
             MoveMode::Normal => {
                 error.y = 0.;
@@ -405,9 +406,9 @@ impl CharacterController {
             MoveMode::Fly | MoveMode::NoClip => {}
         }
         if error.length() > 0. {
-            self.velocity += error.normalize() * (error.length().min(acceleration * delta_time)) ;
+            self.velocity += error.normalize() * (error.length().min(acceleration * delta_time));
         }
-        self.velocity *= (1_f32 - 0.1 * ground_multiplier).powf(delta_time) ;
+        self.velocity *= (1_f32 - 0.1 * ground_multiplier).powf(delta_time);
         let total_move = self.velocity * delta_time;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
@@ -686,33 +687,37 @@ impl EntityAction {
         }
     }
 }
-pub trait WeightedEntry {
-    type WeightModifier: Copy;
-    fn get_weight(&self, modifier: Self::WeightModifier) -> f32;
+pub trait WeightProvider<W> {
+    fn get_weight(&self, weigh: &W) -> f32;
 }
 pub trait WeightedList {
-    type Entry: WeightedEntry;
+    type Entry;
     fn get_random<'a>(
         &'a self,
-        modifier: <Self::Entry as WeightedEntry>::WeightModifier,
+        provider: impl WeightProvider<Self::Entry>,
         rng: &mut impl Rng,
     ) -> Option<&'a Self::Entry>;
     fn get_random_weighted_list<'a>(
         &'a self,
-        modifier: <Self::Entry as WeightedEntry>::WeightModifier,
+        provider: impl WeightProvider<Self::Entry>,
         rng: &mut impl Rng,
     ) -> impl Iterator<Item = &'a Self::Entry>;
 }
-impl<T: WeightedEntry> WeightedList for [T] {
+impl<T> WeightedList for [T] {
     type Entry = T;
-    fn get_random<'a>(&'a self, modifier: T::WeightModifier, rng: &mut impl Rng) -> Option<&'a T> {
-        let sum_weights = self.iter().map(|e| e.get_weight(modifier)).sum();
+    fn get_random<'a>(
+        &'a self,
+        provider: impl WeightProvider<Self::Entry>,
+        rng: &mut impl Rng,
+    ) -> Option<&'a T> {
+        //this is incorrect if weight changes
+        let sum_weights = self.iter().map(|e| provider.get_weight(e)).sum();
         if sum_weights == 0. {
             return None;
         }
         let mut selection = rng.random_range((0.)..sum_weights);
         for entry in self {
-            let weight = entry.get_weight(modifier);
+            let weight = provider.get_weight(entry);
             if selection < weight {
                 return Some(entry);
             }
@@ -722,7 +727,7 @@ impl<T: WeightedEntry> WeightedList for [T] {
     }
     fn get_random_weighted_list<'a>(
         &'a self,
-        modifier: T::WeightModifier,
+        provider: impl WeightProvider<Self::Entry>,
         rng: &mut impl Rng,
     ) -> impl Iterator<Item = &'a T> {
         let mut list: Vec<_> = self
@@ -730,7 +735,7 @@ impl<T: WeightedEntry> WeightedList for [T] {
             .map(|entry| {
                 (
                     entry,
-                    rng.random::<f32>().powf(1. / entry.get_weight(modifier)),
+                    rng.random::<f32>().powf(1. / provider.get_weight(entry)),
                 )
             })
             .collect();
@@ -738,16 +743,21 @@ impl<T: WeightedEntry> WeightedList for [T] {
         list.into_iter().map(|(e, _)| e)
     }
 }
-impl<T: WeightedEntry> WeightedList for Vec<T> {
+impl<T> WeightedList for Vec<T> {
     type Entry = T;
-    fn get_random<'a>(&'a self, modifier: T::WeightModifier, rng: &mut impl Rng) -> Option<&'a T> {
-        self.as_slice().get_random(modifier, rng)
+    fn get_random<'a>(
+        &'a self,
+        provider: impl WeightProvider<Self::Entry>,
+        rng: &mut impl Rng,
+    ) -> Option<&'a T> {
+        self.as_slice().get_random(provider, rng)
     }
     fn get_random_weighted_list<'a>(
         &'a self,
-        modifier: T::WeightModifier,
+        provider: impl WeightProvider<Self::Entry>,
         rng: &mut impl Rng,
     ) -> impl Iterator<Item = &'a T> {
-        self.as_slice().get_random_weighted_list(modifier, rng)
+        self.as_slice().get_random_weighted_list(provider, rng)
     }
 }
+pub struct BiasWeightProvider(pub f32);
