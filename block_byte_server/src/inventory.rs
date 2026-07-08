@@ -538,10 +538,7 @@ pub fn generate_loot_table(
     let mut rng = Xoshiro256PlusPlus::seed_from_u64(context.rng.next_u64());
     for pool in &loot_table.pools {
         for _ in 0..context.generate_integer(&pool.rolls) {
-            let Some(entry) = pool
-                .entries
-                .get_random(WeightLootContext(RefCell::new(&mut *context)), &mut rng)
-            else {
+            let Some(entry) = pool.entries.get_random(&*context, &mut rng) else {
                 continue;
             };
             let mut item = ItemStack {
@@ -583,10 +580,17 @@ impl LootGenerationContext {
             LootModifierInteger::Random(min, max) => self.rng.random_range(*min..*max),
         }
     }
+    pub fn generate_integer_const(&self, integer: &LootModifierInteger) -> u32 {
+        match integer {
+            LootModifierInteger::Constant(value) => *value,
+            LootModifierInteger::Random(min, max) => {
+                panic!("attempting to use random in const lootcontext")
+            }
+        }
+    }
 }
-struct WeightLootContext<'a>(RefCell<&'a mut LootGenerationContext>);
-impl<'a> WeightProvider<LootTableEntry> for WeightLootContext<'a> {
+impl<'a> WeightProvider<LootTableEntry> for &LootGenerationContext {
     fn get_weight(&self, weigh: &LootTableEntry) -> f32 {
-        self.0.borrow_mut().generate_integer(&weigh.weight) as f32
+        self.generate_integer_const(&weigh.weight) as f32
     }
 }
