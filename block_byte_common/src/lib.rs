@@ -771,9 +771,7 @@ pub struct BiasWeightProvider(pub f32);
 static STRING_INTERN_TABLE: RwLock<HashMap<String, InternString>> =
     RwLock::new(HashMap::with_hasher(RandomState::with_seeds(5, 6, 7, 8)));
 #[derive(Copy, Clone)]
-pub struct InternString(*const u8, usize);
-unsafe impl Send for InternString {}
-unsafe impl Sync for InternString {}
+pub struct InternString(&'static str);
 impl InternString {
     pub fn intern(input: &str) -> InternString {
         if let Some(interned) = STRING_INTERN_TABLE.read().unwrap().get(input) {
@@ -785,23 +783,25 @@ impl InternString {
             .entry(input.to_string())
             .or_insert_with(|| {
                 let pointer: Box<str> = Box::from(input);
-                let pointer = Box::leak(pointer).as_ptr();
-                InternString(pointer, input.len())
+                InternString(Box::leak(pointer))
             })
             .clone()
     }
     pub fn as_str(&self) -> &'static str {
-        unsafe { str::from_utf8_unchecked(std::slice::from_raw_parts(self.0, self.1)) }
+        self.0
+    }
+    fn addr(&self) -> usize {
+        (self.0 as *const str).addr()
     }
 }
 impl Hash for InternString {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_usize(self.0.addr());
+        state.write_usize(self.addr());
     }
 }
 impl PartialEq for InternString {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.addr() == other.addr()
     }
 }
 impl Eq for InternString {}
