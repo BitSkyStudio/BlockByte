@@ -250,6 +250,7 @@ dependencies = [
 name = "block_byte_common"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "cgmath",
  "image",

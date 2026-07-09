@@ -27,8 +27,8 @@ use crate::scripts::{
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
-    BiasWeightProvider, Color, DamageTable, EntityPose, EntityStats, InventoryView, LookDirection,
-    WeightProvider,
+    BiasWeightProvider, Color, DamageTable, EntityPose, EntityStats, InternString, InventoryView,
+    LookDirection, WeightProvider,
 };
 
 use serde_default_utils::*;
@@ -578,9 +578,9 @@ pub struct BlockRenderConnection {
     pub model: ModelInstance,
     #[serde(default = "default_connection_rotations_all")]
     pub rotations: Vec<BlockRotation>,
-    pub contain: HashSet<String>,
+    pub contain: HashSet<InternString>,
     #[serde(default)]
-    pub deny: HashSet<String>,
+    pub deny: HashSet<InternString>,
     #[serde(default = "default_front_face")]
     pub offset: Face,
     #[serde(default = "default_bool::<true>")]
@@ -617,7 +617,7 @@ impl RegistryRonConfigLoadable for BlockData {
                         if let Some(connector) = connector {
                             render_connectors
                                 .by_face_mut(face)
-                                .insert(connector.to_string());
+                                .insert(InternString::intern(connector));
                         }
                     }
                 }
@@ -985,7 +985,7 @@ pub enum BlockRenderData {
     Full {
         faces: FaceMap<KeyGroup<TextureData>>,
         #[serde(default)]
-        render_connectors: FaceMap<HashSet<String>>,
+        render_connectors: FaceMap<HashSet<InternString>>,
     },
     Model {
         model: ModelInstance,
@@ -994,7 +994,7 @@ pub enum BlockRenderData {
         #[serde(default)]
         lod_hidden: bool,
         #[serde(default)]
-        render_connectors: FaceMap<HashSet<String>>,
+        render_connectors: FaceMap<HashSet<InternString>>,
         #[serde(default)]
         render_connections: Vec<BlockRenderConnection>,
     },
@@ -1425,10 +1425,10 @@ pub type LootTableKey = Key<LootTableData>;
 #[derive(Deserialize)]
 pub struct LootTablePool {
     pub entries: Vec<LootTableEntry>,
-    pub rolls: LootModifierInteger,
+    pub rolls: LootModifierNumber,
 }
-fn default_loot_modifier_weight() -> LootModifierInteger {
-    LootModifierInteger::Constant(1)
+fn default_loot_modifier_weight() -> LootModifierNumber {
+    LootModifierNumber::Constant(1.)
 }
 #[derive(Deserialize)]
 pub struct LootTableEntry {
@@ -1436,18 +1436,21 @@ pub struct LootTableEntry {
     #[serde(default)]
     pub modifiers: Vec<LootItemModifier>,
     #[serde(default = "default_loot_modifier_weight")]
-    pub weight: LootModifierInteger,
+    pub weight: LootModifierNumber,
 }
 
 #[derive(Deserialize)]
 pub enum LootItemModifier {
-    SetCount(LootModifierInteger),
+    SetCount(LootModifierNumber),
     ApplyQuality,
 }
 #[derive(Deserialize)]
-pub enum LootModifierInteger {
-    Constant(u32),
-    Random(u32, u32),
+pub enum LootModifierNumber {
+    Constant(f32),
+    Add(Box<LootModifierNumber>, Box<LootModifierNumber>),
+    Mul(Box<LootModifierNumber>, Box<LootModifierNumber>),
+    Var(InternString),
+    Random(f32, f32),
 }
 pub struct ModelData {
     pub model: Model,

@@ -1,9 +1,9 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::HashMap};
 
 use block_byte_common::{
-    ClientItem, EntityStats, InventoryView, ViewSlot, WeightProvider, WeightedList,
+    ClientItem, EntityStats, InternString, InventoryView, ViewSlot, WeightProvider, WeightedList,
     registry::{
-        ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierInteger, LootTableData,
+        ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierNumber, LootTableData,
         LootTableEntry,
     },
 };
@@ -537,7 +537,7 @@ pub fn generate_loot_table(
     let mut items = Vec::new();
     let mut rng = Xoshiro256PlusPlus::seed_from_u64(context.rng.next_u64());
     for pool in &loot_table.pools {
-        for _ in 0..context.generate_integer(&pool.rolls) {
+        for _ in 0..context.generate_number(&pool.rolls) as usize {
             let Some(entry) = pool.entries.get_random(&*context, &mut rng) else {
                 continue;
             };
@@ -549,7 +549,7 @@ pub fn generate_loot_table(
             for modifier in &entry.modifiers {
                 match modifier {
                     LootItemModifier::SetCount(value) => {
-                        item.count = context.generate_integer(value) as u16;
+                        item.count = context.generate_number(value) as u16;
                     }
                     LootItemModifier::ApplyQuality => {
                         //todo: randomness
@@ -567,30 +567,50 @@ pub fn generate_loot_table(
 
 pub struct LootGenerationContext {
     rng: Xoshiro256PlusPlus,
+    variables: HashMap<InternString, f32>,
 }
 impl LootGenerationContext {
     pub fn new(seed: u64) -> LootGenerationContext {
         LootGenerationContext {
             rng: Xoshiro256PlusPlus::seed_from_u64(seed),
+            variables: HashMap::new(),
         }
     }
-    pub fn generate_integer(&mut self, integer: &LootModifierInteger) -> u32 {
-        match integer {
-            LootModifierInteger::Constant(value) => *value,
-            LootModifierInteger::Random(min, max) => self.rng.random_range(*min..*max),
+    pub fn generate_number(&mut self, number: &LootModifierNumber) -> f32 {
+        match number {
+            LootModifierNumber::Constant(value) => *value,
+            LootModifierNumber::Random(min, max) => self.rng.random_range(*min..*max),
+            LootModifierNumber::Add(first, second) => {
+                self.generate_number(first) + self.generate_number(second)
+            }
+            LootModifierNumber::Mul(first, second) => {
+                self.generate_number(first) * self.generate_number(second)
+            }
+            LootModifierNumber::Var(variable) => {
+                self.variables.get(variable).cloned().unwrap_or(0.)
+            }
         }
     }
-    pub fn generate_integer_const(&self, integer: &LootModifierInteger) -> u32 {
-        match integer {
-            LootModifierInteger::Constant(value) => *value,
-            LootModifierInteger::Random(min, max) => {
+    pub fn generate_number_const(&self, number: &LootModifierNumber) -> f32 {
+        match number {
+            LootModifierNumber::Constant(value) => *value,
+            LootModifierNumber::Random(min, max) => {
                 panic!("attempting to use random in const lootcontext")
+            }
+            LootModifierNumber::Add(first, second) => {
+                self.generate_number_const(first) + self.generate_number_const(second)
+            }
+            LootModifierNumber::Mul(first, second) => {
+                self.generate_number_const(first) * self.generate_number_const(second)
+            }
+            LootModifierNumber::Var(variable) => {
+                self.variables.get(variable).cloned().unwrap_or(0.)
             }
         }
     }
 }
 impl<'a> WeightProvider<LootTableEntry> for &LootGenerationContext {
     fn get_weight(&self, weigh: &LootTableEntry) -> f32 {
-        self.generate_integer_const(&weigh.weight) as f32
+        self.generate_number_const(&weigh.weight)
     }
 }

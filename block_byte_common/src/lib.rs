@@ -1,10 +1,16 @@
+use std::{
+    hash::Hash,
+    sync::{Arc, RwLock},
+};
+
+use ahash::{HashMap, HashMapExt, RandomState};
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     coord::{AABB, BlockPos, Pos},
-    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup, LootModifierInteger},
+    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup, LootModifierNumber},
 };
 use serde_default_utils::*;
 
@@ -761,3 +767,76 @@ impl<T> WeightedList for Vec<T> {
     }
 }
 pub struct BiasWeightProvider(pub f32);
+
+static STRING_INTERN_TABLE: RwLock<HashMap<String, InternString>> =
+    RwLock::new(HashMap::with_hasher(RandomState::with_seeds(5, 6, 7, 8)));
+#[derive(Copy, Clone)]
+pub struct InternString(*const u8, usize);
+unsafe impl Send for InternString {}
+unsafe impl Sync for InternString {}
+impl InternString {
+    pub fn intern(input: &str) -> InternString {
+        if let Some(interned) = STRING_INTERN_TABLE.read().unwrap().get(input) {
+            return *interned;
+        }
+        STRING_INTERN_TABLE
+            .write()
+            .unwrap()
+            .entry(input.to_string())
+            .or_insert_with(|| {
+                let pointer: Box<str> = Box::from(input);
+                let pointer = Box::leak(pointer).as_ptr();
+                InternString(pointer, input.len())
+            })
+            .clone()
+    }
+    pub fn as_str(&self) -> &'static str {
+        unsafe { str::from_utf8_unchecked(std::slice::from_raw_parts(self.0, self.1)) }
+    }
+}
+impl Hash for InternString {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(self.0.addr());
+    }
+}
+impl PartialEq for InternString {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for InternString {}
+impl Serialize for InternString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for InternString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct InternStringVisitor;
+        impl<'de> serde::de::Visitor<'de> for InternStringVisitor {
+            type Value = InternString;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("valid string")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(InternString::intern(v))
+            }
+        }
+        deserializer.deserialize_str(InternStringVisitor)
+    }
+}
+impl std::ops::Deref for InternString {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
