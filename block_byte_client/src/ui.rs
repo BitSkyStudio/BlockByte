@@ -602,10 +602,36 @@ fn render_element(
                             40.,
                             Color::WHITE,
                         );
-                        if input.buttons.is_just_down(MouseButton::Left) {
-                            message_queue.push(NetworkMessageC2S::Research {
-                                research: *research,
-                            });
+                        match data.selected_slot {
+                            Some((slot, button)) => {
+                                let move_mode = match button {
+                                    MouseButton::Left => {
+                                        if input.buttons.is_just_up(MouseButton::Left) {
+                                            Some(ItemMoveMode::Stack)
+                                        } else if input.buttons.is_just_down(MouseButton::Right) {
+                                            Some(ItemMoveMode::Single)
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    MouseButton::Right => {
+                                        if input.buttons.is_just_up(MouseButton::Right) {
+                                            Some(ItemMoveMode::Half)
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                if let Some(mode) = move_mode {
+                                    message_queue.push(NetworkMessageC2S::Research {
+                                        slot,
+                                        mode,
+                                        research: *research,
+                                    });
+                                }
+                            }
+                            None => {}
                         }
                     }
                 }

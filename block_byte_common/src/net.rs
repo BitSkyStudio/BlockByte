@@ -7,9 +7,7 @@ use uuid::Uuid;
 use crate::{
     ClientItem, EntityAction, EntityPose, EntityStats, ItemMoveMode, LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
-    registry::{
-        BlockEntry, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey,
-    },
+    registry::{BlockEntry, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey},
     scripts::ScriptValue,
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
@@ -61,6 +59,8 @@ pub enum NetworkMessageC2S {
     },
     Research {
         research: ResearchKey,
+        slot: usize,
+        mode: ItemMoveMode,
     },
     Craft {
         recipe: RecipeKey,

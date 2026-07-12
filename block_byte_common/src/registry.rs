@@ -1653,11 +1653,16 @@ pub type PrefabKey = Key<PrefabData>;
 pub struct ResearchData {
     pub icon: ItemModel,
     #[serde(default)]
-    pub requirements: HashMap<ItemKey, u16>,
+    pub requirements: Vec<ResearchProgressBar>,
     #[serde(default)]
     pub dependencies: Vec<ResearchKey>,
     pub x: f32,
     pub y: f32,
+}
+#[derive(Deserialize)]
+pub struct ResearchProgressBar {
+    pub total: f32,
+    pub items: Vec<(KeyGroup<ItemData>, f32)>,
 }
 impl RegistryRonConfigLoadable for ResearchData {}
 pub type ResearchKey = Key<ResearchData>;

@@ -222,7 +222,16 @@ fn main() {
                 .unwrap(),
                 spawn_position,
             );
-            let _full_view = entity.inventory.full_view();
+            server.message_queue.send_message(
+                std::iter::once(user),
+                NetworkMessageS2C::UpdateResearch {
+                    research: entity
+                        .research
+                        .as_ref()
+                        .map(|research| research.unlocked.clone())
+                        .unwrap_or(HashSet::new()),
+                },
+            );
             entity.controlling_user = Some(user);
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();
@@ -239,12 +248,6 @@ fn main() {
                 std::iter::once(user),
                 NetworkMessageS2C::SetPlayerEntity {
                     uuid: Some(player_uuid),
-                },
-            );
-            server.message_queue.send_message(
-                std::iter::once(user),
-                NetworkMessageS2C::UpdateResearch {
-                    research: HashSet::new(), //todo: load
                 },
             );
         }
@@ -769,7 +772,7 @@ impl User {
                                     continue;
                                 }
                                 if let Some(research) = place.research {
-                                    if !entity.research.contains(&research) {
+                                    if !Entity::has_researched(&entity.research, research) {
                                         continue;
                                     }
                                 }
@@ -1164,53 +1167,71 @@ impl User {
                     }
                     entity.current_stats_dirty = true;
                 }
-                NetworkMessageC2S::Research { research } => {
+                NetworkMessageC2S::Research {
+                    research,
+                    slot,
+                    mode,
+                } => {
+                    let Some(research_progress) = &mut entity.research else {
+                        continue;
+                    };
+                    if research_progress.unlocked.contains(&research) {
+                        continue;
+                    }
+                    let research_data = research.data();
                     let screen = self.screen.lock();
                     let Some(screen) = &*screen else {
                         continue;
                     };
                     let user_inventory = RefCell::new(&mut entity.inventory);
-                    let Ok(mut list) = ProvidedInventoryList::lock_screen(
-                        screen,
-                        world,
-                        entity.uuid,
-                        &user_inventory,
-                    ) else {
+                    let Some((provider, index, slot)) = screen.get_slot(slot) else {
                         continue;
                     };
-                    if entity.research.contains(&research) {
+                    if !slot.output {
                         continue;
                     }
-                    let research_data = research.data();
-                    let mut failed = false;
-                    for dependency in &research_data.dependencies {
-                        if !entity.research.contains(dependency) {
-                            failed = true;
-                            break;
+                    let mut provided =
+                        ProvidedInventory::lock(&provider, world, entity.uuid, &user_inventory)
+                            .unwrap();
+                    let item_slot = &mut provided.get_mut().items[index];
+                    if let Some(item) = item_slot {
+                        let max_count = mode.get_count(item.count);
+                        let mut spend = 0;
+                        let progress = research_progress
+                            .progress
+                            .entry(research)
+                            .or_insert(Vec::new());
+                        progress.resize(research_data.requirements.len(), 0.);
+                        for (i, requirement) in research_data.requirements.iter().enumerate() {
+                            for (item_group, add) in &requirement.items {
+                                if item_group.contains(item.item) {
+                                    if *add > 0. {
+                                        let consume = (((requirement.total - progress[i]) / *add)
+                                            .ceil()
+                                            as ItemCount)
+                                            .min(max_count);
+                                        progress[i] = (progress[i] + consume as f32 * *add)
+                                            .min(requirement.total);
+                                        spend = spend.max(consume);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        item.count -= spend;
+                        if item.count <= 0 {
+                            *item_slot = None;
+                        }
+
+                        if research_data
+                            .requirements
+                            .iter()
+                            .enumerate()
+                            .all(|(i, requirement)| progress[i] >= requirement.total)
+                        {
+                            research_progress.unlocked.insert(research);
                         }
                     }
-                    if failed {
-                        continue;
-                    }
-                    for (req_item, req_count) in &research_data.requirements {
-                        if list.count_item(*req_item) < *req_count {
-                            failed = true;
-                            break;
-                        }
-                    }
-                    if failed {
-                        continue;
-                    }
-                    for (req_item, req_count) in &research_data.requirements {
-                        assert_eq!(list.remove_item(*req_item, *req_count), 0);
-                    }
-                    entity.research.insert(research);
-                    world.send(
-                        controlling_user,
-                        NetworkMessageS2C::UpdateResearch {
-                            research: entity.research.clone(),
-                        },
-                    );
                     entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::Craft { recipe, mut count } => {

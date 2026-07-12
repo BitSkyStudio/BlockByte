@@ -16,7 +16,7 @@ use block_byte_common::{
     net::{NetworkMessageS2C, PropertyModifyMode},
     registry::{
         BlockEntry, BlockMachineData, BlockMachineFace, BlockPalette, EntityKey, MachineInstrution,
-        PlantKey, ResearchKey, ToolData, air_block,
+        PlantKey, ResearchKey, ResearchProgressBar, ToolData, air_block,
     },
     scripts::{CallbackResult, RunResult, ScriptState, ScriptValue},
     time_to_ticks,
@@ -733,7 +733,7 @@ pub struct Entity {
     #[serde(skip_serializing, skip_deserializing)]
     pub last_hand_item: Option<ItemStack>,
     pub health: f32,
-    pub research: HashSet<ResearchKey>,
+    pub research: Option<Box<EntityResearchProgress>>,
     pub brain: Option<MobBrain>,
     pub direction: LookDirection,
     pub pose: EntityPose,
@@ -742,6 +742,11 @@ pub struct Entity {
     pub current_stats: EntityStats,
     #[serde(skip_serializing, skip_deserializing, default = "default_bool::<true>")]
     pub current_stats_dirty: bool,
+}
+#[derive(Serialize, Deserialize)]
+pub struct EntityResearchProgress {
+    pub unlocked: HashSet<ResearchKey>,
+    pub progress: HashMap<ResearchKey, Vec<f32>>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct ActiveEffect {
@@ -853,7 +858,7 @@ impl Entity {
             hand_slot: 0,
             last_hand_item: None,
             health: entity_data.base_stats.vitality(),
-            research: HashSet::new(),
+            research: None,
             brain: match &entity_data.ai {
                 Some(_) => Some(MobBrain::new()),
                 None => None,
@@ -864,6 +869,15 @@ impl Entity {
             current_stats: EntityStats::default(),
             current_stats_dirty: true,
         }
+    }
+    pub fn has_researched(
+        progress: &Option<Box<EntityResearchProgress>>,
+        research: ResearchKey,
+    ) -> bool {
+        let Some(progress) = &progress else {
+            return false;
+        };
+        progress.unlocked.contains(&research)
     }
     pub fn get_eye(&self) -> Pos {
         let entity_data = self.key.data();

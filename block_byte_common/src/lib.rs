@@ -768,7 +768,7 @@ impl<T> WeightedList for Vec<T> {
 }
 pub struct BiasWeightProvider(pub f32);
 
-static STRING_INTERN_TABLE: RwLock<HashMap<String, InternString>> =
+static STRING_INTERN_TABLE: RwLock<HashMap<&'static str, InternString>> =
     RwLock::new(HashMap::with_hasher(RandomState::with_seeds(5, 6, 7, 8)));
 #[derive(Copy, Clone)]
 pub struct InternString(&'static str);
@@ -777,15 +777,15 @@ impl InternString {
         if let Some(interned) = STRING_INTERN_TABLE.read().unwrap().get(input) {
             return *interned;
         }
-        STRING_INTERN_TABLE
-            .write()
-            .unwrap()
-            .entry(input.to_string())
-            .or_insert_with(|| {
-                let pointer: Box<str> = Box::from(input);
-                InternString(Box::leak(pointer))
-            })
-            .clone()
+        let mut table = STRING_INTERN_TABLE.write().unwrap();
+        //todo: maybe use hashbrown's entry_ref?
+        if let Some(interned) = table.get(input) {
+            return *interned;
+        }
+        let pointer: Box<str> = Box::from(input);
+        let interned = InternString(Box::leak(pointer));
+        table.insert(interned.as_str(), interned);
+        interned
     }
     pub fn as_str(&self) -> &'static str {
         self.0
