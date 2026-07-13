@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
@@ -1064,6 +1065,12 @@ pub struct TextureData {
     pub texture: Arc<DynamicImage>,
     pub color_mask: Option<Arc<DynamicImage>>,
     pub emissive: Option<Arc<DynamicImage>>,
+    pub animation: Option<TextureAnimationData>,
+}
+#[derive(Clone, Deserialize)]
+pub struct TextureAnimationData {
+    pub succesive_frames: Vec<TextureKey>,
+    pub frame_time: f32,
 }
 pub type TextureKey = Key<TextureData>;
 impl RegistryConfigLoadable for TextureData {
@@ -1092,10 +1099,14 @@ impl RegistryConfigLoadable for TextureData {
                 _ => panic!(),
             }
         }
-        let texture = load_image(config.last().unwrap(), LoadTextureType::Texture)?;
+        let path = config
+            .iter()
+            .find(|p| p.extension() != Some(OsStr::new("anim")))
+            .unwrap();
+        let texture = load_image(path, LoadTextureType::Texture)?;
         let mut material = HashMap::new();
         for texture_type in [LoadTextureType::ColorMask, LoadTextureType::Emissive] {
-            let mut path_search = config.last().unwrap().clone();
+            let mut path_search = path.clone();
             path_search.set_extension(match texture_type {
                 LoadTextureType::Texture => unreachable!(),
                 LoadTextureType::ColorMask => "color_mask",
@@ -1126,10 +1137,25 @@ impl RegistryConfigLoadable for TextureData {
             }
             material.insert(texture_type, loaded_texture);
         }
+        let animation = {
+            let mut anim_path = path.clone();
+            anim_path.set_extension("anim");
+            if anim_path.exists() {
+                Some(
+                    ron::from_str::<TextureAnimationData>(
+                        std::fs::read_to_string(anim_path).unwrap().as_str(),
+                    )
+                    .map_err(|error| anyhow!("anim {:?}", error))?,
+                )
+            } else {
+                None
+            }
+        };
         let texture_data = TextureData {
             texture,
             color_mask: material.remove(&LoadTextureType::ColorMask),
             emissive: material.remove(&LoadTextureType::Emissive),
+            animation,
         };
         image_cache().insert(key, texture_data.clone());
         Ok(texture_data)

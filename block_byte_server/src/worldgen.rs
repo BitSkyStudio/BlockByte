@@ -676,30 +676,15 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
     let mut rng =
         Xoshiro256PlusPlus::from_seed(Seeder::from((generator.seed as u32, position)).make_seed());
     for z in 0..CHUNK_SIZE as u8 {
-        for y in 0..CHUNK_SIZE as u8 {
-            for x in 0..CHUNK_SIZE as u8 {
+        for x in 0..CHUNK_SIZE as u8 {
+            let biome = column_data.biomes[x as usize][z as usize].data();
+            let height = column_data.height[x as usize][z as usize] as i32;
+            if position.y as i32 * CHUNK_SIZE as i32 > height {
+                continue;
+            }
+            for y in 0..CHUNK_SIZE as u8 {
                 let offset = ChunkOffset::new(x, y, z);
                 let y_pos = y as i32 + position.y as i32 * CHUNK_SIZE as i32;
-                let biome = column_data.biomes[x as usize][z as usize].data();
-                let height = column_data.height[x as usize][z as usize] as i32;
-                /*let holes = hole_spline.clamped_sample(height as f32).unwrap();
-                let density = density_noise.get([
-                    (position.x as f64 * CHUNK_SIZE as f64 + x as f64) / 10.,
-                    (position.y as f64 * CHUNK_SIZE as f64 + y as f64) / 10.,
-                    (position.z as f64 * CHUNK_SIZE as f64 + z as f64) / 10.,
-                ]) as f32
-                    * holes
-                    + (height - y_pos) as f32 / 20.;
-                if density > 0. {
-                    blocks.set(
-                        offset.index(),
-                        &BlockEntry {
-                            block: biome.bottom_block,
-                            color: Color::WHITE,
-                            rotation: BlockRotation::default(),
-                        },
-                    );
-                }*/
                 if y_pos == height {
                     chunk
                         .blocks

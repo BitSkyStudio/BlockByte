@@ -1,3 +1,7 @@
+#include common
+#include shadow_sample
+#include texture_animation
+
 @group(1) @binding(0)
 var<uniform> camera: CameraUniform;
 
@@ -62,10 +66,14 @@ var shadow_texture: texture_depth_2d;
 @group(3)@binding(1)
 var shadow_sampler: sampler;
 
+@group(6) @binding(0)
+var<storage, read> animation_data: AnimationData;
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let material = textureSample(material_texture, material_sampler, in.tex_coords);
-    let sampled_color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let tex_coords = animate_texture(in.tex_coords);
+    let material = textureSample(material_texture, material_sampler, tex_coords);
+    let sampled_color: vec4<f32> = textureSample(t_diffuse, s_diffuse, tex_coords);
     if sampled_color.w < 0.1{
         discard;
     }

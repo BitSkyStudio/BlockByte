@@ -1,3 +1,5 @@
+#include common
+
 @group(1) @binding(0)
 var<uniform> shadow_camera: CameraUniform;
 

@@ -1,0 +1,4 @@
+(
+    frame_time: 1.5,
+    succesive_frames: ["wood.§%{woodType}.bark2!"]
+)

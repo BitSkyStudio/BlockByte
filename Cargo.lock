@@ -228,6 +228,7 @@ dependencies = [
  "bytemuck",
  "cgmath",
  "image",
+ "include_dir",
  "lz4_flex",
  "parking_lot",
  "pollster",
@@ -1052,6 +1053,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa2ee9e6a6111d7b7737ab2d122323b37651582d046cc0bffdbf65ee7ce38758"
 dependencies = [
  "image",
+]
+
+[[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]

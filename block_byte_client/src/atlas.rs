@@ -29,8 +29,8 @@ use block_byte_common::{
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key, KeyGroup,
-        ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData, TextureKey,
-        ToolData, TranslationLanguageData, air_block, load_registries,
+        ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureAnimationData,
+        TextureData, TextureKey, ToolData, TranslationLanguageData, air_block, load_registries,
     },
     rotation::BlockRotation,
     ui::{PropertyMap, SlotId},
@@ -79,8 +79,18 @@ pub struct TextureAtlas {
     pub text_renderer: TextRenderer,
     pub texture_mips: Vec<RgbaImage>,
     pub texture_material: RgbaImage,
+    pub animation_data: Vec<AnimatedCell>,
 }
 
+#[derive(bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AnimatedCell {
+    pub time: f32,
+    pub shift: f32,
+    pub frames: u32,
+}
+const TEXTURE_CELL_SIZE: u32 = 16;
 impl TextureAtlas {
     pub fn pack() -> Self {
         #[derive(Hash, PartialEq, Eq, Clone, Copy)]
@@ -90,6 +100,15 @@ impl TextureAtlas {
             Glyph(usize),
         }
         let texture_dimensions = 2048;
+        let mut animation_data = Vec::new();
+        animation_data.resize_with(
+            (texture_dimensions / TEXTURE_CELL_SIZE).pow(2) as usize,
+            || AnimatedCell {
+                frames: 1,
+                time: 1.,
+                shift: 0.,
+            },
+        );
         let mut packer =
             texture_packer::TexturePacker::new_skyline(texture_packer::TexturePackerConfig {
                 max_width: texture_dimensions,
@@ -103,7 +122,7 @@ impl TextureAtlas {
                 force_max_dimensions: true,
             });
         fn get_nearest_texture_multiple(size: u32) -> u32 {
-            let mut current = 16;
+            let mut current = TEXTURE_CELL_SIZE;
             loop {
                 if size <= current {
                     return current;
@@ -119,26 +138,50 @@ impl TextureAtlas {
             height_multiple: f32,
         }
         let mut textures = HashMap::new();
-        let mut add_texture = |key: TextureAtlasKey, image: &DynamicImage| {
-            let new_width = get_nearest_texture_multiple(image.width());
-            let new_height = get_nearest_texture_multiple(image.height());
-            let mut new_image = DynamicImage::new_rgba8(new_width, new_height);
-            new_image.copy_from(image, 0, 0).unwrap();
-            textures.insert(
-                key,
-                TextureAtlasEntry {
-                    width_multiple: image.width() as f32 / new_width as f32,
-                    height_multiple: image.height() as f32 / new_height as f32,
-                },
-            );
-            packer.pack_own(key, new_image);
-        };
+        let mut add_texture =
+            |key: TextureAtlasKey,
+             image: &DynamicImage,
+             animation: Option<&TextureAnimationData>| {
+                let succesive_frame_count = animation
+                    .map(|animation| animation.succesive_frames.len())
+                    .unwrap_or(0) as u32;
+                let base_width = get_nearest_texture_multiple(image.width());
+                let new_width = base_width * (1 + succesive_frame_count);
+                let new_height = get_nearest_texture_multiple(image.height());
+                let mut new_image = DynamicImage::new_rgba8(new_width, new_height);
+                new_image.copy_from(image, 0, 0).unwrap();
+                if let Some(animation) = animation {
+                    for (i, frame) in animation.succesive_frames.iter().enumerate() {
+                        let frame = frame.data();
+                        if frame.texture.width() != image.width()
+                            || frame.texture.height() != image.height()
+                        {
+                            panic!("animated texture could load, as w or h doesnt match");
+                        }
+                        new_image
+                            .copy_from(&*frame.texture, ((i as u32 + 1) * base_width), 0)
+                            .unwrap();
+                    }
+                }
+                textures.insert(
+                    key,
+                    TextureAtlasEntry {
+                        width_multiple: image.width() as f32 / new_width as f32,
+                        height_multiple: image.height() as f32 / new_height as f32,
+                    },
+                );
+                packer.pack_own(key, new_image);
+            };
         for (i, texture) in TextureKey::entries().enumerate() {
             if texture.text_id().ends_with("!") {
                 continue;
             }
             let texture = texture.data();
-            add_texture(TextureAtlasKey::Texture(i), &*texture.texture);
+            add_texture(
+                TextureAtlasKey::Texture(i),
+                &*texture.texture,
+                texture.animation.as_ref(),
+            );
         }
         for (i, model) in ModelKey::entries().enumerate() {
             let model = model.data();
@@ -154,7 +197,7 @@ impl TextureAtlas {
                         )
                         .unwrap();
 
-                        add_texture(TextureAtlasKey::Model(i, j), &image);
+                        add_texture(TextureAtlasKey::Model(i, j), &image, None);
                     }
                     _ => {}
                 }
@@ -180,7 +223,7 @@ impl TextureAtlas {
                     g.draw(|x, y, v| {
                         font_buffer.put_pixel(x, y, image::Rgba([255, 255, 255, (255. * v) as u8]));
                     });
-                    add_texture(TextureAtlasKey::Glyph(i), &font_texture);
+                    add_texture(TextureAtlasKey::Glyph(i), &font_texture, None);
                 }
             }
         }
@@ -241,19 +284,49 @@ impl TextureAtlas {
         for texture in TextureKey::entries() {
             let texture_data = texture.data();
             if let Some(tex_coords) = get_texture(TextureAtlasKey::Texture(texture.numeric_id())) {
-                let [color_mask, emissive] = [
-                    texture_data.color_mask.as_ref(),
-                    texture_data.emissive.as_ref(),
-                ]
-                .map(|t| t.map(|t| t.grayscale().into_luma8()));
-                let start_x = (tex_coords.u1 * texture_dimensions as f32) as u32;
-                let start_y = (tex_coords.v1 * texture_dimensions as f32) as u32;
-                for x in 0..texture_data.texture.width() {
-                    for y in 0..texture_data.texture.height() {
-                        let [color_mask, emissive] = [color_mask.as_ref(), emissive.as_ref()]
-                            .map(|t| t.map(|t| t.get_pixel(x, y).0[0]).unwrap_or(0));
-                        material_texture.get_pixel_mut(start_x + x, start_y + y).0 =
-                            [color_mask, emissive, 0, 0];
+                let mut add_material_texture =
+                    |tex_coords: TexCoords, texture_data: &TextureData| {
+                        let [color_mask, emissive] = [
+                            texture_data.color_mask.as_ref(),
+                            texture_data.emissive.as_ref(),
+                        ]
+                        .map(|t| t.map(|t| t.grayscale().into_luma8()));
+                        let start_x = (tex_coords.u1 * texture_dimensions as f32) as u32;
+                        let start_y = (tex_coords.v1 * texture_dimensions as f32) as u32;
+                        for x in 0..texture_data.texture.width() {
+                            for y in 0..texture_data.texture.height() {
+                                let [color_mask, emissive] =
+                                    [color_mask.as_ref(), emissive.as_ref()]
+                                        .map(|t| t.map(|t| t.get_pixel(x, y).0[0]).unwrap_or(0));
+                                material_texture.get_pixel_mut(start_x + x, start_y + y).0 =
+                                    [color_mask, emissive, 0, 0];
+                            }
+                        }
+                    };
+                add_material_texture(tex_coords, texture_data);
+                if let Some(animation) = &texture_data.animation {
+                    let cell_x =
+                        (tex_coords.u1 * texture_dimensions as f32) as u32 / TEXTURE_CELL_SIZE;
+                    let cell_y =
+                        (tex_coords.v1 * texture_dimensions as f32) as u32 / TEXTURE_CELL_SIZE;
+                    animation_data
+                        [(cell_x + cell_y * (texture_dimensions / TEXTURE_CELL_SIZE)) as usize] =
+                        AnimatedCell {
+                            frames: 1 + animation.succesive_frames.len() as u32,
+                            time: animation.frame_time,
+                            shift: tex_coords.u2 - tex_coords.u1, //todo: this is not correct, should be rounded up to cell size
+                        };
+                    for (i, frame) in animation.succesive_frames.iter().enumerate() {
+                        let shift = (tex_coords.u2 - tex_coords.u1) * (1 + i) as f32;
+                        add_material_texture(
+                            TexCoords {
+                                u1: tex_coords.u1 + shift,
+                                v1: tex_coords.v1,
+                                u2: tex_coords.u2 + shift,
+                                v2: tex_coords.v2,
+                            },
+                            frame.data(),
+                        );
                     }
                 }
             }
@@ -291,6 +364,7 @@ impl TextureAtlas {
             },
             texture_material: material_texture,
             texture_mips: texture_atlas_mips,
+            animation_data,
         }
     }
 }

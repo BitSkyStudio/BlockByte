@@ -54,9 +54,9 @@ fn main() {
     .num_threads(8)
     .build_global()
     .unwrap();*/
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
-        .build_global();
+    /*rayon::ThreadPoolBuilder::new()
+    .num_threads(4)
+    .build_global();*/
     let mut memorydb = false;
     let mut is_design_server = false;
     if let Some(arg) = args().nth(1) {
@@ -172,6 +172,16 @@ fn main() {
     .unwrap();
     let mut world_generator = WorldGenerator::new(world_generator_config, 1);
     world_generator.design_world = is_design_server;
+    if !is_design_server {
+        (0..4)
+            .par_bridge()
+            .map(|i| {
+                let x = i % 2;
+                let z = i / 2;
+                world_generator.get_region_generation(x - 1, z - 1);
+            })
+            .count();
+    }
     let mut server = Server {
         ticks_passed: 0,
         chunks: ahash::HashMap::default(),

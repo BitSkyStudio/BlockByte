@@ -1,3 +1,5 @@
+#include common
+
 @group(1) @binding(0) // 1.
 var<uniform> camera: CameraUniform;
 

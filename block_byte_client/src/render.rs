@@ -71,6 +71,7 @@ pub struct RenderState {
     gui_gpu_mesh: GPUMesh,
     pub animation_time: f32,
     pub staging_belt: StagingBelt,
+    animation_data_uniform: GPUUniform<()>,
 }
 
 pub enum SurfaceError {
@@ -163,11 +164,35 @@ impl RenderState {
         );
         skybox_texture.write_image(&skybox, 0, &queue);
 
-        let camera_uniform = GPUUniform::new(&device);
-        let gui_camera_uniform = GPUUniform::new(&device);
-        let texel_size_uniform = GPUUniform::new(&device);
-        let shadow_camera = GPUUniform::new(&device);
-        let time_uniform = GPUUniform::new(&device);
+        let animation_data_buffer = device.create_buffer(&BufferDescriptor {
+            label: None,
+            mapped_at_creation: false,
+            size: 4 * 2 + std::mem::size_of::<AnimatedCell>() as u64 * (2048u64 / 16).pow(2),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        queue.write_buffer(
+            &animation_data_buffer,
+            0,
+            bytemuck::cast_slice(std::slice::from_ref(&(16_f32 / 2048_f32))),
+        );
+        queue.write_buffer(
+            &animation_data_buffer,
+            4,
+            bytemuck::cast_slice(std::slice::from_ref(&128_u32)),
+        );
+        queue.write_buffer(
+            &animation_data_buffer,
+            8,
+            bytemuck::cast_slice(TEXTURE_ATLAS.get().unwrap().animation_data.as_slice()),
+        );
+        let animation_data_uniform =
+            GPUUniform::new_with_buffer(&device, true, animation_data_buffer);
+
+        let camera_uniform = GPUUniform::new(&device, false);
+        let gui_camera_uniform = GPUUniform::new(&device, false);
+        let texel_size_uniform = GPUUniform::new(&device, false);
+        let shadow_camera = GPUUniform::new(&device, false);
+        let time_uniform = GPUUniform::new(&device, false);
         texel_size_uniform.write(&queue, &[1. / size.width as f32, 1. / size.height as f32]);
         let depth_texture = GPUTexture::new(
             &device,
@@ -197,19 +222,17 @@ impl RenderState {
             TextureFormat::Depth32Float,
             wgpu::FilterMode::Linear,
         );
-        let shadow_common_shader = include_str!("shaders/shadow_sample.wgsl");
         let base_render_pipeline = GPURenderPipeline::new::<Vertex>(
             &device,
-            format!(
-                "{}\n{}",
-                shadow_common_shader,
-                include_str!("shaders/base.wgsl")
-            ),
+            "base",
             &[
                 Some(&texture_atlas.bind_group_layout),
                 Some(&camera_uniform.bind_group_layout),
                 Some(&shadow_camera.bind_group_layout),
                 Some(&shadow_texture.bind_group_layout),
+                Some(&time_uniform.bind_group_layout),
+                Some(&material_texture.bind_group_layout),
+                Some(&animation_data_uniform.bind_group_layout),
             ],
             Some(BlendState::ALPHA_BLENDING),
             Some(wgpu::Face::Back),
@@ -219,11 +242,7 @@ impl RenderState {
 
         let chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex>(
             &device,
-            format!(
-                "{}\n{}",
-                shadow_common_shader,
-                include_str!("shaders/chunk.wgsl")
-            ),
+            "chunk",
             &[
                 Some(&texture_atlas.bind_group_layout),
                 Some(&camera_uniform.bind_group_layout),
@@ -231,6 +250,7 @@ impl RenderState {
                 Some(&shadow_texture.bind_group_layout),
                 Some(&time_uniform.bind_group_layout),
                 Some(&material_texture.bind_group_layout),
+                Some(&animation_data_uniform.bind_group_layout),
             ],
             Some(BlendState::REPLACE),
             Some(wgpu::Face::Back),
@@ -240,7 +260,7 @@ impl RenderState {
 
         let gui_render_pipeline = GPURenderPipeline::new::<GUIVertex>(
             &device,
-            include_str!("shaders/gui.wgsl").to_string(),
+            "gui",
             &[
                 Some(&texture_atlas.bind_group_layout),
                 Some(&gui_camera_uniform.bind_group_layout),
@@ -253,7 +273,7 @@ impl RenderState {
 
         let damage_render_pipeline = GPURenderPipeline::new::<DamageVertex>(
             &device,
-            include_str!("shaders/damage.wgsl").to_string(),
+            "damage",
             &[Some(&camera_uniform.bind_group_layout)],
             Some(BlendState::ALPHA_BLENDING),
             Some(wgpu::Face::Back),
@@ -263,7 +283,7 @@ impl RenderState {
 
         let skybox_render_pipeline = GPURenderPipeline::new::<Vertex>(
             &device,
-            include_str!("shaders/skybox.wgsl").to_string(),
+            "skybox",
             &[
                 Some(&skybox_texture.bind_group_layout),
                 Some(&camera_uniform.bind_group_layout),
@@ -276,7 +296,7 @@ impl RenderState {
 
         let blur_render_pipeline = GPURenderPipeline::new::<()>(
             &device,
-            include_str!("shaders/blur.wgsl").to_string(),
+            "blur",
             &[
                 Some(&hdr_texture.bind_group_layout),
                 Some(&texel_size_uniform.bind_group_layout),
@@ -289,7 +309,7 @@ impl RenderState {
 
         let hdr_render_pipeline = GPURenderPipeline::new::<()>(
             &device,
-            include_str!("shaders/postprocess.wgsl").to_string(),
+            "postprocess",
             &[
                 Some(&hdr_texture.bind_group_layout),
                 Some(&blur_texture.bind_group_layout),
@@ -301,7 +321,7 @@ impl RenderState {
         );
         let shadow_chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex>(
             &device,
-            include_str!("shaders/chunk_shadow.wgsl").to_string(),
+            "chunk_shadow",
             &[
                 Some(&texture_atlas.bind_group_layout),
                 Some(&shadow_camera.bind_group_layout),
@@ -315,7 +335,7 @@ impl RenderState {
 
         let shadow_base_render_pipeline = GPURenderPipeline::new::<Vertex>(
             &device,
-            include_str!("shaders/base_shadow.wgsl").to_string(),
+            "base_shadow",
             &[
                 Some(&texture_atlas.bind_group_layout),
                 Some(&camera_uniform.bind_group_layout),
@@ -394,6 +414,7 @@ impl RenderState {
             gui_gpu_mesh: GPUMesh::empty(),
             viewmodel_gpu_mesh: GPUMesh::empty(),
             local_player_gpu_mesh: GPUMesh::empty(),
+            animation_data_uniform,
         }
     }
 
@@ -684,6 +705,7 @@ impl RenderState {
             render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
             render_pass.set_bind_group(4, &self.time_uniform.bind_group, &[]);
             render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
+            render_pass.set_bind_group(6, &self.animation_data_uniform.bind_group, &[]);
 
             render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
             for (chunk_position, chunk) in &game.chunks {
@@ -761,6 +783,9 @@ impl RenderState {
             render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
             render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
             render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
+            render_pass.set_bind_group(4, &self.time_uniform.bind_group, &[]);
+            render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
+            render_pass.set_bind_group(6, &self.animation_data_uniform.bind_group, &[]);
 
             self.viewmodel_gpu_mesh.draw(&mut render_pass);
         }
@@ -951,6 +976,28 @@ pub struct ChunkVertex {
     pub color: u16,
     pub shade: u8,
     pub flags: u8,
+}
+
+static SHADER_DIR: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/shaders");
+pub fn load_shader_source(shader: &str) -> String {
+    let content = SHADER_DIR
+        .get_file(format!("{}.wgsl", shader))
+        .unwrap()
+        .contents_utf8()
+        .unwrap();
+    content
+        .lines()
+        .map(|line| {
+            let include_string = "#include ";
+            if line.starts_with(include_string) {
+                load_shader_source(&line[include_string.len()..])
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 trait VertexDescription {
@@ -1146,7 +1193,7 @@ use std::path::Path;
 use texture_packer::exporter::ImageExporter;
 use texture_packer::importer::ImageImporter;
 
-use crate::atlas::{TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
+use crate::atlas::{AnimatedCell, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
 use crate::game::clipping::Frustum;
 use crate::game::{ClientGame, ClientPlayer, ModifiedChunkEntry, profiler};
 use crate::ui::{ScreenData, UIPos, UIRect, render_screen, text_renderer};
@@ -1888,19 +1935,30 @@ pub struct GPUUniform<T: Pod + NoUninit> {
     _pd: PhantomData<T>,
 }
 impl<T: Pod + NoUninit> GPUUniform<T> {
-    pub fn new(device: &Device) -> GPUUniform<T> {
+    pub fn new(device: &Device, storage: bool) -> GPUUniform<T> {
         let buffer = device.create_buffer(&BufferDescriptor {
             label: None,
             mapped_at_creation: false,
             size: std::mem::size_of::<T>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: if storage {
+                wgpu::BufferUsages::STORAGE
+            } else {
+                wgpu::BufferUsages::UNIFORM
+            } | wgpu::BufferUsages::COPY_DST,
         });
+        Self::new_with_buffer(device, storage, buffer)
+    }
+    pub fn new_with_buffer(device: &Device, storage: bool, buffer: Buffer) -> GPUUniform<T> {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                    ty: if storage {
+                        wgpu::BufferBindingType::Storage { read_only: true }
+                    } else {
+                        wgpu::BufferBindingType::Uniform
+                    },
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -1935,10 +1993,9 @@ pub struct GPURenderPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
 }
 impl GPURenderPipeline {
-    const COMMON_SHADER: &'static str = include_str!("shaders/common.wgsl");
     pub fn new<T: VertexDescription>(
         device: &Device,
-        shader_source: String,
+        shader: &str,
         bind_group_layouts: &[Option<&BindGroupLayout>],
         alpha_blending: Option<wgpu::BlendState>,
         face_cull: Option<wgpu::Face>,
@@ -1946,10 +2003,8 @@ impl GPURenderPipeline {
         depth_format: Option<wgpu::TextureFormat>,
     ) -> GPURenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(
-                format!("{}\n{}", Self::COMMON_SHADER, shader_source).into(),
-            ),
+            label: Some(shader),
+            source: wgpu::ShaderSource::Wgsl(load_shader_source(shader).into()),
         });
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1967,7 +2022,7 @@ impl GPURenderPipeline {
             None => None,
         };
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
+            label: Some(std::any::type_name::<T>()),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
