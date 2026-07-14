@@ -16,9 +16,9 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
-        self, BlockColor, BlockEntry, BlockInteractAction, BlockKey, EntityInteractAction,
-        EntityKey, ItemAction, ItemKey, KeyGroup, PrefabBlockEntry, PrefabData, PrefabKey,
-        air_block, load_registries,
+        self, BlockColor, BlockEntry, BlockInteractAction, EntityInteractAction, EntityKey,
+        ItemAction, ItemKey, KeyGroup, PrefabBlockEntry, PrefabData, PrefabKey, air_block,
+        load_registries,
     },
     rotation::BlockRotation,
     time_to_ticks,
@@ -43,7 +43,6 @@ use crate::{
     worldgen::{WorldGenerator, generate_chunk},
 };
 
-mod debug;
 mod inventory;
 mod world;
 mod worldgen;
@@ -60,11 +59,7 @@ fn main() {
     let mut memorydb = false;
     let mut is_design_server = false;
     if let Some(arg) = args().nth(1) {
-        let mut start = false;
         match arg.as_str() {
-            "worldgen_vis" => {
-                debug::visualise();
-            }
             "test_ticklist" => {
                 let mut tl = BlockTickList::default();
                 tl.set_ticking(3, true);
@@ -81,33 +76,14 @@ fn main() {
                 }
                 return;
             }
-            "tree" => {
-                let base = "wood.oak";
-                let load_block =
-                    |btype: &str| BlockKey::id(format!("{}.{}", base, btype).as_str()).unwrap();
-                let structure = debug::generate_tree(
-                    load_block("log"),
-                    load_block("slab"),
-                    load_block("branch"),
-                    load_block("leaves"),
-                );
-                println!("{}", ron::to_string(&structure).unwrap());
-            }
             "memorydb" => {
-                start = true;
                 memorydb = true;
             }
             "design" => {
-                start = true;
                 memorydb = true;
                 is_design_server = true;
             }
-            _ => {
-                start = true;
-            }
-        }
-        if !start {
-            return;
+            _ => {}
         }
     }
     let mut network_server = RenetServer::new(make_connection_config());
@@ -132,7 +108,7 @@ fn main() {
         rusqlite::Connection::open(database_path).unwrap()
     };
     {
-        database.execute(
+        let _ = database.execute(
             "CREATE TABLE `chunks` (
             `x` INTEGER, `y` INTEGER, `z` INTEGER,
             `data` BLOB NOT NULL,
@@ -961,7 +937,7 @@ impl User {
                                 .as_ref()
                                 .unwrap();
                             machine.modify_property(machine_data, &property, *value, *mode);
-                            world.wakeup_component::<BlockMachine>(position);
+                            world.wakeup_component::<BlockMachine>(position).unwrap();
                         }
                     }
                 }
@@ -1047,7 +1023,7 @@ impl User {
                     throw_velocity.y = 0.1;
                     item_entity.character_controller.velocity = throw_velocity;
                     item_entity.inventory.items[0] = Some(drop_item);
-                    world.spawn_entity(item_entity);
+                    world.spawn_entity(item_entity).unwrap();
                 }
                 NetworkMessageC2S::MoveItem { from, to, mode } => {
                     if from == to {
@@ -1337,7 +1313,7 @@ impl User {
                                         value,
                                         modify_mode,
                                     );
-                                    world.wakeup_component::<BlockMachine>(*position);
+                                    world.wakeup_component::<BlockMachine>(*position).unwrap();
                                 }
                             }
                         }

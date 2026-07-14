@@ -1,7 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use anyhow::anyhow;
@@ -72,7 +72,7 @@ pub enum UIElementType {
     },
 }
 impl UIElementType {
-    pub fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
+    fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
         Ok(match node.tag_name().name() {
             "box" => UIElementType::Box(
                 node.children()
@@ -164,7 +164,7 @@ pub struct UIElement {
     pub uuid: Uuid,
 }
 impl UIElement {
-    pub fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
+    fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
         Ok(UIElement {
             element_type: UIElementType::parse(node, context)?,
             style: match node.attribute("style") {

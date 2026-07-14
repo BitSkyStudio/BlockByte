@@ -1,38 +1,25 @@
-use block_byte_common::coord::{AABB, BlockPos, CHUNK_SIZE, ChunkPos, Face, Pos, Vec3};
-use block_byte_common::model::{DrawAnimation, ModelGeometry, ModelTexture, ModelVertex};
+use block_byte_common::coord::{AABB, BlockPos, CHUNK_SIZE, ChunkPos, Face, Pos};
+use block_byte_common::model::{DrawAnimation, ModelGeometry, ModelTexture};
 use block_byte_common::registry::{
-    BlockColor, BlockData, BlockKey, BlockRenderData, EntityData, ItemKey, ItemModel, Key,
-    ModelData, ModelInstance, ModelKey, TextureData, TextureKey,
+    BlockColor, BlockData, BlockKey, BlockRenderData, EntityData, ItemModel, ModelInstance,
 };
 use block_byte_common::rotation::BlockRotation;
-use block_byte_common::ui::UIScreen;
-use block_byte_common::{ClientItem, Color, TexCoords};
+use block_byte_common::{Color, TexCoords};
 use bytemuck::{NoUninit, Pod};
 use cgmath::{
-    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Rad, SquareMatrix, Transform, Vector3,
+    InnerSpace, Matrix4, Point3, SquareMatrix, Transform, Vector3,
 };
 use image::RgbaImage;
-use rand::rngs::StdRng;
-use rand_seeder::Seeder;
 use std::borrow::Cow;
-use std::f64::consts::PI;
 use std::iter;
 use std::marker::PhantomData;
-use std::mem::size_of;
 use std::ptr::NonNull;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
-use wgpu::util::{BufferInitDescriptor, DeviceExt, StagingBelt};
+use wgpu::util::StagingBelt;
 use wgpu::{
-    BackendOptions, BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferSize,
-    BufferUsages, CommandEncoder, CompareFunction, Device, FilterMode, IndexFormat, InstanceFlags,
-    LoadOp, MemoryBudgetThresholds, Queue, RenderPass, Sampler, TextureFormat, TextureView, hal,
+    BackendOptions, BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferSize, CommandEncoder, CompareFunction, Device, FilterMode, IndexFormat, InstanceFlags, MemoryBudgetThresholds, Queue, RenderPass, Sampler, TextureFormat, TextureView,
 };
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::MouseButton;
-use winit::keyboard::KeyCode;
+use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 pub struct RenderState {
@@ -1000,7 +987,7 @@ pub fn load_shader_source(shader: &str) -> String {
         .join("\n")
 }
 
-trait VertexDescription {
+pub trait VertexDescription {
     fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>>;
 }
 
@@ -1187,16 +1174,11 @@ impl CameraUniform {
         0.0, 0.0, 0.0, 1.0,
     );
 }
-use image::{DynamicImage, Rgba};
-use std::collections::HashMap;
-use std::path::Path;
-use texture_packer::exporter::ImageExporter;
-use texture_packer::importer::ImageImporter;
 
 use crate::atlas::{AnimatedCell, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
 use crate::game::clipping::Frustum;
 use crate::game::{ClientGame, ClientPlayer, ModifiedChunkEntry, profiler};
-use crate::ui::{ScreenData, UIPos, UIRect, render_screen, text_renderer};
+use crate::ui::{UIPos, UIRect};
 
 pub struct GPUTexture {
     pub texture: wgpu::Texture,
@@ -1444,7 +1426,7 @@ pub fn draw_model<C: MeshVertexConsumer>(
                     uv: texture.map(vertex.uv),
                 }));
             }
-            ModelGeometry::Triangle(vertices, texture) => todo!(),
+            ModelGeometry::Triangle(_vertices, _texture) => todo!(),
         },
         |matrix, binding| {
             item_models.push((matrix, binding.to_string()));
@@ -1455,7 +1437,7 @@ pub fn draw_model<C: MeshVertexConsumer>(
             let anchor = match &*model {
                 ItemModel::Block(block) => match &block.data().render_data {
                     BlockRenderData::Air => Matrix4::identity(),
-                    BlockRenderData::Full { faces, .. } => Matrix4::identity(),
+                    BlockRenderData::Full { .. } => Matrix4::identity(),
                     BlockRenderData::Model { model: key, .. } => key
                         .model
                         .data()
@@ -1550,7 +1532,7 @@ pub struct GPUMesh {
     pub buffer: Option<Buffer>,
     pub render_data: Option<GPUMeshRenderData>,
 }
-struct GPUMeshRenderData {
+pub struct GPUMeshRenderData {
     pub vertex_length: u64,
     pub index_count: u32,
     pub index_format: IndexFormat,
@@ -1610,11 +1592,10 @@ impl GPUMesh {
                     );
                     match index_format {
                         IndexFormat::Uint16 => {
-                            let mut mapped_indices_u16: &mut [u16] =
-                                bytemuck::cast_slice_mut(unsafe {
-                                    mapped_indices.as_raw_ptr().as_ptr().as_mut().unwrap()
-                                        as &mut [u8]
-                                });
+                            let mapped_indices_u16: &mut [u16] = bytemuck::cast_slice_mut(unsafe {
+                                mapped_indices.as_raw_ptr().as_ptr().as_mut().unwrap()
+                                    as &mut [u8]
+                            });
                             for i in 0..mesh.indices.len() {
                                 mapped_indices_u16[i] = mesh.indices[i] as u16;
                             }
@@ -1669,7 +1650,7 @@ impl GPUMesh {
         match index_format {
             IndexFormat::Uint16 => {
                 let mut buffer_slice = buffer_view.slice(vertex_buffer_size..);
-                let mut buffer_slice = unsafe {
+                let buffer_slice = unsafe {
                     wgpu::WriteOnly::new(NonNull::slice_from_raw_parts(
                         buffer_slice.as_raw_ptr().cast::<u16>(),
                         buffer_slice.len() / 2,
@@ -1771,7 +1752,7 @@ pub struct MeshVertex {
 }
 pub type BaseMesh = Mesh<Vertex>;
 impl BaseMesh {
-    pub fn consumer(&mut self, color: Color) -> BaseMeshVertexConsumer {
+    pub fn consumer<'a>(&'a mut self, color: Color) -> BaseMeshVertexConsumer<'a> {
         BaseMeshVertexConsumer { mesh: self, color }
     }
 }
@@ -1794,7 +1775,11 @@ impl MeshVertexConsumer for BaseMeshVertexConsumer<'_> {
 }
 pub type ChunkMesh = Mesh<ChunkVertex>;
 impl ChunkMesh {
-    pub fn consumer(&mut self, block_color: BlockColor, flags: u8) -> ChunkMeshVertexConsumer {
+    pub fn consumer<'a>(
+        &'a mut self,
+        block_color: BlockColor,
+        flags: u8,
+    ) -> ChunkMeshVertexConsumer<'a> {
         ChunkMeshVertexConsumer {
             mesh: self,
             block_color,
@@ -1831,7 +1816,7 @@ impl MeshVertexConsumer for ChunkMeshVertexConsumer<'_> {
 pub type GUIMesh = Mesh<GUIVertex>;
 pub type DamageMesh = Mesh<DamageVertex>;
 impl DamageMesh {
-    pub fn consumer(&mut self, progress: f32) -> DamageMeshVertexConsumer {
+    pub fn consumer<'a>(&'a mut self, progress: f32) -> DamageMeshVertexConsumer<'a> {
         DamageMeshVertexConsumer {
             mesh: self,
             progress,
@@ -1912,7 +1897,7 @@ impl GUIMesh {
             color,
         };
 
-        let mut start_index = self.vertices.len() as u32;
+        let start_index = self.vertices.len() as u32;
 
         self.add_vertex(a);
         self.add_vertex(b);

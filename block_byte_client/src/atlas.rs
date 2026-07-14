@@ -1,77 +1,15 @@
 use core::f32;
-use std::{
-    borrow::Cow,
-    cell::RefCell,
-    collections::{BinaryHeap, HashMap, HashSet},
-    fmt::format,
-    hash::{Hash, Hasher},
-    net::{SocketAddr, UdpSocket},
-    ops::ControlFlow,
-    path::Path,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU32, AtomicU64},
-    },
-    time::{Duration, Instant, SystemTime},
-    u32,
-};
+use std::{collections::HashMap, hash::Hash, path::Path, sync::OnceLock, u32};
 
-use ahash::{AHashMap, AHashSet};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityAction, EntityPose,
-    EntityStats, HitTimer, ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
     TexCoords,
-    coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
-    model::{DrawAnimation, LoopMode, ModelGeometry, ModelTexture},
-    net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
-    number_approach_smooth,
-    registry::{
-        self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
-        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key, KeyGroup,
-        ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureAnimationData,
-        TextureData, TextureKey, ToolData, TranslationLanguageData, air_block, load_registries,
-    },
-    rotation::BlockRotation,
-    ui::{PropertyMap, SlotId},
-    world::{self, ClientBlockComponentUpdate, ClientChunkBlockComponents},
+    model::ModelTexture,
+    registry::{KeyGroup, ModelKey, TextureAnimationData, TextureData, TextureKey},
 };
-use bytemuck::Pod;
-use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
 use image::{DynamicImage, GenericImage, RgbaImage};
-use parking_lot::{Mutex, RwLock};
-use rand::{Rng, rngs::StdRng};
-use rand_seeder::Seeder;
-use rayon::{
-    ThreadPoolBuilder,
-    iter::{IntoParallelIterator, ParallelIterator},
-};
-use renet::{ConnectionConfig, DefaultChannel, RenetClient};
-use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
-use smallvec::SmallVec;
-use uuid::Uuid;
-use wgpu::{
-    Buffer, CommandEncoder, Device, Queue,
-    util::{DeviceExt, StagingBelt},
-};
-use winit::{
-    application::ApplicationHandler,
-    dpi::PhysicalPosition,
-    event::{DeviceEvent, ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{Fullscreen, Window, WindowAttributes, WindowId},
-};
 
-use crate::{
-    game::{ClientConnection, ClientConnectionState, ClientGame, profiler},
-    render::{
-        BaseMesh, CameraUniform, ChunkMesh, ChunkVertex, DamageMesh, DamageVertex, GPUMesh,
-        GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, SurfaceError,
-        Vertex, draw_model, get_block_matrix, get_block_rotation_face_vertices,
-    },
-    ui::{ScreenData, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
-};
+use crate::ui::TextRenderer;
 
 pub struct TextureAtlas {
     textures: Vec<Option<TexCoords>>,
@@ -159,7 +97,7 @@ impl TextureAtlas {
                             panic!("animated texture could load, as w or h doesnt match");
                         }
                         new_image
-                            .copy_from(&*frame.texture, ((i as u32 + 1) * base_width), 0)
+                            .copy_from(&*frame.texture, (i as u32 + 1) * base_width, 0)
                             .unwrap();
                     }
                 }
@@ -170,7 +108,7 @@ impl TextureAtlas {
                         height_multiple: image.height() as f32 / new_height as f32,
                     },
                 );
-                packer.pack_own(key, new_image);
+                packer.pack_own(key, new_image).unwrap();
             };
         for (i, texture) in TextureKey::entries().enumerate() {
             if texture.text_id().ends_with("!") {
@@ -247,10 +185,10 @@ impl TextureAtlas {
         }
         let mut texture_atlas_mips = vec![exporter.to_rgba8()];
         for _ in 0..4 {
-            let mut last_level = texture_atlas_mips.last().unwrap();
+            let last_level = texture_atlas_mips.last().unwrap();
             let mut new_image =
                 DynamicImage::new_rgba8(last_level.width() / 2, last_level.height() / 2);
-            let mut image_buffer = new_image.as_mut_rgba8().unwrap();
+            let image_buffer = new_image.as_mut_rgba8().unwrap();
             for x in 0..image_buffer.width() {
                 for y in 0..image_buffer.height() {
                     let mut color_sums = [0.; 3];
@@ -265,7 +203,7 @@ impl TextureAtlas {
                             alpha_sum += alpha;
                         }
                     }
-                    let mut color_sums = color_sums.map(|c| (c / alpha_sum * 255.) as u8);
+                    let color_sums = color_sums.map(|c| (c / alpha_sum * 255.) as u8);
                     image_buffer.put_pixel(
                         x,
                         y,
@@ -400,5 +338,5 @@ impl TexCoordsIndexExt for KeyGroup<TextureData> {
 }
 pub fn init_texture_atlas() {
     let texture_atlas = TextureAtlas::pack();
-    TEXTURE_ATLAS.set(texture_atlas);
+    assert!(TEXTURE_ATLAS.set(texture_atlas).is_ok());
 }

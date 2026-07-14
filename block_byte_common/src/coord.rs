@@ -5,7 +5,7 @@ use std::{
 };
 
 use cgmath::{Matrix4, Point3, Transform, Vector3};
-use num_integer::{Integer, Roots};
+use num_integer::Integer;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::TexCoords;
@@ -90,7 +90,7 @@ impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Vec3<T> {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
 }
-trait Sqrtable {
+pub trait Sqrtable {
     fn square_root(self) -> f32;
 }
 impl Sqrtable for i32 {

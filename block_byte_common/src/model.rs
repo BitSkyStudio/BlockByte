@@ -1,6 +1,4 @@
-use cgmath::{
-    Deg, EuclideanSpace, Euler, InnerSpace, Matrix4, SquareMatrix, Vector3, VectorSpace, Zero,
-};
+use cgmath::{Deg, Euler, InnerSpace, Matrix4, SquareMatrix, Vector3, VectorSpace, Zero};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -95,6 +93,7 @@ struct BBGroup {
     uuid: String,
     name: String,
     origin: [f32; 3],
+    #[allow(unused)]
     children: Vec<String>,
 }
 
@@ -427,7 +426,7 @@ impl Model {
             .collect::<Vec<_>>();
         self.root_bone.anchor(name, matrix, &animations[..])
     }
-    pub fn from_bbmodel(bbmodel: BBModel) -> Model {
+    fn from_bbmodel(bbmodel: BBModel) -> Model {
         let element_map: HashMap<_, _> = bbmodel
             .elements
             .iter()

@@ -1,36 +1,25 @@
-use std::{cell::RefCell, collections::HashMap, sync::OnceLock, u32};
+use std::{collections::HashMap, u32};
 
 use block_byte_common::{
     ClientItem, Color, ItemMoveMode, TexCoords,
     coord::Pos,
-    net::{NetworkMessageC2S, PropertyModifyMode},
-    registry::{BlockRenderData, ItemKey, ItemModel, Key, RecipeKey, ResearchKey, TextureKey},
-    scripts::ScriptValue,
+    net::NetworkMessageC2S,
+    registry::{ItemKey, ItemModel},
     ui::{
-        CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, StyleLength, UIElement,
-        UIElementType, UIScreen, UIScreenKey, UIStyleRule,
+        CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, UIElement, UIElementType,
+        UIScreenKey, UIStyleRule,
     },
 };
-use cgmath::{Matrix4, SquareMatrix, Transform, Vector3};
-use taffy::{
-    AlignItems, AvailableSpace, Dimension, FlexDirection, JustifyContent, Layout, LengthPercentage,
-    LengthPercentageAuto, NodeId, Rect, Style, TaffyTree, prelude::TaffyZero,
-};
-use winit::{
-    dpi::{PhysicalPosition, PhysicalSize},
-    event::MouseButton,
-    keyboard::KeyCode,
-};
+use cgmath::{Matrix4, SquareMatrix};
+use taffy::{AvailableSpace, Dimension, NodeId, Style, TaffyTree};
+use winit::{dpi::PhysicalSize, event::MouseButton};
 
 use crate::{
-    ClientGame, GUIMesh, InputContainer, InputManager,
+    GUIMesh, InputManager,
     atlas::TEXTURE_ATLAS,
-    render::{CameraUniform, GUIVertex, MeshVertexConsumer, item_model_icon_view},
+    render::{GUIVertex, MeshVertexConsumer, item_model_icon_view},
 };
-use crate::{
-    atlas::{TexCoordsExt, TexCoordsIndexExt},
-    game::translate,
-};
+use crate::{atlas::TexCoordsExt, game::translate};
 
 pub struct ScreenData {
     pub screen: UIScreenKey,
@@ -108,7 +97,7 @@ pub fn render_screen(
 pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::Size<f32> {
     let style = get_element_style(element, properties);
     match &element.element_type {
-        UIElementType::Box(uielements) => taffy::Size::ZERO,
+        UIElementType::Box(_) => taffy::Size::ZERO,
         UIElementType::Label(text) | UIElementType::Button { text, .. } => {
             let size = text_renderer().get_size(
                 properties.patch_text(text.as_str()).as_str(),
@@ -254,7 +243,7 @@ fn render_element(
         },
     };
     match &element.element_type {
-        UIElementType::Box(uielements) => {
+        UIElementType::Box(_) => {
             let parent_offset = UIPos {
                 x: context.content.pos.x - layout.border.left - layout.padding.left,
                 y: context.content.pos.y - layout.border.top - layout.padding.top,
@@ -381,7 +370,7 @@ fn render_element(
                         let border = 3.;
                         let item_data = item.item.data();
 
-                        let mut draw_slot =
+                        let draw_slot =
                             |context: &mut UIElementRenderContext, position: UIPos, count: u16| {
                                 context.draw_icon(
                                     UIRect {
@@ -802,7 +791,7 @@ fn add_element_to_taffy<'a>(
                 .map(|child| add_element_to_taffy(child, taffy, properties))
                 .collect::<Vec<_>>();
             let node = taffy.new_with_children(style.taffy, &children[..]).unwrap();
-            taffy.set_node_context(node, Some(element));
+            taffy.set_node_context(node, Some(element)).unwrap();
             node
         }
         _ => {

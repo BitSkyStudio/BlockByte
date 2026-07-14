@@ -16,7 +16,7 @@ use block_byte_common::{
     net::{NetworkMessageS2C, PropertyModifyMode},
     registry::{
         BlockEntry, BlockMachineData, BlockMachineFace, BlockPalette, EntityKey, MachineInstrution,
-        PlantKey, ResearchKey, ResearchProgressBar, ToolData, air_block,
+        PlantKey, ResearchKey, ToolData, air_block,
     },
     scripts::{CallbackResult, RunResult, ScriptState, ScriptValue},
     time_to_ticks,
@@ -26,7 +26,6 @@ use block_byte_common::{
         ClientBlockPlants, ClientChunkBlockComponents, ComponentTypeAccess,
     },
 };
-use noise::NoiseFn;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use serde_default_utils::default_bool;
@@ -233,13 +232,15 @@ pub fn tick_chunk(world: &WorldAccess) {
                     if inventory_updated {
                         for to_wakeup in machine.inventory_observers.drain(..) {
                             let (target_chunk, target_offset) = to_wakeup.to_chunk_pos_offset();
-                            world.schedule_event(
-                                target_chunk,
-                                WorldEvent::BlockWakeup {
-                                    block: target_offset,
-                                    inventory_updated: false,
-                                },
-                            );
+                            world
+                                .schedule_event(
+                                    target_chunk,
+                                    WorldEvent::BlockWakeup {
+                                        block: target_offset,
+                                        inventory_updated: false,
+                                    },
+                                )
+                                .unwrap();
                         }
                     }
                 }
@@ -306,15 +307,6 @@ pub fn tick_chunk(world: &WorldAccess) {
 
                     world.remove_entity(entity);
                 }
-            }
-            WorldEvent::EntityTeleport {
-                entity: entity_id,
-                position,
-            } => {
-                let Some(mut entity) = world.get_entity(entity_id) else {
-                    continue;
-                };
-                world.teleport_entity(&mut *entity, position);
             }
             WorldEvent::EntityKnockback {
                 entity: entity_id,
@@ -549,7 +541,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                 false,
             );
             if new_position != entity.position {
-                world.teleport_entity(entity, new_position);
+                world.teleport_entity(entity, new_position).unwrap();
             }
         }
         {
@@ -709,10 +701,6 @@ pub enum WorldEvent {
         entity: Uuid,
         damage: DamageTable,
         source_entity: Option<Uuid>,
-    },
-    EntityTeleport {
-        entity: Uuid,
-        position: Pos,
     },
     EntityKnockback {
         entity: Uuid,
@@ -936,7 +924,7 @@ impl Entity {
                                     hand_item,
                                     &self.current_stats,
                                 );
-                                world.schedule_event(
+                                let _ = world.schedule_event(
                                     target_position.to_chunk_pos(),
                                     WorldEvent::EntityDamage {
                                         entity: target_id,
@@ -944,7 +932,7 @@ impl Entity {
                                         source_entity: Some(self.uuid),
                                     },
                                 );
-                                world
+                                let _ = world
                                     .schedule_event(
                                         world.center_chunk,
                                         WorldEvent::EntityKnockback {
@@ -1097,7 +1085,7 @@ macro_rules! create_chunk_block_components{
                     .$id
                     .added
                     .get_mut()
-                    .extract_if(.., |a, b| true)
+                    .extract_if(.., |_, _| true)
                 {
                     let (chunk, offset) = position.to_chunk_pos_offset();
                     let chunk = WorldAccess::get_grid_index_center(world.center_chunk, chunk).unwrap();
@@ -1122,7 +1110,7 @@ macro_rules! create_chunk_block_components{
         }
     }
 }
-trait BlockComponentUpdater {
+pub trait BlockComponentUpdater {
     fn client_update(&self) -> Option<ClientBlockComponentUpdate>;
     fn client_empty_update() -> Option<ClientBlockComponentUpdate>;
 }
@@ -1200,7 +1188,7 @@ impl Into<ClientBlockPlants> for &BlockPlants {
         }
     }
 }
-enum MachineRunResult {
+pub enum MachineRunResult {
     Continue,
     Block,
     Sleep(u32),
@@ -1288,13 +1276,15 @@ impl BlockMachine {
                                         {
                                             let (target_chunk, target_offset) =
                                                 target_position.to_chunk_pos_offset();
-                                            world.schedule_event(
-                                                target_chunk,
-                                                WorldEvent::BlockWakeup {
-                                                    block: target_offset,
-                                                    inventory_updated: true,
-                                                },
-                                            );
+                                            world
+                                                .schedule_event(
+                                                    target_chunk,
+                                                    WorldEvent::BlockWakeup {
+                                                        block: target_offset,
+                                                        inventory_updated: true,
+                                                    },
+                                                )
+                                                .unwrap();
                                             item.count -= 1;
                                             if item.count == 0 {
                                                 first_inventory.items[slot.slot] = None;
@@ -1354,14 +1344,16 @@ impl BlockMachine {
                     let world_face = block.rotation.rotate_face(*face);
                     let target_position = block_position + world_face.get_block_offset();
                     let (target_chunk, target_offset) = target_position.to_chunk_pos_offset();
-                    world.schedule_event(
-                        target_chunk,
-                        WorldEvent::BlockLogicSignal {
-                            block: target_offset,
-                            value,
-                            world_face: world_face.opposite(),
-                        },
-                    );
+                    world
+                        .schedule_event(
+                            target_chunk,
+                            WorldEvent::BlockLogicSignal {
+                                block: target_offset,
+                                value,
+                                world_face: world_face.opposite(),
+                            },
+                        )
+                        .unwrap();
                     CallbackResult::Continue
                 }
                 MachineInstrution::WriteLogic { face, value } => {
@@ -1376,14 +1368,16 @@ impl BlockMachine {
                     let world_face = block.rotation.rotate_face(*face);
                     let target_position = block_position + world_face.get_block_offset();
                     let (target_chunk, target_offset) = target_position.to_chunk_pos_offset();
-                    world.schedule_event(
-                        target_chunk,
-                        WorldEvent::BlockLogicState {
-                            block: target_offset,
-                            value,
-                            world_face: world_face.opposite(),
-                        },
-                    );
+                    world
+                        .schedule_event(
+                            target_chunk,
+                            WorldEvent::BlockLogicState {
+                                block: target_offset,
+                                value,
+                                world_face: world_face.opposite(),
+                            },
+                        )
+                        .unwrap();
                     CallbackResult::Continue
                 }
                 MachineInstrution::GetSlotItemCount { slot, register } => {
@@ -1636,7 +1630,7 @@ impl WorldAccess<'_> {
         for face in Face::all() {
             let neighbor_position = position + face.get_block_offset();
             let (chunk, offset) = neighbor_position.to_chunk_pos_offset();
-            self.schedule_event(
+            let _ = self.schedule_event(
                 chunk,
                 WorldEvent::BlockNeighborDestroyed {
                     block: offset,
@@ -1976,11 +1970,7 @@ impl WorldAccess<'_> {
             .insert(entity.uuid, Box::new(WorldAccessCell::new(entity)));
         Ok(self.get_entity(uuid).unwrap())
     }
-    pub fn drop_items(
-        &self,
-        items: impl Iterator<Item = ItemStack>,
-        position: Pos,
-    ) -> Result<(), ()> {
+    pub fn drop_items(&self, items: impl Iterator<Item = ItemStack>, position: Pos) {
         let item_entity_key = EntityKey::id("item").unwrap();
         for item in items {
             let mut item_entity = Entity::new(item_entity_key, position);
@@ -1993,7 +1983,6 @@ impl WorldAccess<'_> {
             item_entity.inventory.items[0] = Some(item);
             let _ = self.spawn_entity(item_entity);
         }
-        Ok(())
     }
     pub fn remove_entity(&self, entity: WorldAccessRef<'_, Entity, Uuid>) {
         let chunk_position = entity.position.to_chunk_pos();

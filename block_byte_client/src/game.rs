@@ -3,76 +3,48 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     collections::{BinaryHeap, HashMap, HashSet},
-    fmt::format,
-    hash::{Hash, Hasher},
     net::{SocketAddr, UdpSocket},
-    ops::ControlFlow,
-    path::Path,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU32, AtomicU64},
-    },
+    sync::{Arc, atomic::AtomicU64},
     time::{Duration, Instant, SystemTime},
     u32,
 };
 
-use ahash::{AHashMap, AHashSet};
-use base64::{Engine, prelude::BASE64_STANDARD};
+use ahash::AHashMap;
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityAction, EntityPose,
-    EntityStats, HitTimer, ItemMoveMode, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
-    TexCoords,
+    EntityStats, HitTimer, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
-    model::{DrawAnimation, LoopMode, ModelGeometry, ModelTexture},
+    model::{DrawAnimation, LoopMode, ModelGeometry},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     number_approach_smooth,
     registry::{
-        self, BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData,
-        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key, KeyGroup,
-        ModelData, ModelInstance, ModelKey, Registry, ResearchKey, TextureData, TextureKey,
-        ToolData, TranslationLanguageData, air_block, load_registries,
+        BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, EntityData,
+        EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key, ResearchKey,
+        TextureKey, ToolData, TranslationLanguageData, air_block,
     },
-    rotation::BlockRotation,
-    ui::{PropertyMap, SlotId},
-    world::{self, ClientBlockComponentUpdate, ClientChunkBlockComponents},
+    ui::PropertyMap,
+    world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
 use bytemuck::Pod;
-use cgmath::{Matrix4, Rad, SquareMatrix, Transform, Vector3, Vector4};
-use image::{DynamicImage, GenericImage, RgbaImage};
+use cgmath::{Matrix4, Rad, Vector3};
 use parking_lot::{Mutex, RwLock};
-use rand::{Rng, rngs::StdRng};
-use rand_seeder::Seeder;
-use rayon::{
-    ThreadPoolBuilder,
-    iter::{IntoParallelIterator, ParallelIterator},
-};
-use renet::{ConnectionConfig, DefaultChannel, RenetClient};
+use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use smallvec::SmallVec;
 use uuid::Uuid;
-use wgpu::{
-    Buffer, CommandEncoder, Device, Queue,
-    util::{DeviceExt, StagingBelt},
-};
-use winit::{
-    application::ApplicationHandler,
-    dpi::PhysicalPosition,
-    event::{DeviceEvent, ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{Fullscreen, Window, WindowAttributes, WindowId},
-};
+use wgpu::{CommandEncoder, Device, Queue, util::StagingBelt};
+use winit::{dpi::PhysicalPosition, event::MouseButton, keyboard::KeyCode};
 
 use crate::{
     InputManager,
-    atlas::{TexCoordsExt, TexCoordsIndexExt, init_texture_atlas},
+    atlas::{TexCoordsExt, TexCoordsIndexExt},
     game::clipping::Frustum,
     render::{
-        self, BaseMesh, CameraUniform, ChunkMesh, ChunkVertex, DamageMesh, DamageVertex, GPUMesh,
-        GUIMesh, GUIVertex, Mesh, MeshVertex, MeshVertexConsumer, RenderState, SurfaceError,
-        Vertex, draw_model, get_block_matrix, get_block_rotation_face_vertices,
+        self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUMesh, GUIMesh, Mesh, MeshVertex,
+        MeshVertexConsumer, RenderState, SurfaceError, draw_model, get_block_matrix,
+        get_block_rotation_face_vertices,
     },
-    ui::{ScreenData, TextRenderer, UIPos, UIRect, render_screen, text_renderer},
+    ui::{ScreenData, UIPos, UIRect, render_screen, text_renderer},
 };
 
 use crate::GameScreen;
@@ -135,7 +107,7 @@ impl ClientPlayer {
         let mut min_distance = f32::INFINITY;
         let mut raycast_result = RayCastResult::Empty;
 
-        if let Some((block, position, face)) = ray.block_raycast(|block, position, face| {
+        if let Some((block, position, face)) = ray.block_raycast(|block, _, _| {
             let block_entry = world.get_block(block)?;
             let selection = &block_entry.block.data().selection;
             for selection in selection {
@@ -284,7 +256,6 @@ pub struct ClientGame {
     ),
     pub researched: HashSet<ResearchKey>,
     pub stamina: f32,
-    pub place_message: Option<NetworkMessageC2S>,
     pub chunk_mesh_queue_size: usize,
     pub server_ticks_passed: u64,
     pub chunk_buffer_pool: ChunkBufferPool,
@@ -303,7 +274,7 @@ impl GameScreen for ClientGame {
         input: &crate::InputManager,
         renderer: &mut crate::render::RenderState,
         dt: f32,
-        screen_transition: &mut Option<Box<dyn GameScreen>>,
+        _screen_transition: &mut Option<Box<dyn GameScreen>>,
     ) {
         let mut local_player_mesh = Mesh::default();
         let mut entity_mesh = Mesh::default();
@@ -449,7 +420,7 @@ impl GameScreen for ClientGame {
 
             if let Some(tooltip) = match self.camera.raycast(self, false) {
                 RayCastResult::Empty => None,
-                RayCastResult::Block(pos, face) => self
+                RayCastResult::Block(pos, _face) => self
                     .get_block(pos)
                     .unwrap()
                     .block
@@ -639,7 +610,7 @@ impl GameScreen for ClientGame {
                         self.send_message(NetworkMessageC2S::AttackEntity { entity });
                     }
                     RayCastResult::Empty => {}
-                    RayCastResult::Plant(position, index) => {
+                    RayCastResult::Plant(_position, _index) => {
                         /*self.send_message(NetworkMessageC2S::HarvestPlant {
                             position,
                             index,
@@ -691,7 +662,7 @@ impl GameScreen for ClientGame {
 }
 impl ClientGame {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
-        self.connection.tx.send(message);
+        self.connection.tx.send(message).unwrap();
     }
     pub fn tick_camera(&mut self, dt: f32, input: &InputManager) {
         let move_mode = if self.player_stats.flight() > 0. {
@@ -716,7 +687,7 @@ impl ClientGame {
         let Some(player_entity_data) = self.get_player_data() else {
             return;
         };
-        let mut forward = cgmath::Vector3::new(
+        let forward = cgmath::Vector3::new(
             self.camera.direction.yaw.sin(),
             0.,
             -self.camera.direction.yaw.cos(),
@@ -832,7 +803,7 @@ impl ClientGame {
         );
     }
     pub fn process_messages(&mut self, renderer: &mut RenderState) {
-        while let Ok((mut message, time)) = self.connection.rx.try_recv() {
+        while let Ok((message, time)) = self.connection.rx.try_recv() {
             match message {
                 NetworkMessageS2C::LoadChunk {
                     position,
@@ -991,7 +962,7 @@ impl ClientGame {
                     });
                     renderer.window().set_cursor_visible(true);
                     let size = renderer.size();
-                    renderer.window().set_cursor_position(PhysicalPosition::new(
+                    let _ = renderer.window().set_cursor_position(PhysicalPosition::new(
                         size.width / 2,
                         size.height / 2,
                     ));
@@ -1127,7 +1098,7 @@ impl ChunkBufferPool {
         let (vertex_size, index_size, _) = mesh.get_data_size();
         let total_size = vertex_size + index_size;
         let (bucket, size) = Self::get_data_index(total_size);
-        let mut bucket = self.get_bucket(bucket);
+        let bucket = self.get_bucket(bucket);
         if let Some(mut buffer) = bucket.pop() {
             buffer.upload(mesh, device, staging_belt, command_encoder);
             buffer
@@ -1185,7 +1156,6 @@ impl ClientGame {
             swap_hand_item: None,
             researched: HashSet::new(),
             stamina: 0.,
-            place_message: None,
             chunk_mesh_queue_size: 0,
             server_ticks_passed: 0,
             chunk_buffer_pool: ChunkBufferPool::default(),
@@ -1242,11 +1212,11 @@ impl ClientGame {
     }
     pub fn tick_client(
         &mut self,
-        device: &Device,
-        queue: &Queue,
-        local_player_mesh: &mut BaseMesh,
+        _device: &Device,
+        _queue: &Queue,
+        _local_player_mesh: &mut BaseMesh,
         entity_mesh: &mut BaseMesh,
-        gui_mesh: &mut GUIMesh,
+        _gui_mesh: &mut GUIMesh,
         viewmodel_mesh: &mut BaseMesh,
         damage_mesh: &mut DamageMesh,
         frustum: &Frustum,
@@ -1363,7 +1333,7 @@ impl ClientGame {
                                         };
                                     }
                                 }
-                                Some(Cow::Owned(ItemModel::Block((placement.block))))
+                                Some(Cow::Owned(ItemModel::Block(placement.block)))
                             }
                             _ => Some(Cow::Borrowed(&item_data.model)),
                         }
@@ -1397,7 +1367,8 @@ impl ClientGame {
                             build_data,
                             neighbor_chunks,
                         );
-                        tx.send((modified_chunk, mesh, mesh_high_res, version));
+                        tx.send((modified_chunk, mesh, mesh_high_res, version))
+                            .unwrap();
                     });
                     self.chunk_mesh_queue_size += 1;
                     i += 1;
@@ -1431,8 +1402,7 @@ impl ClientGame {
             }
             entity.pose_player.tick(dt, &mut animations);
             if Some(*id) == self.player_entity {
-                continue;
-                render::draw_model(
+                /*render::draw_model(
                     model,
                     Matrix4::from_translation(Vector3::new(
                         self.camera.position.x,
@@ -1441,13 +1411,13 @@ impl ClientGame {
                     )) * Matrix4::from_angle_y(Rad(-self.camera.direction.yaw)),
                     &mut local_player_mesh.consumer(Color::WHITE),
                     &animations[..],
-                    |slot, _| {
+                    |_, _| {
                         entity
                             .hand_item
                             .as_ref()
                             .map(|item| Cow::Borrowed(&item.item.data().model))
                     },
-                );
+                );*/
             } else {
                 let lerp_time =
                     (entity.update_timestamp.elapsed().as_secs_f32() / SERVER_DT).min(1.);
@@ -1463,7 +1433,7 @@ impl ClientGame {
                         * Matrix4::from_angle_y(Rad(rotation)),
                     &mut entity_mesh.consumer(Color::WHITE),
                     &animations[..],
-                    |slot, _| {
+                    |_, _| {
                         entity
                             .hand_item
                             .as_ref()
@@ -1499,7 +1469,7 @@ impl ClientGame {
             }
             if let Some(chunk) = self.chunks.get(&chunk_position) {
                 for (offset, damage) in chunk.mesh_build_data.components.read().damage.iter() {
-                    let base_block_position = (chunk_position.to_block_pos() + offset.xyz());
+                    let base_block_position = chunk_position.to_block_pos() + offset.xyz();
                     let base_position = base_block_position.to_pos();
                     if base_position.distance_squared(self.player_position)
                         > (view_distance * view_distance) as f32
@@ -1528,7 +1498,7 @@ impl ClientGame {
                                         0,
                                     )
                                     .map(|(position, uv)| {
-                                        let mut position = base_position + position;
+                                        let position = base_position + position;
                                         MeshVertex {
                                             position,
                                             normal: face.get_offset(),
@@ -1570,9 +1540,9 @@ impl ClientGame {
                                             }
                                         }));
                                     }
-                                    ModelGeometry::Triangle(vertices, texture) => todo!(),
+                                    ModelGeometry::Triangle(_vertices, _texture) => todo!(),
                                 },
-                                |matrix, binding| {},
+                                |_matrix, _binding| {},
                             );
                         }
                     }
@@ -1949,7 +1919,7 @@ impl ClientChunk {
                         && y < CHUNK_SIZE as u8 - 1
                         && z > 0
                         && z < CHUNK_SIZE as u8 - 1;
-                    let mut get_neighbor = |neighbor_position: BlockPos| -> Option<BlockEntry> {
+                    let get_neighbor = |neighbor_position: BlockPos| -> Option<BlockEntry> {
                         let (neighbor_chunk, neighbor_offset) = if guarantee_inside {
                             (
                                 ChunkPos::all(0),
@@ -1998,7 +1968,7 @@ impl ClientChunk {
                                     let neighbor_block_data = neighbor_block.block.data();
                                     match &neighbor_block_data.render_data {
                                         BlockRenderData::Air | BlockRenderData::Model { .. } => {}
-                                        BlockRenderData::Full { faces, .. } => {
+                                        BlockRenderData::Full { .. } => {
                                             continue;
                                         }
                                     }
@@ -2006,7 +1976,7 @@ impl ClientChunk {
                                 let (vertices, local_face) =
                                     get_block_rotation_face_vertices(block.rotation, face);
                                 let face_texture = faces.by_face(*local_face);
-                                let mut tex_index = if face_texture.variant_count() > 1 {
+                                let tex_index = if face_texture.variant_count() > 1 {
                                     let hash = (base_position.x as i32 * 94839)
                                         ^ (base_position.y as i32 * 532)
                                         ^ (base_position.z as i32 * 5473);
@@ -2151,9 +2121,6 @@ pub mod clipping {
                 d: self.d / len,
             }
         }
-        pub fn distance(&self, p: Vector3<f32>) -> f32 {
-            self.normal.dot(p) + self.d
-        }
     }
     impl Frustum {
         pub fn from_matrix(m: cgmath::Matrix4<f32>) -> Self {
@@ -2223,7 +2190,7 @@ pub enum ClientConnectionState {
     Disconnected,
 }
 impl ClientConnection {
-    pub fn connect(addr: SocketAddr) -> ClientConnection {
+    pub fn connect(server_addr: SocketAddr) -> ClientConnection {
         let (s2c_tx, s2c_rx) = std::sync::mpsc::channel();
         let (c2s_tx, c2s_rx) = std::sync::mpsc::channel();
         let state = Arc::new(Mutex::new(ClientConnectionState::Connecting));
@@ -2231,7 +2198,6 @@ impl ClientConnection {
             let state = state.clone();
             std::thread::spawn(move || {
                 let mut client = RenetClient::new(make_connection_config());
-                let server_addr: SocketAddr = "127.0.0.1:5000".parse().unwrap();
                 let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
                 let current_time = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
@@ -2259,7 +2225,7 @@ impl ClientConnection {
                             }
                             client.update(delta_time_duration);
                             let client = RefCell::new(&mut client);
-                            for mut message in
+                            for message in
                                 std::iter::from_fn(|| client.borrow_mut().receive_message(0)).chain(
                                     std::iter::from_fn(|| client.borrow_mut().receive_message(1)),
                                 )
@@ -2268,7 +2234,7 @@ impl ClientConnection {
                                 let mut rdr = lz4_flex::frame::FrameDecoder::new(&mut message);
                                 let message: NetworkMessageS2C =
                                     serde_cbor::from_reader(&mut rdr).unwrap();
-                                s2c_tx.send((message, Instant::now()));
+                                s2c_tx.send((message, Instant::now())).unwrap();
                             }
                         }
                         ClientConnectionState::Disconnect => break,

@@ -210,11 +210,6 @@ struct Orientation {
     forward: Face,
 }
 impl Orientation {
-    const IDENTITY: Self = Self {
-        right: Face::Right,
-        up: Face::Up,
-        forward: Face::Front,
-    };
     fn compose(self, other: Orientation) -> Orientation {
         Orientation {
             right: self.apply(other.right),
@@ -259,17 +254,6 @@ impl Orientation {
             return None;
         }
         let right = front.cross(up);
-        Some(Self {
-            right,
-            up,
-            forward: front,
-        })
-    }
-    fn from_front_right(front: Face, right: Face) -> Option<Self> {
-        if front == right || front == right.opposite() {
-            return None;
-        }
-        let up = right.cross(front);
         Some(Self {
             right,
             up,

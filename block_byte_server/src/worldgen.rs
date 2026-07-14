@@ -41,12 +41,12 @@ pub struct RegionGeneration {
     pub z: i16,
     pub structures: Vec<RegionStructure>,
     pub structure_grid: [[Option<NonZeroU32>; Self::REGION_CHUNK_SIZE]; Self::REGION_CHUNK_SIZE], //could probably be u16
-    pub structure_grid_prefabs: Vec<StructureGridPrefab>,
+    structure_grid_prefabs: Vec<StructureGridPrefab>,
     pub roads: [[u8; Self::REGION_CHUNK_SIZE * Self::ROAD_SEGMENTS_PER_CHUNK];
         Self::REGION_CHUNK_SIZE * Self::ROAD_SEGMENTS_PER_CHUNK],
 }
 impl RegionGeneration {
-    pub fn generate_structure_list(
+    fn generate_structure_list(
         x: i16,
         z: i16,
         world_generator: &WorldGenerator,
@@ -84,7 +84,7 @@ impl RegionGeneration {
         }
         structures
     }
-    pub fn add_structure_prefab(
+    fn add_structure_prefab(
         &mut self,
         position: BlockPos,
         rotation: HorizontalFace,
@@ -113,7 +113,7 @@ impl RegionGeneration {
                 NonZero::new(self.structure_grid_prefabs.len() as u32);
         }
     }
-    pub fn generate_biome_list(
+    fn generate_biome_list(
         x: i16,
         z: i16,
         world_generator: &WorldGenerator,
@@ -144,7 +144,7 @@ impl RegionGeneration {
                 Arc::new(list)
             })
     }
-    pub fn get_biome_list_for_chunk(
+    fn get_biome_list_for_chunk(
         chunk_x: i16,
         chunk_z: i16,
         world_generator: &WorldGenerator,
@@ -248,7 +248,7 @@ impl ChunkColumnGeneration {
         false
     }
     const NEIGHBOR_CHUNK_BLOCKERS: [(i8, i8); 4] = [(0, -1), (-1, -1), (-1, 0), (-1, 1)];
-    pub fn get_legal_decorations<'a>(
+    fn get_legal_decorations<'a>(
         &'a self,
         world_generator: &WorldGenerator,
     ) -> impl Iterator<Item = &'a ChunkColumnDecoration> {
@@ -266,7 +266,7 @@ impl ChunkColumnGeneration {
         })
     }
 }
-struct ChunkColumnDecoration {
+pub struct ChunkColumnDecoration {
     key: PrefabKey,
     x: u8,
     z: u8,
@@ -285,7 +285,7 @@ pub struct WorldGenerator {
     pub config: WorldGeneratorConfig,
     pub chunk_column_cache: Cache<(i16, i16), Arc<ChunkColumnGeneration>>,
     pub region_cache: Cache<(i16, i16), Arc<RegionGeneration>>,
-    pub region_biome_list_cache: Cache<(i16, i16), Arc<Vec<RegionBiomePoint>>>,
+    region_biome_list_cache: Cache<(i16, i16), Arc<Vec<RegionBiomePoint>>>,
     pub design_world: bool,
 }
 impl WorldGenerator {

@@ -1,16 +1,12 @@
-use std::{
-    hash::Hash,
-    sync::{Arc, RwLock},
-};
+use std::{hash::Hash, sync::RwLock};
 
-use ahash::{HashMap, HashMapExt, RandomState};
-use rand::{Rng, SeedableRng};
-use rand_xoshiro::Xoshiro256PlusPlus;
+use ahash::{HashMap, RandomState};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     coord::{AABB, BlockPos, Pos},
-    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup, LootModifierNumber},
+    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup},
 };
 use serde_default_utils::*;
 
@@ -88,9 +84,9 @@ impl Serialize for Color {
         let mut buffer = [0u8; 8];
         let mut buffer_slice = &mut buffer[..];
         use std::io::Write;
-        write!(buffer_slice, "{:2x}{:2x}{:2x}", self.r, self.g, self.b);
+        write!(buffer_slice, "{:2x}{:2x}{:2x}", self.r, self.g, self.b).unwrap();
         let buf_len = if self.a != 255 {
-            write!(buffer_slice, "{:2x}", self.a);
+            write!(buffer_slice, "{:2x}", self.a).unwrap();
             8
         } else {
             6

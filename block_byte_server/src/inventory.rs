@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::collections::HashMap;
 
 use block_byte_common::{
     ClientItem, EntityStats, InternString, InventoryView, ViewSlot, WeightProvider, WeightedList,
@@ -516,7 +516,7 @@ impl Inventory {
         count
     }
 }
-trait ItemMatcher {
+pub trait ItemMatcher {
     fn matches(&self, item: &ItemStack) -> bool;
 }
 impl ItemMatcher for ItemKey {
@@ -594,7 +594,7 @@ impl LootGenerationContext {
     pub fn generate_number_const(&self, number: &LootModifierNumber) -> f32 {
         match number {
             LootModifierNumber::Constant(value) => *value,
-            LootModifierNumber::Random(min, max) => {
+            LootModifierNumber::Random(_min, _max) => {
                 panic!("attempting to use random in const lootcontext")
             }
             LootModifierNumber::Add(first, second) => {

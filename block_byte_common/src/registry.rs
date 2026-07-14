@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -6,12 +5,11 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
 use anyhow::anyhow;
-use image::{DynamicImage, GenericImageView};
+use image::DynamicImage;
 use image_overlay::overlay_dyn_img;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
-use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
 use serde::de::Visitor;
@@ -142,7 +140,6 @@ macro_rules! create_registries{
                             Ok(entry) => {
                                 if entry.file_type().is_file() {
                                     let stripped_path = entry.path().strip_prefix(&base_asset_path).unwrap();
-                                    let extension = stripped_path.extension();
                                     match stripped_path.extension().and_then(|ext| ext.to_str()).unwrap_or(""){
                                         "py" | "png~" => continue,
                                         _ => {}
