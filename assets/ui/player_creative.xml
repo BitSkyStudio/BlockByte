@@ -12,5 +12,5 @@
         <slot id="9" class="slot"/>
         <slot id="trash" style="background: trash_slot;"/>
     </box>
-    <craft style="background: slot,3;border: 20;" recipes="cheat_menu" craft_width="10"/>
+    <craft style="background: slot,3;border: 20;width: 520;height: 215;" recipes="cheat_menu"/>
 </box>

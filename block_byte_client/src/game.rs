@@ -662,7 +662,7 @@ impl GameScreen for ClientGame {
 }
 impl ClientGame {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
-        self.connection.tx.send(message).unwrap();
+        let _ = self.connection.tx.send(message);
     }
     pub fn tick_camera(&mut self, dt: f32, input: &InputManager) {
         let move_mode = if self.player_stats.flight() > 0. {

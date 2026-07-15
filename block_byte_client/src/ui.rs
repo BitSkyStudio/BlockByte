@@ -2,22 +2,23 @@ use std::{collections::HashMap, u32};
 
 use block_byte_common::{
     ClientItem, Color, ItemMoveMode, TexCoords,
-    coord::Pos,
+    coord::{Pos, Vec3},
     net::NetworkMessageC2S,
-    registry::{ItemKey, ItemModel},
+    registry::{ItemKey, ItemModel, TextureKey},
     ui::{
         CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, UIElement, UIElementType,
         UIScreenKey, UIStyleRule,
     },
 };
 use cgmath::{Matrix4, SquareMatrix};
+use smallvec::SmallVec;
 use taffy::{AvailableSpace, Dimension, NodeId, Style, TaffyTree};
 use winit::{dpi::PhysicalSize, event::MouseButton};
 
 use crate::{
     GUIMesh, InputManager,
     atlas::TEXTURE_ATLAS,
-    render::{GUIVertex, MeshVertexConsumer, item_model_icon_view},
+    render::{GUIVertex, MeshVertex, MeshVertexConsumer, item_model_icon_view},
 };
 use crate::{atlas::TexCoordsExt, game::translate};
 
@@ -97,7 +98,9 @@ pub fn render_screen(
 pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::Size<f32> {
     let style = get_element_style(element, properties);
     match &element.element_type {
-        UIElementType::Box(_) => taffy::Size::ZERO,
+        UIElementType::Box(_)
+        | UIElementType::CraftArea { .. }
+        | UIElementType::ResearchTree { .. } => taffy::Size::ZERO,
         UIElementType::Label(text) | UIElementType::Button { text, .. } => {
             let size = text_renderer().get_size(
                 properties.patch_text(text.as_str()).as_str(),
@@ -108,34 +111,9 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
                 height: size.y,
             }
         }
-        UIElementType::Image(_, width, height) => taffy::Size {
-            width: *width,
-            height: *height,
-        },
         UIElementType::ItemSlot { .. } => taffy::Size {
             width: 50.,
             height: 50.,
-        },
-        UIElementType::CraftArea {
-            recipes,
-            craft_width,
-        } => {
-            let craft_size = 50.;
-            let craft_width = *craft_width as f32;
-            taffy::Size {
-                width: craft_width * craft_size,
-                height: (match recipes {
-                    CraftAreaRecipes::Recipes(recipes) => recipes.list().len(),
-                    CraftAreaRecipes::CheatMenu => ItemKey::entries().count(), //todo: just cache this number
-                } as f32
-                    / craft_width)
-                    .ceil()
-                    * craft_size,
-            }
-        }
-        UIElementType::ResearchTree { .. } => taffy::Size {
-            width: 100.,
-            height: 100.,
         },
     }
 }
@@ -267,19 +245,6 @@ fn render_element(
                 UIPos::all(0.),
                 data.properties.patch_text(text.as_str()).as_str(),
                 20.,
-                Color::WHITE,
-            );
-        }
-        UIElementType::Image(key, width, height) => {
-            context.draw_quad(
-                UIRect {
-                    pos: UIPos::all(0.),
-                    size: UIPos {
-                        x: *width,
-                        y: *height,
-                    },
-                },
-                key.tex_coords(),
                 Color::WHITE,
             );
         }
@@ -436,19 +401,26 @@ fn render_element(
                 SlotId::Trash => {}
             }
         }
-        UIElementType::CraftArea {
-            recipes,
-            craft_width,
-        } => {
+        UIElementType::CraftArea { recipes } => {
             let craft_size = 50.;
+            if context.content.size.x <= 0. {
+                return;
+            }
+            let craft_width = (context.content.size.x / craft_size).floor() as usize;
+            let left_offset = (context.content.size.x - craft_width as f32 * craft_size) / 2.;
+            let mouse_inside = if let Some(input) = input {
+                context.content.contains(input.cursor_position)
+            } else {
+                false
+            };
             match recipes {
                 CraftAreaRecipes::CheatMenu => {
                     for (i, item) in ItemKey::entries().enumerate() {
                         let item_data = item.data();
                         let area = UIRect {
                             pos: UIPos {
-                                x: (i % (*craft_width as usize)) as f32 * craft_size,
-                                y: (i / (*craft_width as usize)) as f32 * craft_size,
+                                x: (i % craft_width) as f32 * craft_size + left_offset,
+                                y: (i / craft_width) as f32 * craft_size,
                             },
                             size: UIPos::all(craft_size),
                         };
@@ -456,13 +428,14 @@ fn render_element(
                         if let Some(input) = input {
                             if (UIRect {
                                 pos: UIPos {
-                                    x: area.pos.x + context.content.pos.x,
+                                    x: area.pos.x + context.content.pos.x + left_offset,
                                     y: area.pos.y + context.content.pos.y,
                                 },
                                 size: UIPos::all(craft_size),
                             })
                             .contains(input.cursor_position)
                                 && data.selected_slot.is_none()
+                                && mouse_inside
                             {
                                 overlay_context.draw_text(
                                     input.cursor_position,
@@ -487,8 +460,8 @@ fn render_element(
                         let recipe_data = recipe.data();
                         let area = UIRect {
                             pos: UIPos {
-                                x: (i % (*craft_width as usize)) as f32 * craft_size,
-                                y: (i / (*craft_width as usize)) as f32 * craft_size,
+                                x: (i % craft_width) as f32 * craft_size + left_offset,
+                                y: (i / craft_width) as f32 * craft_size,
                             },
                             size: UIPos::all(craft_size),
                         };
@@ -507,12 +480,13 @@ fn render_element(
                         if let Some(input) = input {
                             if (UIRect {
                                 pos: UIPos {
-                                    x: area.pos.x + context.content.pos.x,
+                                    x: area.pos.x + context.content.pos.x + left_offset,
                                     y: area.pos.y + context.content.pos.y,
                                 },
                                 size: UIPos::all(craft_size),
                             })
                             .contains(input.cursor_position)
+                                && mouse_inside
                             {
                                 let mut text =
                                     translate(format!("recipe.{}", recipe.text_id()).as_str())
@@ -565,12 +539,35 @@ fn render_element(
         }
         UIElementType::ResearchTree { research } => {
             let research_size = 50.;
+            let research_scroll = UIPos {
+                x: context.content.size.x / 2.,
+                y: context.content.size.y / 2.,
+            };
+            for research in research.list() {
+                let research_data = research.data();
+                for dependency in &research_data.dependencies {
+                    let dependency_data = dependency.data();
+                    context.draw_line(
+                        UIPos {
+                            x: research_data.x * research_size + research_scroll.x,
+                            y: research_data.y * research_size + research_scroll.y,
+                        },
+                        UIPos {
+                            x: dependency_data.x * research_size + research_scroll.x,
+                            y: dependency_data.y * research_size + research_scroll.y,
+                        },
+                        TextureKey::id("crosshair").unwrap().tex_coords(), //todo
+                        Color::WHITE,
+                        3.,
+                    );
+                }
+            }
             for research in research.list() {
                 let research_data = research.data();
                 let area = UIRect {
                     pos: UIPos {
-                        x: research_data.x * research_size + context.content.size.x / 2.,
-                        y: research_data.y * research_size + context.content.size.y / 2.,
+                        x: research_data.x * research_size + research_scroll.x,
+                        y: research_data.y * research_size + research_scroll.y,
                     },
                     size: UIPos::all(research_size),
                 };
@@ -659,16 +656,31 @@ struct UIElementRenderContext<'a> {
     aspect_ratio: f32,
 }
 impl UIElementRenderContext<'_> {
+    fn map_point(&self, p: UIPos) -> UIPos {
+        UIPos {
+            x: (self.content.pos.x + p.x) / self.gui_size as f32 * 2. - self.aspect_ratio,
+            y: -((self.content.pos.y + p.y) / self.gui_size as f32 * 2. - 1.),
+        }
+    }
+    pub fn make_clip(&self) -> UIRect {
+        UIRect {
+            pos: UIPos {
+                x: self.content.pos.x / self.gui_size as f32 * 2. - self.aspect_ratio,
+                y: -((self.content.pos.y + self.content.size.y) / self.gui_size as f32 * 2. - 1.),
+            },
+            size: UIPos {
+                x: self.content.size.x / self.gui_size as f32 * 2.,
+                y: self.content.size.y / self.gui_size as f32 * 2.,
+            },
+        }
+    }
     pub fn draw_quad(&mut self, quad: UIRect, texture: TexCoords, color: Color) {
         self.buffer.add_quad_clip(
             UIRect {
-                pos: UIPos {
-                    x: (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2.
-                        - self.aspect_ratio,
-                    y: -((self.content.pos.y + quad.pos.y + quad.size.y) / self.gui_size as f32
-                        * 2.
-                        - 1.),
-                },
+                pos: self.map_point(UIPos {
+                    x: quad.pos.x,
+                    y: quad.pos.y + quad.size.y,
+                }),
                 size: UIPos {
                     x: quad.size.x / self.gui_size as f32 * 2.,
                     y: quad.size.y / self.gui_size as f32 * 2.,
@@ -676,27 +688,30 @@ impl UIElementRenderContext<'_> {
             },
             texture,
             color,
-            UIRect {
-                pos: UIPos {
-                    x: self.content.pos.x / self.gui_size as f32 * 2. - self.aspect_ratio,
-                    y: -((self.content.pos.y + self.content.size.y) / self.gui_size as f32 * 2.
-                        - 1.),
-                },
-                size: UIPos {
-                    x: self.content.size.x / self.gui_size as f32 * 2.,
-                    y: self.content.size.y / self.gui_size as f32 * 2.,
-                },
-            },
+            self.make_clip(),
+        );
+    }
+    pub fn draw_line(
+        &mut self,
+        p1: UIPos,
+        p2: UIPos,
+        texture: TexCoords,
+        color: Color,
+        width: f32,
+    ) {
+        self.buffer.add_line_clip(
+            self.map_point(p1),
+            self.map_point(p2),
+            texture,
+            color,
+            width / self.gui_size as f32,
+            self.make_clip(),
         );
     }
     pub fn draw_text(&mut self, position: UIPos, text: &str, size: f32, color: Color) -> UIPos {
         //todo: clip
         let size = text_renderer().draw(
-            UIPos {
-                x: (self.content.pos.x + position.x) / self.gui_size as f32 * 2.
-                    - self.aspect_ratio,
-                y: -((self.content.pos.y + position.y) / self.gui_size as f32 * 2. - 1.),
-            },
+            self.map_point(position),
             text,
             size / self.gui_size as f32 * 2.,
             color,
@@ -724,7 +739,116 @@ impl UIElementRenderContext<'_> {
         }
     }
     pub fn draw_icon(&mut self, quad: UIRect, icon: &ItemModel) {
-        //todo: clip
+        mod triclip {
+            use crate::UIPos;
+            use crate::ui::UIRect;
+            use smallvec::SmallVec;
+
+            #[derive(Clone, Copy)]
+            pub struct Vertex {
+                pub position: UIPos,
+                pub uv: UIPos,
+            }
+
+            #[inline(always)]
+            fn lerp_pos(p1: UIPos, p2: UIPos, t: f32) -> UIPos {
+                UIPos {
+                    x: p1.x + (p2.x - p1.x) * t,
+                    y: p1.y + (p2.y - p1.y) * t,
+                }
+            }
+
+            #[inline(always)]
+            fn lerp_vertex(v1: &Vertex, v2: &Vertex, t: f32) -> Vertex {
+                Vertex {
+                    position: lerp_pos(v1.position, v2.position, t),
+                    uv: lerp_pos(v1.uv, v2.uv, t),
+                }
+            }
+
+            pub type PolygonBuffer = SmallVec<[Vertex; 12]>; //max should be 7
+
+            fn clip_against_edge<F>(
+                input: &[Vertex],
+                output: &mut PolygonBuffer,
+                inside: F,
+                intersect: f32,
+                is_horizontal: bool,
+            ) where
+                F: Fn(&Vertex, f32) -> bool,
+            {
+                output.clear();
+
+                let Some(mut s) = input.last() else {
+                    return;
+                };
+
+                for e in input {
+                    if inside(e, intersect) {
+                        if !inside(s, intersect) {
+                            let t = get_t(s, e, intersect, is_horizontal);
+                            output.push(lerp_vertex(s, e, t));
+                        }
+                        output.push(*e);
+                    } else if inside(s, intersect) {
+                        let t = get_t(s, e, intersect, is_horizontal);
+                        output.push(lerp_vertex(s, e, t));
+                    }
+                    s = e;
+                }
+            }
+
+            #[inline(always)]
+            fn get_t(v1: &Vertex, v2: &Vertex, intersect: f32, is_horizontal: bool) -> f32 {
+                let (v1_coord, v2_coord) = if is_horizontal {
+                    (v1.position.y, v2.position.y)
+                } else {
+                    (v1.position.x, v2.position.x)
+                };
+
+                let denom = v2_coord - v1_coord;
+                if denom.abs() < 1e-6 {
+                    0.0
+                } else {
+                    (intersect - v1_coord) / denom
+                }
+            }
+
+            pub fn clip_triangle_to_rect(triangle: [Vertex; 3], rect: UIRect) -> PolygonBuffer {
+                let mut buf_a: PolygonBuffer = SmallVec::new();
+                let mut buf_b: PolygonBuffer = SmallVec::new();
+
+                clip_against_edge(
+                    &triangle,
+                    &mut buf_b,
+                    |v, bound| v.position.x >= bound,
+                    rect.pos.x,
+                    false,
+                );
+                clip_against_edge(
+                    &buf_b,
+                    &mut buf_a,
+                    |v, bound| v.position.x <= bound,
+                    rect.pos.x + rect.size.x,
+                    false,
+                );
+                clip_against_edge(
+                    &buf_a,
+                    &mut buf_b,
+                    |v, bound| v.position.y >= bound,
+                    rect.pos.y,
+                    true,
+                );
+                clip_against_edge(
+                    &buf_b,
+                    &mut buf_a,
+                    |v, bound| v.position.y <= bound,
+                    rect.pos.y + rect.size.y,
+                    true,
+                );
+                buf_a
+            }
+        }
         let matrix =
             cgmath::perspective(cgmath::Deg(20.), 1., 0.05, 5.) * item_model_icon_view(icon);
         let light = Pos {
@@ -738,28 +862,66 @@ impl UIElementRenderContext<'_> {
             pub projection: Matrix4<f32>,
             pub light: Pos,
             pub rect: UIRect,
+            pub clip: UIRect,
         }
         impl MeshVertexConsumer for IconVertexConsumer<'_> {
             fn add_vertex(&mut self, vertex: crate::render::MeshVertex) -> u32 {
-                let position = vertex.position.multiply_point(self.projection);
-                if vertex.normal.x + vertex.normal.y + vertex.normal.z <= 0. {
-                    return u32::MAX;
-                }
                 let light_dot = vertex.normal.dot(self.light);
                 self.mesh.add_vertex(GUIVertex {
-                    position: [
-                        self.rect.pos.x + (position.x + 1.) / 2. * self.rect.size.x,
-                        self.rect.pos.y + (position.y + 1.) / 2. * self.rect.size.y,
-                    ],
+                    position: [vertex.position.x, vertex.position.y],
                     tex_coords: vertex.uv,
                     color: Color::grayscale(((0.5 + light_dot / 2.) * 255.) as u8).into(),
                 })
             }
             fn add_index(&mut self, index: u32) {
-                if index == u32::MAX {
-                    return;
-                }
                 self.mesh.add_index(index);
+            }
+            fn add_quad(&mut self, vertices: [crate::render::MeshVertex; 4]) {
+                for indices in [[0, 3, 2], [2, 1, 0]] {
+                    let normal = vertices[indices[0]].normal;
+                    if normal.x + normal.y + normal.z <= 0. {
+                        continue;
+                    }
+                    let polygon = triclip::clip_triangle_to_rect(
+                        indices.map(|indice| {
+                            let vertex = &vertices[indice];
+                            let position = vertex.position.multiply_point(self.projection);
+                            triclip::Vertex {
+                                position: UIPos {
+                                    x: self.rect.pos.x + (position.x + 1.) / 2. * self.rect.size.x,
+                                    y: self.rect.pos.y + (position.y + 1.) / 2. * self.rect.size.y,
+                                },
+                                uv: UIPos {
+                                    x: vertex.uv[0],
+                                    y: vertex.uv[1],
+                                },
+                            }
+                        }),
+                        self.clip,
+                    );
+                    if polygon.len() < 3 {
+                        continue;
+                    }
+                    let indices = polygon
+                        .iter()
+                        .map(|v| {
+                            self.add_vertex(MeshVertex {
+                                position: Vec3 {
+                                    x: v.position.x,
+                                    y: v.position.y,
+                                    z: 0.,
+                                },
+                                normal,
+                                uv: [v.uv.x, v.uv.y],
+                            })
+                        })
+                        .collect::<SmallVec<[_; 12]>>();
+                    for i in 1..(polygon.len() - 1) {
+                        self.add_index(indices[0]);
+                        self.add_index(indices[i]);
+                        self.add_index(indices[i + 1]);
+                    }
+                }
             }
         }
         let x = (self.content.pos.x + quad.pos.x) / self.gui_size as f32 * 2. - self.aspect_ratio;
@@ -767,6 +929,7 @@ impl UIElementRenderContext<'_> {
         let w = quad.size.x / self.gui_size as f32 * 2.;
         let h = quad.size.y / self.gui_size as f32 * 2.;
         let mut icon_vertex_consumer = IconVertexConsumer {
+            clip: self.make_clip(),
             light,
             mesh: self.buffer,
             projection: matrix,

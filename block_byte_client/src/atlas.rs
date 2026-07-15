@@ -18,6 +18,7 @@ pub struct TextureAtlas {
     pub texture_mips: Vec<RgbaImage>,
     pub texture_material: RgbaImage,
     pub animation_data: Vec<AnimatedCell>,
+    pub dimension: u32,
 }
 
 #[derive(bytemuck::Pod, bytemuck::Zeroable)]
@@ -28,7 +29,7 @@ pub struct AnimatedCell {
     pub shift: f32,
     pub frames: u32,
 }
-const TEXTURE_CELL_SIZE: u32 = 16;
+pub const TEXTURE_CELL_SIZE: u32 = 16;
 impl TextureAtlas {
     pub fn pack() -> Self {
         #[derive(Hash, PartialEq, Eq, Clone, Copy)]
@@ -303,6 +304,7 @@ impl TextureAtlas {
             texture_material: material_texture,
             texture_mips: texture_atlas_mips,
             animation_data,
+            dimension: texture_dimensions,
         }
     }
 }

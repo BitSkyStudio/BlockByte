@@ -53,13 +53,11 @@ pub enum CraftAreaRecipes {
 pub enum UIElementType {
     Box(Vec<UIElement>),
     Label(String),
-    Image(TextureKey, f32, f32),
     ItemSlot {
         slot: SlotId,
     },
     CraftArea {
         recipes: CraftAreaRecipes,
-        craft_width: u32,
     },
     ResearchTree {
         research: KeyGroup<ResearchData>,
@@ -92,19 +90,6 @@ impl UIElementType {
                 );
                 text
             }),
-            "image" => UIElementType::Image(
-                {
-                    let texture = node.attribute("texture").unwrap();
-                    TextureKey::id(texture)
-                        .ok_or_else(|| anyhow!("texture {} not found", texture))?
-                },
-                node.attribute("width")
-                    .and_then(|n| n.parse().ok())
-                    .unwrap(),
-                node.attribute("height")
-                    .and_then(|n| n.parse().ok())
-                    .unwrap(),
-            ),
             "slot" => UIElementType::ItemSlot {
                 slot: {
                     let attribute = node.attribute("id").unwrap();
@@ -119,10 +104,6 @@ impl UIElementType {
                     "cheat_menu" => CraftAreaRecipes::CheatMenu,
                     recipe_type => CraftAreaRecipes::Recipes(KeyGroup::parse(recipe_type).unwrap()),
                 },
-                craft_width: node
-                    .attribute("craft_width")
-                    .and_then(|n| n.parse().ok())
-                    .unwrap(),
             },
             "research" => UIElementType::ResearchTree {
                 research: KeyGroup::parse(node.attribute("research").unwrap()).unwrap(),

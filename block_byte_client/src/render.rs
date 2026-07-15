@@ -6,9 +6,7 @@ use block_byte_common::registry::{
 use block_byte_common::rotation::BlockRotation;
 use block_byte_common::{Color, TexCoords};
 use bytemuck::{NoUninit, Pod};
-use cgmath::{
-    InnerSpace, Matrix4, Point3, SquareMatrix, Transform, Vector3,
-};
+use cgmath::{InnerSpace, Matrix4, Point3, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
 use std::borrow::Cow;
 use std::iter;
@@ -17,7 +15,9 @@ use std::ptr::NonNull;
 use std::sync::{Arc, OnceLock};
 use wgpu::util::StagingBelt;
 use wgpu::{
-    BackendOptions, BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferSize, CommandEncoder, CompareFunction, Device, FilterMode, IndexFormat, InstanceFlags, MemoryBudgetThresholds, Queue, RenderPass, Sampler, TextureFormat, TextureView,
+    BackendOptions, BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferSize,
+    CommandEncoder, CompareFunction, Device, FilterMode, IndexFormat, InstanceFlags,
+    MemoryBudgetThresholds, Queue, RenderPass, Sampler, TextureFormat, TextureView,
 };
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -151,25 +151,21 @@ impl RenderState {
         );
         skybox_texture.write_image(&skybox, 0, &queue);
 
+        let atlas_size = TEXTURE_ATLAS.get().unwrap().dimension / TEXTURE_CELL_SIZE;
         let animation_data_buffer = device.create_buffer(&BufferDescriptor {
             label: None,
             mapped_at_creation: false,
-            size: 4 * 2 + std::mem::size_of::<AnimatedCell>() as u64 * (2048u64 / 16).pow(2),
+            size: 4 * 2 + std::mem::size_of::<AnimatedCell>() as u64 * (atlas_size as u64).pow(2),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         queue.write_buffer(
             &animation_data_buffer,
             0,
-            bytemuck::cast_slice(std::slice::from_ref(&(16_f32 / 2048_f32))),
+            bytemuck::cast_slice(std::slice::from_ref(&atlas_size)),
         );
         queue.write_buffer(
             &animation_data_buffer,
             4,
-            bytemuck::cast_slice(std::slice::from_ref(&128_u32)),
-        );
-        queue.write_buffer(
-            &animation_data_buffer,
-            8,
             bytemuck::cast_slice(TEXTURE_ATLAS.get().unwrap().animation_data.as_slice()),
         );
         let animation_data_uniform =
@@ -1175,7 +1171,9 @@ impl CameraUniform {
     );
 }
 
-use crate::atlas::{AnimatedCell, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
+use crate::atlas::{
+    AnimatedCell, TEXTURE_ATLAS, TEXTURE_CELL_SIZE, TexCoordsExt, TexCoordsIndexExt,
+};
 use crate::game::clipping::Frustum;
 use crate::game::{ClientGame, ClientPlayer, ModifiedChunkEntry, profiler};
 use crate::ui::{UIPos, UIRect};
@@ -1653,7 +1651,7 @@ impl GPUMesh {
                 let buffer_slice = unsafe {
                     wgpu::WriteOnly::new(NonNull::slice_from_raw_parts(
                         buffer_slice.as_raw_ptr().cast::<u16>(),
-                        buffer_slice.len() / 2,
+                        new_mesh.indices.len(),
                     ))
                 };
                 buffer_slice.write_iter(new_mesh.indices.iter().map(|i| *i as u16));
@@ -1910,6 +1908,100 @@ impl GUIMesh {
         self.add_index(start_index + 3);
         self.add_index(start_index + 2);
         self.add_index(start_index + 0);
+    }
+    pub fn add_line(&mut self, p1: UIPos, p2: UIPos, texture: TexCoords, color: Color, width: f32) {
+        let color: [u8; 4] = color.into();
+        let mut perp = UIPos {
+            x: (p2.y - p1.y),
+            y: -(p2.x - p1.x),
+        };
+        let perp_norm = width / (perp.x.powi(2) + perp.y.powi(2)).sqrt();
+        perp.x *= perp_norm;
+        perp.y *= perp_norm;
+        let a = GUIVertex {
+            position: [p1.x + perp.x, p1.y + perp.y],
+            tex_coords: [texture.u1, texture.v2],
+            color,
+        };
+        let b = GUIVertex {
+            position: [p2.x + perp.x, p2.y + perp.y],
+            tex_coords: [texture.u2, texture.v2],
+            color,
+        };
+        let c = GUIVertex {
+            position: [p1.x - perp.x, p1.y - perp.y],
+            tex_coords: [texture.u1, texture.v1],
+            color,
+        };
+        let d = GUIVertex {
+            position: [p2.x - perp.x, p2.y - perp.y],
+            tex_coords: [texture.u2, texture.v1],
+            color,
+        };
+
+        let start_index = self.vertices.len() as u32;
+
+        self.add_vertex(a);
+        self.add_vertex(b);
+        self.add_vertex(c);
+        self.add_vertex(d);
+
+        self.add_index(start_index + 0);
+        self.add_index(start_index + 1);
+        self.add_index(start_index + 3);
+        self.add_index(start_index + 3);
+        self.add_index(start_index + 2);
+        self.add_index(start_index + 0);
+    }
+    pub fn add_line_clip(
+        &mut self,
+        p1: UIPos,
+        p2: UIPos,
+        texture: TexCoords,
+        color: Color,
+        width: f32,
+        clip: UIRect,
+    ) {
+        let xmin = clip.pos.x;
+        let ymin = clip.pos.y;
+        let xmax = clip.pos.x + clip.size.x;
+        let ymax = clip.pos.y + clip.size.y;
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let p = [-dx, dx, -dy, dy];
+        let q = [p1.x - xmin, xmax - p1.x, p1.y - ymin, ymax - p1.y];
+        let mut u1 = 0f32;
+        let mut u2 = 1f32;
+        for i in 0..4 {
+            if p[i] == 0. {
+                if q[i] < 0. {
+                    return;
+                }
+            } else {
+                let t = q[i] / p[i];
+                if p[i] < 0. {
+                    u1 = u1.max(t);
+                } else {
+                    u2 = u2.min(t);
+                }
+            }
+        }
+        if u1 > u2 {
+            return;
+        }
+        self.add_line(
+            UIPos {
+                x: p1.x + u1 * dx,
+                y: p1.y + u1 * dy,
+            },
+            UIPos {
+                x: p1.x + u2 * dx,
+                y: p1.y + u2 * dy,
+            },
+            texture,
+            color,
+            width,
+        );
     }
 }
 
