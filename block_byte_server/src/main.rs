@@ -12,7 +12,8 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, EntityAction, InventoryView, LookDirection, SERVER_DT, SERVER_TPS, ViewSlot,
+    ClientItem, EntityAction, InternString, InventoryView, LookDirection, SERVER_DT, SERVER_TPS,
+    ViewSlot,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -936,7 +937,7 @@ impl User {
                                 .machine
                                 .as_ref()
                                 .unwrap();
-                            machine.modify_property(machine_data, &property, *value, *mode);
+                            machine.modify_property(machine_data, *property, *value, *mode);
                             world.wakeup_component::<BlockMachine>(position).unwrap();
                         }
                     }
@@ -1280,6 +1281,7 @@ impl User {
                     value,
                     modify_mode,
                 } => {
+                    let property = InternString::intern(&property);
                     let screen_lock = self.screen.lock();
                     if let Some(screen_lock) = screen_lock.as_ref() {
                         if !screen_lock
@@ -1309,7 +1311,7 @@ impl User {
                                         .unwrap();
                                     machine.modify_property(
                                         machine_data,
-                                        &property,
+                                        property,
                                         value,
                                         modify_mode,
                                     );

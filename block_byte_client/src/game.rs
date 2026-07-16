@@ -12,7 +12,8 @@ use std::{
 use ahash::AHashMap;
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityAction, EntityPose,
-    EntityStats, HitTimer, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
+    EntityStats, HitTimer, InternString, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
+    TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, LoopMode, ModelGeometry},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
@@ -44,7 +45,7 @@ use crate::{
         MeshVertexConsumer, RenderState, SurfaceError, draw_model, get_block_matrix,
         get_block_rotation_face_vertices,
     },
-    ui::{ScreenData, UIPos, UIRect, render_screen, text_renderer},
+    ui::{ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
 };
 
 use crate::GameScreen;
@@ -481,7 +482,7 @@ impl GameScreen for ClientGame {
             });
         }
         self.hud.properties.0.insert(
-            "stamina_action".to_string(),
+            InternString::intern("stamina_action"),
             match &self.hit_timer {
                 Some(hit_timer) => {
                     let tool_data = self.active_tool();
@@ -494,11 +495,11 @@ impl GameScreen for ClientGame {
         self.hud
             .properties
             .0
-            .insert("stamina".to_string(), self.stamina);
+            .insert(InternString::intern("stamina"), self.stamina);
         self.hud
             .properties
             .0
-            .insert("hotbar_slot".to_string(), self.hotbar_slot as f32);
+            .insert(InternString::intern("hotbar_slot"), self.hotbar_slot as f32);
         self.chunk_buffer_pool.tick(&renderer.device);
         {
             let weight = 0.05;
@@ -547,21 +548,21 @@ impl GameScreen for ClientGame {
             renderer.size(),
             &mut gui_mesh,
             dt,
-            &mut Vec::new(),
+            |_| {},
         );
         if let Some(screen) = &mut self.screen {
-            let mut message_queue = Vec::new();
             render_screen(
                 screen,
                 Some(&input),
                 renderer.size(),
                 &mut gui_mesh,
                 dt,
-                &mut message_queue,
+                |event| match event {
+                    UIMessage::ServerMessage(message) => {
+                        let _ = self.connection.tx.send(message);
+                    }
+                },
             );
-            for message in message_queue {
-                self.send_message(message);
-            }
         }
         if self.needs_equip {
             self.needs_equip = false;
@@ -1012,11 +1013,17 @@ impl ClientGame {
                     self.researched = research;
                 }
                 NetworkMessageS2C::HudBarUpdate { health } => {
-                    self.hud.properties.0.insert("health".to_string(), health);
+                    self.hud
+                        .properties
+                        .0
+                        .insert(InternString::intern("health"), health);
                 }
                 NetworkMessageS2C::UISetProperty { property, value } => {
                     if let Some(screen) = &mut self.screen {
-                        screen.properties.0.insert(property, value);
+                        screen
+                            .properties
+                            .0
+                            .insert(InternString::intern(&property), value);
                     }
                 }
                 NetworkMessageS2C::EntityAction { entity, action } => {

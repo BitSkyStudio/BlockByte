@@ -14,19 +14,20 @@ use taffy::{
 use uuid::Uuid;
 
 use crate::{
+    InternString,
     net::PropertyModifyMode,
     registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchData, TextureKey},
     scripts::ScriptValue,
 };
 #[derive(Default)]
 struct UIParseContext {
-    display_properties: HashSet<String>,
-    button_properties: HashSet<String>,
+    display_properties: HashSet<InternString>,
+    button_properties: HashSet<InternString>,
 }
 pub struct UIScreen {
     pub root: UIElement,
-    pub display_properties: HashSet<String>,
-    pub button_properties: HashSet<String>,
+    pub display_properties: HashSet<InternString>,
+    pub button_properties: HashSet<InternString>,
 }
 pub type UIScreenKey = Key<UIScreen>;
 impl RegistryConfigLoadable for UIScreen {
@@ -119,7 +120,9 @@ impl UIElementType {
                 },
                 property: {
                     let property = node.attribute("property").unwrap().to_string();
-                    context.button_properties.insert(property.clone());
+                    context
+                        .button_properties
+                        .insert(InternString::intern(&property.clone()));
                     property
                 },
                 value: node
@@ -174,7 +177,7 @@ impl UIElement {
 #[derive(Default)]
 pub struct UIStyleList {
     pub rules: Vec<(UIStyleRule, Option<PropertyCondition>)>,
-    pub properties: HashSet<String>,
+    pub properties: HashSet<InternString>,
 }
 impl UIStyleList {
     pub fn parse(input: &str) -> anyhow::Result<Self> {
@@ -207,7 +210,7 @@ impl UIStyleList {
                     })
                     .unwrap();
                 condition = Some(PropertyCondition {
-                    property: l[1..].trim().to_string(),
+                    property: InternString::intern(l[1..].trim()),
                     comparator,
                     value: r.parse::<f32>().unwrap(),
                 });
@@ -216,7 +219,7 @@ impl UIStyleList {
             fn parse_style_value(input: &str) -> anyhow::Result<StyleValue> {
                 Ok(match input.parse::<f32>() {
                     Ok(value) => StyleValue::Constant(value),
-                    Err(_) => StyleValue::Property(input.to_string()),
+                    Err(_) => StyleValue::Property(InternString::intern(input)),
                 })
             }
             fn parse_style_length(input: &str) -> anyhow::Result<StyleLength> {
@@ -484,7 +487,7 @@ pub enum UIStyleRule {
 #[derive(Clone)]
 pub enum StyleValue {
     Constant(f32),
-    Property(String),
+    Property(InternString),
 }
 impl StyleValue {
     pub fn calc(&self, properties: &PropertyMap) -> f32 {
@@ -527,15 +530,18 @@ impl StyleLength {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct PropertyMap(pub HashMap<String, f32>);
+pub struct PropertyMap(pub HashMap<InternString, f32>);
 impl PropertyMap {
-    pub fn extract_patched_properties_from_text(text: &str, properties: &mut HashSet<String>) {
+    pub fn extract_patched_properties_from_text(
+        text: &str,
+        properties: &mut HashSet<InternString>,
+    ) {
         let mut current_property = None;
         for char in text.chars() {
             if char == '{' {
                 current_property = Some(String::new());
             } else if char == '}' {
-                properties.insert(current_property.take().unwrap());
+                properties.insert(InternString::intern(&current_property.take().unwrap()));
             } else if let Some(current_property) = &mut current_property {
                 current_property.push(char);
             }
@@ -550,7 +556,7 @@ impl PropertyMap {
             } else if char == '}' {
                 output_text += self
                     .0
-                    .get(current_property.as_ref().unwrap())
+                    .get(&InternString::intern(current_property.as_ref().unwrap()))
                     .cloned()
                     .unwrap_or(0.)
                     .to_string()
@@ -564,9 +570,9 @@ impl PropertyMap {
         output_text
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PropertyCondition {
-    pub property: String,
+    pub property: InternString,
     pub comparator: std::cmp::Ordering,
     pub value: f32,
 }

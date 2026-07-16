@@ -745,7 +745,7 @@ pub enum BlockInteractAction {
     },
     Pickup,
     ModifyProperty {
-        property: String,
+        property: InternString,
         value: u16,
         mode: PropertyModifyMode,
     },

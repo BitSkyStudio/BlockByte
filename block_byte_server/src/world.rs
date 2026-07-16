@@ -7,8 +7,8 @@ use std::{
 
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, CharacterController, DamageTable, DamageType, EntityAction,
-    EntityPose, EntityStats, HitTimer, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
-    SERVER_TPS,
+    EntityPose, EntityStats, HitTimer, InternString, LookDirection, MoveMode, NORMAL_SPEED,
+    SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
@@ -486,7 +486,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                             world.send(
                                                 controlling_user,
                                                 NetworkMessageS2C::UISetProperty {
-                                                    property,
+                                                    property: property.to_string(),
                                                     value,
                                                 },
                                             );
@@ -1472,7 +1472,7 @@ impl BlockMachine {
     pub fn modify_property(
         &mut self,
         machine_data: &BlockMachineData,
-        property: &str,
+        property: InternString,
         value: u16,
         mode: PropertyModifyMode,
     ) {

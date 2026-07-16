@@ -47,7 +47,7 @@ pub fn render_screen(
     size: PhysicalSize<u32>,
     mesh: &mut GUIMesh,
     dt: f32,
-    message_queue: &mut Vec<NetworkMessageC2S>,
+    mut event_consumer: impl FnMut(UIMessage),
 ) {
     if let Some(selected_slot) = screen_data.selected_slot {
         screen_data
@@ -96,7 +96,7 @@ pub fn render_screen(
         mesh,
         &mut overlay_mesh,
         input,
-        message_queue,
+        &mut event_consumer,
     );
     mesh.append_mesh(overlay_mesh);
     if let Some(input) = input {
@@ -129,6 +129,9 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
         },
     }
 }
+pub enum UIMessage {
+    ServerMessage(NetworkMessageC2S),
+}
 fn render_element(
     node: NodeId,
     taffy: &TaffyTree<&UIElement>,
@@ -138,7 +141,7 @@ fn render_element(
     mesh: &mut GUIMesh,
     overlay_mesh: &mut GUIMesh,
     input: Option<&InputManager>,
-    message_queue: &mut Vec<NetworkMessageC2S>,
+    event_consumer: &mut impl FnMut(UIMessage),
 ) {
     let layout = taffy.layout(node).unwrap();
     let element = *taffy.get_node_context(node).unwrap();
@@ -248,7 +251,7 @@ fn render_element(
                     mesh,
                     overlay_mesh,
                     input,
-                    message_queue,
+                    event_consumer,
                 );
             }
         }
@@ -288,15 +291,18 @@ fn render_element(
                             if let Some(mode) = move_mode {
                                 match target_slot {
                                     SlotId::Id(target_slot) => {
-                                        message_queue.push(NetworkMessageC2S::MoveItem {
-                                            from: slot,
-                                            to: target_slot,
-                                            mode,
-                                        });
+                                        event_consumer(UIMessage::ServerMessage(
+                                            NetworkMessageC2S::MoveItem {
+                                                from: slot,
+                                                to: target_slot,
+                                                mode,
+                                            },
+                                        ));
                                     }
                                     SlotId::Trash => {
-                                        message_queue
-                                            .push(NetworkMessageC2S::TrashItem { slot, mode });
+                                        event_consumer(UIMessage::ServerMessage(
+                                            NetworkMessageC2S::TrashItem { slot, mode },
+                                        ));
                                     }
                                 }
                             }
@@ -475,8 +481,9 @@ fn render_element(
                                     [(MouseButton::Left, false), (MouseButton::Right, true)]
                                 {
                                     if input.buttons.is_just_down(button) {
-                                        message_queue
-                                            .push(NetworkMessageC2S::GiveItem { item, stack });
+                                        event_consumer(UIMessage::ServerMessage(
+                                            NetworkMessageC2S::GiveItem { item, stack },
+                                        ));
                                     }
                                 }
                             }
@@ -553,10 +560,12 @@ fn render_element(
                                     [(MouseButton::Left, 1), (MouseButton::Right, 5)]
                                 {
                                     if input.buttons.is_just_down(button) {
-                                        message_queue.push(NetworkMessageC2S::Craft {
-                                            recipe: *recipe,
-                                            count,
-                                        });
+                                        event_consumer(UIMessage::ServerMessage(
+                                            NetworkMessageC2S::Craft {
+                                                recipe: *recipe,
+                                                count,
+                                            },
+                                        ));
                                     }
                                 }
                             }
@@ -653,11 +662,13 @@ fn render_element(
                                     _ => unreachable!(),
                                 };
                                 if let Some(mode) = move_mode {
-                                    message_queue.push(NetworkMessageC2S::Research {
-                                        slot,
-                                        mode,
-                                        research: *research,
-                                    });
+                                    event_consumer(UIMessage::ServerMessage(
+                                        NetworkMessageC2S::Research {
+                                            slot,
+                                            mode,
+                                            research: *research,
+                                        },
+                                    ));
                                 }
                             }
                             None => {}
@@ -682,11 +693,11 @@ fn render_element(
                 && context.content.contains(input.cursor_position)
             {
                 if input.buttons.is_just_down(MouseButton::Left) {
-                    message_queue.push(NetworkMessageC2S::UIButtonPress {
+                    event_consumer(UIMessage::ServerMessage(NetworkMessageC2S::UIButtonPress {
                         property: property.clone(),
                         value: *value,
                         modify_mode: *modify_mode,
-                    });
+                    }));
                 }
             }
         }

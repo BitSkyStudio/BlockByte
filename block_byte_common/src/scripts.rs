@@ -3,6 +3,8 @@ use std::{collections::HashMap, marker::PhantomData};
 use num_integer::Integer;
 use serde::{Deserialize, Serialize};
 
+use crate::InternString;
+
 pub type RegisterId = usize;
 pub type ScriptLabel = usize;
 pub type ScriptValue = u16;
@@ -59,7 +61,7 @@ pub enum ScriptByteCode<E> {
 }
 pub struct CompiledScript<E> {
     pub instructions: Vec<ScriptByteCode<E>>,
-    pub named_registers: Vec<String>,
+    pub named_registers: Vec<InternString>,
 }
 pub fn expect_argument_count(
     context: &ScriptParseContext,
@@ -214,19 +216,20 @@ impl<'de, E: ExternalScriptByteCode> serde::Deserialize<'de> for CompiledScript<
 
 #[derive(Default)]
 pub struct ScriptParseContext {
-    pub register_map: HashMap<String, RegisterId>,
-    pub registers: Vec<String>,
+    pub register_map: HashMap<InternString, RegisterId>,
+    pub registers: Vec<InternString>,
     pub labels: HashMap<String, ScriptLabel>,
     pub current_line_num: usize,
 }
 impl ScriptParseContext {
     pub fn parse_register(&mut self, name: &str) -> RegisterId {
-        if let Some(register) = self.register_map.get(name) {
+        let name = InternString::intern(name);
+        if let Some(register) = self.register_map.get(&name) {
             return *register;
         }
         let id = self.registers.len();
-        self.registers.push(name.to_string());
-        self.register_map.insert(name.to_string(), id);
+        self.registers.push(name);
+        self.register_map.insert(name, id);
         id
     }
     pub fn parse_value(&mut self, input: &str) -> RegisterOrImmediate {
