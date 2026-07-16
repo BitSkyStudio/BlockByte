@@ -294,6 +294,10 @@ where
         (0..load_registry.data_list.len())
             .map(|i| Key(unsafe { NonZero::new_unchecked(i as u32 + 1) }, PhantomData))
     }
+    pub fn count() -> usize {
+        let load_registry = LOAD_REGISTRIES.get().unwrap().get_load_registry();
+        load_registry.data_list.len()
+    }
 }
 
 pub trait RegistryConfigLoadable: Sized {

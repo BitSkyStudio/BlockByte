@@ -13,6 +13,7 @@ use block_byte_common::{
 use cgmath::{Matrix4, SquareMatrix};
 use smallvec::SmallVec;
 use taffy::{AvailableSpace, Dimension, NodeId, Style, TaffyTree};
+use uuid::Uuid;
 use winit::{dpi::PhysicalSize, event::MouseButton};
 
 use crate::{
@@ -28,6 +29,17 @@ pub struct ScreenData {
     pub properties: PropertyMap,
     pub selected_slot: Option<(usize, MouseButton)>,
     pub slot_action_prediction: HashMap<usize, (MouseButton, f32)>,
+    pub element_data: HashMap<Uuid, InstantiatedElementData>,
+}
+pub struct InstantiatedElementData {
+    pub scroll: UIPos,
+}
+impl Default for InstantiatedElementData {
+    fn default() -> Self {
+        InstantiatedElementData {
+            scroll: UIPos { x: 0., y: 0. },
+        }
+    }
 }
 pub fn render_screen(
     screen_data: &mut ScreenData,
@@ -406,10 +418,26 @@ fn render_element(
             if context.content.size.x <= 0. {
                 return;
             }
+            let element_data = data.element_data.entry(element.uuid).or_default();
+            let top_offset = -element_data.scroll.y;
             let craft_width = (context.content.size.x / craft_size).floor() as usize;
             let left_offset = (context.content.size.x - craft_width as f32 * craft_size) / 2.;
             let mouse_inside = if let Some(input) = input {
-                context.content.contains(input.cursor_position)
+                if context.content.contains(input.cursor_position) {
+                    let crafts_count = match recipes {
+                        CraftAreaRecipes::Recipes(key_group) => key_group.list().len(),
+                        CraftAreaRecipes::CheatMenu => ItemKey::count(),
+                    };
+                    let max_scroll_height = (crafts_count.div_ceil(craft_width) as f32 * 50.
+                        - context.content.size.y)
+                        .max(0.);
+                    element_data.scroll.y = (element_data.scroll.y
+                        - input.wheel_scroll_delta.y * 20.)
+                        .clamp(0., max_scroll_height);
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             };
@@ -420,7 +448,7 @@ fn render_element(
                         let area = UIRect {
                             pos: UIPos {
                                 x: (i % craft_width) as f32 * craft_size + left_offset,
-                                y: (i / craft_width) as f32 * craft_size,
+                                y: (i / craft_width) as f32 * craft_size + top_offset,
                             },
                             size: UIPos::all(craft_size),
                         };
@@ -428,7 +456,7 @@ fn render_element(
                         if let Some(input) = input {
                             if (UIRect {
                                 pos: UIPos {
-                                    x: area.pos.x + context.content.pos.x + left_offset,
+                                    x: area.pos.x + context.content.pos.x,
                                     y: area.pos.y + context.content.pos.y,
                                 },
                                 size: UIPos::all(craft_size),
@@ -461,7 +489,7 @@ fn render_element(
                         let area = UIRect {
                             pos: UIPos {
                                 x: (i % craft_width) as f32 * craft_size + left_offset,
-                                y: (i / craft_width) as f32 * craft_size,
+                                y: (i / craft_width) as f32 * craft_size + top_offset,
                             },
                             size: UIPos::all(craft_size),
                         };
@@ -480,7 +508,7 @@ fn render_element(
                         if let Some(input) = input {
                             if (UIRect {
                                 pos: UIPos {
-                                    x: area.pos.x + context.content.pos.x + left_offset,
+                                    x: area.pos.x + context.content.pos.x,
                                     y: area.pos.y + context.content.pos.y,
                                 },
                                 size: UIPos::all(craft_size),
@@ -538,10 +566,24 @@ fn render_element(
             }
         }
         UIElementType::ResearchTree { research } => {
+            let element_data = data.element_data.entry(element.uuid).or_default();
+            let mouse_inside = if let Some(input) = input {
+                if context.content.contains(input.cursor_position) {
+                    if data.selected_slot.is_none() && input.buttons.is_down(MouseButton::Left) {
+                        element_data.scroll.x += input.mouse_delta.x as f32;
+                        element_data.scroll.y += input.mouse_delta.y as f32;
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             let research_size = 50.;
             let research_scroll = UIPos {
-                x: context.content.size.x / 2.,
-                y: context.content.size.y / 2.,
+                x: context.content.size.x / 2. + element_data.scroll.x,
+                y: context.content.size.y / 2. + element_data.scroll.y,
             };
             for research in research.list() {
                 let research_data = research.data();
@@ -549,12 +591,12 @@ fn render_element(
                     let dependency_data = dependency.data();
                     context.draw_line(
                         UIPos {
-                            x: research_data.x * research_size + research_scroll.x,
-                            y: research_data.y * research_size + research_scroll.y,
+                            x: (research_data.x + 0.5) * research_size + research_scroll.x,
+                            y: (research_data.y + 0.5) * research_size + research_scroll.y,
                         },
                         UIPos {
-                            x: dependency_data.x * research_size + research_scroll.x,
-                            y: dependency_data.y * research_size + research_scroll.y,
+                            x: (dependency_data.x + 0.5) * research_size + research_scroll.x,
+                            y: (dependency_data.y + 0.5) * research_size + research_scroll.y,
                         },
                         TextureKey::id("crosshair").unwrap().tex_coords(), //todo
                         Color::WHITE,
@@ -581,6 +623,7 @@ fn render_element(
                         size: UIPos::all(research_size),
                     })
                     .contains(input.cursor_position)
+                        && mouse_inside
                     {
                         overlay_context.draw_text(
                             input.cursor_position,
@@ -1197,7 +1240,7 @@ impl TextRenderer {
 pub fn text_renderer() -> &'static TextRenderer {
     &TEXTURE_ATLAS.get().unwrap().text_renderer
 }
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Debug)]
 pub struct UIPos {
     pub x: f32,
     pub y: f32,
@@ -1207,7 +1250,7 @@ impl UIPos {
         UIPos { x: v, y: v }
     }
 }
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct UIRect {
     pub pos: UIPos,
     pub size: UIPos,

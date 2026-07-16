@@ -1,0 +1,7 @@
+(
+    icon: Block("rock.limestone.bricks"),
+    requirements: [],
+    dependencies: ["woodwork"],
+    x: 2,
+    y: 0,
+)

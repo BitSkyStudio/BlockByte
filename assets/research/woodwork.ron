@@ -1,0 +1,6 @@
+(
+    icon: Block("wood.oak.plank"),
+    requirements: [],
+    x: 0,
+    y: 0,
+)

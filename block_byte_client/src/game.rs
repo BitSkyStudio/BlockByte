@@ -959,6 +959,7 @@ impl ClientGame {
                         properties,
                         selected_slot: None,
                         slot_action_prediction: HashMap::new(),
+                        element_data: HashMap::new(),
                     });
                     renderer.window().set_cursor_visible(true);
                     let size = renderer.size();
@@ -1147,6 +1148,7 @@ impl ClientGame {
                 properties: PropertyMap(HashMap::new()),
                 selected_slot: None,
                 slot_action_prediction: HashMap::new(),
+                element_data: HashMap::new(),
             },
             hit_timer: None,
             hotbar_slot: 0,
