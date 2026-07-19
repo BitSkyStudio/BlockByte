@@ -583,7 +583,7 @@ impl GameScreen for ClientGame {
                 }
             }
         }
-        self.tick_camera(dt, input);
+        self.tick_camera(dt, input, self.screen.is_none());
         self.player_position = self.camera.position;
         self.send_message(NetworkMessageC2S::PlayerPosition {
             position: self.camera.position,
@@ -665,7 +665,7 @@ impl ClientGame {
     pub fn send_message(&mut self, message: NetworkMessageC2S) {
         let _ = self.connection.tx.send(message);
     }
-    pub fn tick_camera(&mut self, dt: f32, input: &InputManager) {
+    pub fn tick_camera(&mut self, dt: f32, input: &InputManager, can_move: bool) {
         let move_mode = if self.player_stats.flight() > 0. {
             MoveMode::Fly
         } else {
@@ -716,6 +716,9 @@ impl ClientGame {
             y: move_vector.y,
             z: move_vector.z,
         };
+        if !can_move {
+            move_vector = Pos::all(0.);
+        }
         if !(move_vector.x == 0.0 && move_vector.z == 0.0) {
             let xz_mag = (move_vector.x.powi(2) + move_vector.z.powi(2)).sqrt();
             move_vector.x /= xz_mag;
@@ -736,7 +739,7 @@ impl ClientGame {
             }
         }
         move_vector *= if self.camera.running { 1.35 } else { 1. };
-        self.camera.crouching = input.keys.is_down(KeyCode::ShiftLeft);
+        self.camera.crouching = input.keys.is_down(KeyCode::ShiftLeft) && can_move;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
                 if !self.camera.crouching
@@ -961,6 +964,7 @@ impl ClientGame {
                         selected_slot: None,
                         slot_action_prediction: HashMap::new(),
                         element_data: HashMap::new(),
+                        time: 0.,
                     });
                     renderer.window().set_cursor_visible(true);
                     let size = renderer.size();
@@ -1156,6 +1160,7 @@ impl ClientGame {
                 selected_slot: None,
                 slot_action_prediction: HashMap::new(),
                 element_data: HashMap::new(),
+                time: 0.,
             },
             hit_timer: None,
             hotbar_slot: 0,

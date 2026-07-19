@@ -59,16 +59,18 @@ pub enum UIElementType {
     },
     CraftArea {
         recipes: CraftAreaRecipes,
+        filter: Option<Uuid>,
     },
     ResearchTree {
         research: KeyGroup<ResearchData>,
     },
     Button {
         text: String,
-        property: String,
+        property: InternString,
         value: ScriptValue,
         modify_mode: PropertyModifyMode,
     },
+    TextField {},
 }
 impl UIElementType {
     fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
@@ -105,6 +107,10 @@ impl UIElementType {
                     "cheat_menu" => CraftAreaRecipes::CheatMenu,
                     recipe_type => CraftAreaRecipes::Recipes(KeyGroup::parse(recipe_type).unwrap()),
                 },
+                filter: match node.attribute("filter") {
+                    Some(filter) => Some(Uuid::parse_str(filter)?),
+                    None => None,
+                },
             },
             "research" => UIElementType::ResearchTree {
                 research: KeyGroup::parse(node.attribute("research").unwrap()).unwrap(),
@@ -119,10 +125,8 @@ impl UIElementType {
                     text
                 },
                 property: {
-                    let property = node.attribute("property").unwrap().to_string();
-                    context
-                        .button_properties
-                        .insert(InternString::intern(&property.clone()));
+                    let property = InternString::intern(node.attribute("property").unwrap());
+                    context.button_properties.insert(property);
                     property
                 },
                 value: node
@@ -137,6 +141,7 @@ impl UIElementType {
                     _ => panic!(),
                 },
             },
+            "textfield" => UIElementType::TextField {},
             other => unimplemented!("{}", other),
         })
     }
@@ -170,7 +175,10 @@ impl UIElement {
                     .collect(),
                 None => Vec::new(),
             },
-            uuid: Uuid::new_v4(),
+            uuid: match node.attribute("uuid") {
+                Some(id) => Uuid::parse_str(id)?,
+                None => Uuid::new_v4(),
+            },
         })
     }
 }

@@ -67,9 +67,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if sampled_color.w < 0.1{
         discard;
     }
-    let color = sampled_color.rgb * (1. - material.r) + in.color.rgb * material.r;
+    //we dont use material r for this
+    let color = sampled_color.rgb * in.color.rgb;
 
     let shadow_color = sample_shadow(in.world_position, in.normal);
 
-    return vec4(color * shadow_color,sampled_color.a);//* vec4<f32>(5.5,5.5, 5.5, 1.);
+    return vec4(color * shadow_color,sampled_color.a * in.color.a);//* vec4<f32>(5.5,5.5, 5.5, 1.);
 }

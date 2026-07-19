@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ClientItem, EntityAction, EntityPose, EntityStats, ItemMoveMode, LookDirection,
+    ClientItem, EntityAction, EntityPose, EntityStats, InternString, ItemMoveMode, LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockEntry, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey},
     scripts::ScriptValue,
@@ -80,7 +80,9 @@ pub enum NetworkMessageC2S {
         index: usize,
     },
     UIButtonPress {
-        property: String,
+        //to prevent leaking server memory
+        #[serde(deserialize_with = "crate::deserialize_intern_string_if_exists")]
+        property: InternString,
         value: ScriptValue,
         modify_mode: PropertyModifyMode,
     },
@@ -154,7 +156,7 @@ pub enum NetworkMessageS2C {
         item: Option<ClientItem>,
     },
     UISetProperty {
-        property: String,
+        property: InternString,
         value: f32,
     },
     UIClose,

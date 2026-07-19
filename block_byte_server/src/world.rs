@@ -486,7 +486,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                             world.send(
                                                 controlling_user,
                                                 NetworkMessageS2C::UISetProperty {
-                                                    property: property.to_string(),
+                                                    property,
                                                     value,
                                                 },
                                             );

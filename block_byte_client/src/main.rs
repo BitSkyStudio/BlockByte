@@ -17,7 +17,7 @@ use winit::{
     dpi::PhysicalPosition,
     event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::{self, KeyCode, PhysicalKey},
     window::{Fullscreen, WindowAttributes, WindowId},
 };
 
@@ -127,6 +127,19 @@ impl ApplicationHandler for App {
                     y: position.y as f32,
                 };
             }
+            WindowEvent::KeyboardInput {
+                device_id: _,
+                event,
+                is_synthetic,
+            } => {
+                if is_synthetic {
+                    return;
+                }
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+                self.input.logical.push(event.logical_key);
+            }
             WindowEvent::Resized(new_size) => {
                 self.render_state.as_mut().unwrap().resize(new_size);
             }
@@ -183,6 +196,7 @@ impl ApplicationHandler for App {
 
                 self.input.buttons.frame_clear(dt);
                 self.input.keys.frame_clear(dt);
+                self.input.logical.clear();
                 self.input.last_cursor_position = self.input.cursor_position;
                 self.input.wheel_scroll_delta = UIPos { x: 0., y: 0. };
                 self.input.mouse_delta = PhysicalPosition { x: 0., y: 0. };
@@ -258,6 +272,7 @@ pub struct InputManager {
     pub last_cursor_position: UIPos,
     pub wheel_scroll_delta: UIPos,
     pub mouse_delta: PhysicalPosition<f64>,
+    pub logical: Vec<keyboard::Key>,
 }
 
 struct ConnectionScreen {

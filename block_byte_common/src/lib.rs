@@ -783,6 +783,13 @@ impl InternString {
         table.insert(interned.as_str(), interned);
         interned
     }
+    pub fn intern_if_exists(input: &str) -> Option<InternString> {
+        if let Some(interned) = STRING_INTERN_TABLE.read().unwrap().get(input) {
+            Some(*interned)
+        } else {
+            None
+        }
+    }
     pub fn as_str(&self) -> &'static str {
         self.0
     }
@@ -808,6 +815,30 @@ impl Serialize for InternString {
     {
         serializer.serialize_str(self.as_str())
     }
+}
+fn deserialize_intern_string_if_exists<'de, D>(deserializer: D) -> Result<InternString, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct InternStringVisitor;
+    impl<'de> serde::de::Visitor<'de> for InternStringVisitor {
+        type Value = InternString;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("valid string")
+        }
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match InternString::intern_if_exists(v) {
+                Some(string) => Ok(string),
+                None => Err(serde::de::Error::custom(format!(
+                    "string '{v}' doesnt exist"
+                ))),
+            }
+        }
+    }
+    deserializer.deserialize_str(InternStringVisitor)
 }
 impl<'de> Deserialize<'de> for InternString {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

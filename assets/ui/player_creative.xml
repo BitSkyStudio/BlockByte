@@ -12,6 +12,7 @@
         <slot id="9" class="slot"/>
         <slot id="trash" style="background: trash_slot;"/>
     </box>
-    <craft style="background: slot,3;border: 20;width: 520;height: 215;" recipes="cheat_menu"/>
+    <craft style="background: slot,3;border: 20;width: 520;height: 215;" recipes="cheat_menu" filter="9c78e1c7-7c0e-4a3d-89d1-a80009b80c9d"/>
+    <textfield uuid="9c78e1c7-7c0e-4a3d-89d1-a80009b80c9d" style="width: 200;height:50;background: slot,3;border: 20;"/>
     <research style="background: slot,3;border: 20;width: 520;height: 215;" research="#player_research"/>
 </box>

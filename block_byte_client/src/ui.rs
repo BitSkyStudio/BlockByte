@@ -14,7 +14,7 @@ use cgmath::{Matrix4, SquareMatrix};
 use smallvec::SmallVec;
 use taffy::{AvailableSpace, Dimension, NodeId, Style, TaffyTree};
 use uuid::Uuid;
-use winit::{dpi::PhysicalSize, event::MouseButton};
+use winit::{dpi::PhysicalSize, event::MouseButton, keyboard::NamedKey};
 
 use crate::{
     GUIMesh, InputManager,
@@ -30,14 +30,19 @@ pub struct ScreenData {
     pub selected_slot: Option<(usize, MouseButton)>,
     pub slot_action_prediction: HashMap<usize, (MouseButton, f32)>,
     pub element_data: HashMap<Uuid, InstantiatedElementData>,
+    pub time: f32,
 }
 pub struct InstantiatedElementData {
     pub scroll: UIPos,
+    pub text: String,
+    pub text_cursor: usize,
 }
 impl Default for InstantiatedElementData {
     fn default() -> Self {
         InstantiatedElementData {
             scroll: UIPos { x: 0., y: 0. },
+            text: String::new(),
+            text_cursor: 0,
         }
     }
 }
@@ -49,6 +54,7 @@ pub fn render_screen(
     dt: f32,
     mut event_consumer: impl FnMut(UIMessage),
 ) {
+    screen_data.time += dt;
     if let Some(selected_slot) = screen_data.selected_slot {
         screen_data
             .slot_action_prediction
@@ -112,7 +118,8 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
     match &element.element_type {
         UIElementType::Box(_)
         | UIElementType::CraftArea { .. }
-        | UIElementType::ResearchTree { .. } => taffy::Size::ZERO,
+        | UIElementType::ResearchTree { .. }
+        | UIElementType::TextField { .. } => taffy::Size::ZERO,
         UIElementType::Label(text) | UIElementType::Button { text, .. } => {
             let size = text_renderer().get_size(
                 properties.patch_text(text.as_str()).as_str(),
@@ -419,12 +426,31 @@ fn render_element(
                 SlotId::Trash => {}
             }
         }
-        UIElementType::CraftArea { recipes } => {
+        UIElementType::CraftArea { recipes, filter } => {
             let craft_size = 50.;
             if context.content.size.x <= 0. {
                 return;
             }
-            let element_data = data.element_data.entry(element.uuid).or_default();
+            let (element_data, filter) = match filter {
+                Some(filter) => {
+                    data.element_data.entry(element.uuid).or_default();
+                    data.element_data.entry(*filter).or_default();
+                    let [element_data, filter] =
+                        data.element_data.get_disjoint_mut([&element.uuid, filter]);
+                    (element_data.unwrap(), Some(filter.unwrap().text.as_str()))
+                }
+                None => (data.element_data.entry(element.uuid).or_default(), None),
+            };
+            let filter_passes = |text: &str| {
+                if let Some(filter) = filter {
+                    for filter_part in filter.split(" ") {
+                        if !text.contains(filter_part) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            };
             let top_offset = -element_data.scroll.y;
             let craft_width = (context.content.size.x / craft_size).floor() as usize;
             let left_offset = (context.content.size.x - craft_width as f32 * craft_size) / 2.;
@@ -449,8 +475,14 @@ fn render_element(
             };
             match recipes {
                 CraftAreaRecipes::CheatMenu => {
-                    for (i, item) in ItemKey::entries().enumerate() {
+                    let mut i = 0;
+                    for item in ItemKey::entries() {
                         let item_data = item.data();
+                        let item_name = format!("item.{}", item.text_id());
+                        let item_name = translate(item_name.as_str());
+                        if !filter_passes(item_name) {
+                            continue;
+                        }
                         let area = UIRect {
                             pos: UIPos {
                                 x: (i % craft_width) as f32 * craft_size + left_offset,
@@ -473,7 +505,7 @@ fn render_element(
                             {
                                 overlay_context.draw_text(
                                     input.cursor_position,
-                                    translate(format!("item.{}", item.text_id()).as_str()),
+                                    item_name,
                                     40.,
                                     Color::WHITE,
                                 );
@@ -488,11 +520,18 @@ fn render_element(
                                 }
                             }
                         }
+                        i += 1;
                     }
                 }
                 CraftAreaRecipes::Recipes(recipes) => {
-                    for (i, recipe) in recipes.list().iter().enumerate() {
+                    let mut i = 0;
+                    for recipe in recipes.list() {
                         let recipe_data = recipe.data();
+                        let mut text =
+                            translate(format!("recipe.{}", recipe.text_id()).as_str()).to_string();
+                        if !filter_passes(&text) {
+                            continue;
+                        }
                         let area = UIRect {
                             pos: UIPos {
                                 x: (i % craft_width) as f32 * craft_size + left_offset,
@@ -523,9 +562,6 @@ fn render_element(
                             .contains(input.cursor_position)
                                 && mouse_inside
                             {
-                                let mut text =
-                                    translate(format!("recipe.{}", recipe.text_id()).as_str())
-                                        .to_string();
                                 for (input_item, input_count) in &recipe_data.inputs {
                                     text += format!(
                                         "\n-{}x{}",
@@ -570,6 +606,7 @@ fn render_element(
                                 }
                             }
                         }
+                        i += 1;
                     }
                 }
             }
@@ -694,10 +731,74 @@ fn render_element(
             {
                 if input.buttons.is_just_down(MouseButton::Left) {
                     event_consumer(UIMessage::ServerMessage(NetworkMessageC2S::UIButtonPress {
-                        property: property.clone(),
+                        property: *property,
                         value: *value,
                         modify_mode: *modify_mode,
                     }));
+                }
+            }
+        }
+        UIElementType::TextField {} => {
+            let element_data = data.element_data.entry(element.uuid).or_default();
+            context.draw_text(
+                UIPos {
+                    x: 0.,
+                    y: context.content.size.y,
+                },
+                &element_data.text,
+                20.,
+                Color::WHITE,
+            );
+            if data.time % 1. > 0.5 {
+                let cursor_width = text_renderer().get_size("|", 20.).x;
+                context.draw_text(
+                    UIPos {
+                        x: text_renderer()
+                            .get_size(&element_data.text[..element_data.text_cursor], 20.)
+                            .x
+                            - cursor_width / 2.,
+                        y: context.content.size.y,
+                    },
+                    "|",
+                    20.,
+                    Color::WHITE,
+                );
+            }
+            if let Some(input) = input {
+                for logical in &input.logical {
+                    match logical {
+                        winit::keyboard::Key::Named(NamedKey::ArrowLeft) => {
+                            if element_data.text_cursor > 0 {
+                                element_data.text_cursor -= 1;
+                            }
+                        }
+                        winit::keyboard::Key::Named(NamedKey::ArrowRight) => {
+                            if element_data.text_cursor < element_data.text.len() {
+                                element_data.text_cursor += 1;
+                            }
+                        }
+                        winit::keyboard::Key::Named(NamedKey::Backspace) => {
+                            if element_data.text_cursor > 0 {
+                                element_data.text_cursor -= 1;
+                                element_data.text.remove(element_data.text_cursor);
+                            }
+                        }
+                        winit::keyboard::Key::Named(NamedKey::Space) => {
+                            element_data.text.insert_str(element_data.text_cursor, " ");
+                            element_data.text_cursor += 1;
+                        }
+                        winit::keyboard::Key::Character(char) => {
+                            let Some(char) = char.chars().next() else {
+                                continue;
+                            };
+                            if !char.is_ascii_alphanumeric() && !char.is_ascii_punctuation() {
+                                continue;
+                            }
+                            element_data.text.insert(element_data.text_cursor, char);
+                            element_data.text_cursor += 1;
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
