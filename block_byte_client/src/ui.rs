@@ -36,6 +36,7 @@ pub struct InstantiatedElementData {
     pub scroll: UIPos,
     pub text: String,
     pub text_cursor: usize,
+    pub selected: bool,
 }
 impl Default for InstantiatedElementData {
     fn default() -> Self {
@@ -43,6 +44,7 @@ impl Default for InstantiatedElementData {
             scroll: UIPos { x: 0., y: 0. },
             text: String::new(),
             text_cursor: 0,
+            selected: false,
         }
     }
 }
@@ -749,7 +751,7 @@ fn render_element(
                 20.,
                 Color::WHITE,
             );
-            if data.time % 1. > 0.5 {
+            if data.time % 1. > 0.5 && element_data.selected {
                 let cursor_width = text_renderer().get_size("|", 20.).x;
                 context.draw_text(
                     UIPos {
@@ -765,39 +767,44 @@ fn render_element(
                 );
             }
             if let Some(input) = input {
-                for logical in &input.logical {
-                    match logical {
-                        winit::keyboard::Key::Named(NamedKey::ArrowLeft) => {
-                            if element_data.text_cursor > 0 {
-                                element_data.text_cursor -= 1;
+                if input.buttons.is_just_down(MouseButton::Left) {
+                    element_data.selected = context.content.contains(input.cursor_position);
+                }
+                if element_data.selected {
+                    for logical in &input.logical {
+                        match logical {
+                            winit::keyboard::Key::Named(NamedKey::ArrowLeft) => {
+                                if element_data.text_cursor > 0 {
+                                    element_data.text_cursor -= 1;
+                                }
                             }
-                        }
-                        winit::keyboard::Key::Named(NamedKey::ArrowRight) => {
-                            if element_data.text_cursor < element_data.text.len() {
+                            winit::keyboard::Key::Named(NamedKey::ArrowRight) => {
+                                if element_data.text_cursor < element_data.text.len() {
+                                    element_data.text_cursor += 1;
+                                }
+                            }
+                            winit::keyboard::Key::Named(NamedKey::Backspace) => {
+                                if element_data.text_cursor > 0 {
+                                    element_data.text_cursor -= 1;
+                                    element_data.text.remove(element_data.text_cursor);
+                                }
+                            }
+                            winit::keyboard::Key::Named(NamedKey::Space) => {
+                                element_data.text.insert_str(element_data.text_cursor, " ");
                                 element_data.text_cursor += 1;
                             }
-                        }
-                        winit::keyboard::Key::Named(NamedKey::Backspace) => {
-                            if element_data.text_cursor > 0 {
-                                element_data.text_cursor -= 1;
-                                element_data.text.remove(element_data.text_cursor);
+                            winit::keyboard::Key::Character(char) => {
+                                let Some(char) = char.chars().next() else {
+                                    continue;
+                                };
+                                if !char.is_ascii_alphanumeric() && !char.is_ascii_punctuation() {
+                                    continue;
+                                }
+                                element_data.text.insert(element_data.text_cursor, char);
+                                element_data.text_cursor += 1;
                             }
+                            _ => {}
                         }
-                        winit::keyboard::Key::Named(NamedKey::Space) => {
-                            element_data.text.insert_str(element_data.text_cursor, " ");
-                            element_data.text_cursor += 1;
-                        }
-                        winit::keyboard::Key::Character(char) => {
-                            let Some(char) = char.chars().next() else {
-                                continue;
-                            };
-                            if !char.is_ascii_alphanumeric() && !char.is_ascii_punctuation() {
-                                continue;
-                            }
-                            element_data.text.insert(element_data.text_cursor, char);
-                            element_data.text_cursor += 1;
-                        }
-                        _ => {}
                     }
                 }
             }
