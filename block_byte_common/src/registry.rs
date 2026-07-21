@@ -1312,12 +1312,15 @@ impl RegistryRonConfigLoadable for EntityData {
         self.pickup_view_cache = Some(view);
     }
 }
+fn default_defence_damage_score() -> f32 {
+    1.
+}
 #[derive(Deserialize)]
 pub struct MobAI {
     #[serde(default)]
-    pub attacks: KeyGroup<EntityData>,
-    #[serde(default)]
-    pub self_defends: KeyGroup<EntityData>,
+    pub aggression_score: HashMap<EntityKey, f32>,
+    #[serde(default = "default_defence_damage_score")]
+    pub defence_damage_score: f32,
     #[serde(default)]
     pub fears: KeyGroup<EntityData>,
 }
@@ -1349,7 +1352,7 @@ impl EntityData {
             },
             max: Pos {
                 x: self.hitbox_size,
-                y: pose.height(self),
+                y: self.hitbox_height + pose.height_difference(self),
                 z: self.hitbox_size,
             },
         }

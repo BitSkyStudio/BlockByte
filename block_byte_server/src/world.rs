@@ -742,22 +742,32 @@ pub struct ActiveEffect {
     pub timer: u32,
 }
 #[derive(Serialize, Deserialize)]
+pub struct MobBrainTarget {
+    pub id: Uuid,
+    pub last_seen_position: Pos,
+    pub score: f32,
+}
+#[derive(Serialize, Deserialize)]
 pub struct MobBrain {
     pub goal: Option<Pos>,
     pub path: Vec<Pos>,
     pub received_attacks: HashMap<Uuid, f32>,
+    pub target: Option<MobBrainTarget>,
     pub hit_timer: Option<HitTimer>,
+    pub guard_position: BlockPos,
 }
 impl MobBrain {
-    pub fn new() -> Self {
+    pub fn new(guard_position: BlockPos) -> Self {
         Self {
             goal: None,
             path: Vec::new(),
             received_attacks: HashMap::new(),
             hit_timer: None,
+            target: None,
+            guard_position,
         }
     }
-    pub fn recalculate_path(&mut self, position: Pos, world: &WorldAccess) {
+    pub fn recalculate_path(&mut self, position: Pos, world: &WorldAccess, eye_height: f32) {
         if let Some(goal) = self.goal {
             let goal_block = goal.to_block_pos();
             if goal_block != position.to_block_pos() {
@@ -820,8 +830,18 @@ impl MobBrain {
                     self.path[0].z = goal.z;
                     let mut i = 0;
                     while i + 2 < self.path.len() {
-                        let first = self.path[i];
-                        let third = self.path[i + 2];
+                        let first = self.path[i]
+                            + Pos {
+                                x: 0.,
+                                y: eye_height,
+                                z: 0.,
+                            };
+                        let third = self.path[i + 2]
+                            + Pos {
+                                x: 0.,
+                                y: eye_height,
+                                z: 0.,
+                            };
                         if !world.block_ray_test(Ray::new_line(first, third)) {
                             self.path.remove(i + 1);
                         } else {
@@ -848,7 +868,7 @@ impl Entity {
             health: entity_data.base_stats.vitality(),
             research: None,
             brain: match &entity_data.ai {
-                Some(_) => Some(MobBrain::new()),
+                Some(_) => Some(MobBrain::new(position.to_block_pos())),
                 None => None,
             },
             direction: LookDirection { pitch: 0., yaw: 0. },
@@ -869,7 +889,7 @@ impl Entity {
     }
     pub fn get_eye(&self) -> Pos {
         let entity_data = self.key.data();
-        self.position + Pos::Y * entity_data.eye_height
+        self.position + Pos::Y * (entity_data.eye_height + self.pose.height_difference(entity_data))
     }
     pub fn get_hitbox(&self) -> AABB<f32> {
         self.key.data().hitbox(self.pose).offset(self.position)
@@ -894,30 +914,53 @@ impl Entity {
                         )) {
                             return None;
                         }
+                        let distance = entity_eye_position.distance(target.get_eye());
+                        if distance > 32. {
+                            return None;
+                        }
                         let received_damage = brain
                             .received_attacks
                             .get(&target.uuid)
                             .cloned()
                             .unwrap_or(0.);
-                        if ai.attacks.contains(target.key)
-                            || (ai.self_defends.contains(target.key) && received_damage > 0.)
-                        {
-                            Some((target.uuid, target.position, received_damage))
+                        let aggression =
+                            ai.aggression_score.get(&target.key).cloned().unwrap_or(0.);
+                        let score =
+                            (received_damage * ai.defence_damage_score + aggression) / distance;
+                        if score > 0. {
+                            Some(MobBrainTarget {
+                                id: target.uuid,
+                                last_seen_position: target.position,
+                                score,
+                            })
                         } else {
                             None
                         }
                     })
-                    .max_by_key(|(_id, position, received_damage)| {
-                        ((10. + *received_damage) / (position.distance(*position)) * 1000.) as u32
-                    });
-                if let Some((target_id, target_position, _)) = target_entity {
-                    brain.goal = Some(target_position);
+                    .max_by_key(|target| OrderedFloat(target.score));
+                if let Some(target_entity) = target_entity {
+                    match &mut brain.target {
+                        Some(brain_target) => {
+                            if target_entity.score > brain_target.score
+                                || brain_target.id == target_entity.id
+                            {
+                                *brain_target = target_entity;
+                            }
+                        }
+                        None => {
+                            brain.target = Some(target_entity);
+                        }
+                    }
+                }
+                if let Some(target) = &brain.target {
+                    brain.goal = Some(target.last_seen_position);
                     let hand_item = self.inventory.get_raw(self.hand_slot);
                     let tool = hand_item
                         .and_then(|item| item.item.data().tool.as_ref())
                         .unwrap_or(&ToolData::HAND);
                     let reach_distance = tool.reach * 0.6;
-                    if target_position.distance(entity_eye_position) <= reach_distance {
+                    //todo: eye height
+                    if target.last_seen_position.distance(entity_eye_position) <= reach_distance {
                         if let Some(timer) = &mut brain.hit_timer {
                             if timer.tick(SERVER_DT) {
                                 let (damage_table, knockback) = compute_tool_damage_and_knockback(
@@ -925,9 +968,9 @@ impl Entity {
                                     &self.current_stats,
                                 );
                                 let _ = world.schedule_event(
-                                    target_position.to_chunk_pos(),
+                                    target.last_seen_position.to_chunk_pos(),
                                     WorldEvent::EntityDamage {
-                                        entity: target_id,
+                                        entity: target.id,
                                         damage: damage_table,
                                         source_entity: Some(self.uuid),
                                     },
@@ -936,7 +979,7 @@ impl Entity {
                                     .schedule_event(
                                         world.center_chunk,
                                         WorldEvent::EntityKnockback {
-                                            entity: target_id,
+                                            entity: target.id,
                                             knockback: (self.direction.make_front() + Pos::Y * 0.5)
                                                 * knockback,
                                         },
@@ -967,7 +1010,11 @@ impl Entity {
                 }
 
                 if (self.uuid.as_u64_pair().0 + world.ticks_passed) % (SERVER_TPS as u64 / 2) == 0 {
-                    brain.recalculate_path(self.position, world);
+                    brain.recalculate_path(
+                        self.position,
+                        world,
+                        entity_data.eye_height + self.pose.height_difference(entity_data),
+                    );
                 }
 
                 if !brain.path.is_empty() {

@@ -1294,7 +1294,7 @@ impl ClientGame {
                 "idle" => {
                     if self.camera.running {
                         self.viewmodel_player.play_animation("running", 0.1);
-                    } else if time > 2. {
+                    } else if time > 4. {
                         self.viewmodel_player.restart_animation();
                     }
                 }

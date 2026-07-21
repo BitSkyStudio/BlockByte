@@ -7,6 +7,6 @@
     damage_table: (),
     loot_table: Key("empty"),
     ai: (
-        attacks: "player",
+        aggression_score: {"player": 10},
     ),
 )
