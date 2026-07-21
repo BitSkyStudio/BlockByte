@@ -29,6 +29,7 @@ rand_xoshiro = "0.7.0"
 paste = "1.0.15"
 priority-queue = { version = "2.7.0", features = ["std", "serde"] }
 ahash = "0.8.12"
+once_map = "0.4.24"
 
 [features]
 client = ["dep:image"]

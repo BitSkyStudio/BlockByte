@@ -16,12 +16,13 @@ use taffy::{AvailableSpace, Dimension, NodeId, Style, TaffyTree};
 use uuid::Uuid;
 use winit::{dpi::PhysicalSize, event::MouseButton, keyboard::NamedKey};
 
+use crate::atlas::TexCoordsExt;
 use crate::{
     GUIMesh, InputManager,
     atlas::TEXTURE_ATLAS,
+    game::language,
     render::{GUIVertex, MeshVertex, MeshVertexConsumer, item_model_icon_view},
 };
-use crate::{atlas::TexCoordsExt, game::translate};
 
 pub struct ScreenData {
     pub screen: UIScreenKey,
@@ -37,6 +38,7 @@ pub struct InstantiatedElementData {
     pub text: String,
     pub text_cursor: usize,
     pub selected: bool,
+    pub zoom: f32,
 }
 impl Default for InstantiatedElementData {
     fn default() -> Self {
@@ -45,6 +47,7 @@ impl Default for InstantiatedElementData {
             text: String::new(),
             text_cursor: 0,
             selected: false,
+            zoom: 1.,
         }
     }
 }
@@ -340,7 +343,7 @@ fn render_element(
                             let mut shift = overlay_context
                                 .draw_text(
                                     input.cursor_position,
-                                    translate(format!("item.{}", item.item.text_id()).as_str()),
+                                    language().translate_item(item.item),
                                     40.,
                                     Color::WHITE,
                                 )
@@ -479,9 +482,7 @@ fn render_element(
                 CraftAreaRecipes::CheatMenu => {
                     let mut i = 0;
                     for item in ItemKey::entries() {
-                        let item_data = item.data();
-                        let item_name = format!("item.{}", item.text_id());
-                        let item_name = translate(item_name.as_str());
+                        let item_name = language().translate_item(item);
                         if !filter_passes(item_name) {
                             continue;
                         }
@@ -492,7 +493,7 @@ fn render_element(
                             },
                             size: UIPos::all(craft_size),
                         };
-                        context.draw_icon(area, &item_data.model);
+                        context.draw_icon(area, &item.data().model);
                         if let Some(input) = input {
                             if (UIRect {
                                 pos: UIPos {
@@ -529,8 +530,9 @@ fn render_element(
                     let mut i = 0;
                     for recipe in recipes.list() {
                         let recipe_data = recipe.data();
-                        let mut text =
-                            translate(format!("recipe.{}", recipe.text_id()).as_str()).to_string();
+                        let mut text = language()
+                            .translate(format!("recipe.{}", recipe.text_id()).as_str())
+                            .to_string();
                         if !filter_passes(&text) {
                             continue;
                         }
@@ -568,9 +570,7 @@ fn render_element(
                                     text += format!(
                                         "\n-{}x{}",
                                         *input_count,
-                                        translate(
-                                            format!("item.{}", input_item.text_id()).as_str()
-                                        )
+                                        language().translate_item(*input_item)
                                     )
                                     .as_str();
                                 }
@@ -578,13 +578,7 @@ fn render_element(
                                     //todo: somehow do modifiers
                                     text += format!(
                                         "\n+{}",
-                                        translate(
-                                            format!(
-                                                "item.{}",
-                                                loot_entry.entries[0].item.text_id()
-                                            )
-                                            .as_str()
-                                        )
+                                        language().translate_item(loot_entry.entries[0].item)
                                     )
                                     .as_str();
                                 }
@@ -621,6 +615,8 @@ fn render_element(
                         element_data.scroll.x += input.mouse_delta.x as f32;
                         element_data.scroll.y += input.mouse_delta.y as f32;
                     }
+                    element_data.zoom =
+                        (element_data.zoom - input.wheel_scroll_delta.y / 4.).clamp(1., 3.);
                     true
                 } else {
                     false
@@ -628,7 +624,7 @@ fn render_element(
             } else {
                 false
             };
-            let research_size = 50.;
+            let research_size = 50. / element_data.zoom;
             let research_scroll = UIPos {
                 x: context.content.size.x / 2. + element_data.scroll.x,
                 y: context.content.size.y / 2. + element_data.scroll.y,
@@ -675,7 +671,8 @@ fn render_element(
                     {
                         overlay_context.draw_text(
                             input.cursor_position,
-                            translate(format!("research.{}", research.text_id()).as_str()),
+                            language()
+                                .translate(format!("research.{}", research.text_id()).as_str()),
                             40.,
                             Color::WHITE,
                         );

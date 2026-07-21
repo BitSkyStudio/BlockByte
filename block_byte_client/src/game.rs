@@ -438,7 +438,7 @@ impl GameScreen for ClientGame {
                     .tooltip(),
                 RayCastResult::Plant(_, _) => Some("harvest"),
             } {
-                let text = format!("[E]{}", translate(tooltip));
+                let text = format!("[E]{}", language().translate(tooltip));
                 let size = 0.05;
                 let Pos {
                     x: width,
@@ -772,7 +772,10 @@ impl ClientGame {
                 if self.camera.crouching {
                     move_vector /= 2.;
                 }
-                if input.keys.is_down(KeyCode::Space) && self.camera.controller.on_ground {
+                if input.keys.is_down(KeyCode::Space)
+                    && self.camera.controller.on_ground
+                    && can_move
+                {
                     self.camera.controller.velocity.y += self.player_stats.jump_velocity();
                 }
             }
@@ -2107,12 +2110,8 @@ impl ClientChunk {
         )
     }
 }
-
-pub fn translate<'a>(key: &'a str) -> &'a str {
-    Key::<TranslationLanguageData>::id("en")
-        .unwrap()
-        .data()
-        .translate(key)
+pub fn language() -> &'static TranslationLanguageData {
+    Key::<TranslationLanguageData>::id("en").unwrap().data()
 }
 pub mod clipping {
     use block_byte_common::coord::AABB;

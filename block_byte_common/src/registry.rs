@@ -7,6 +7,7 @@ use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 use anyhow::anyhow;
 use image::DynamicImage;
 use image_overlay::overlay_dyn_img;
+use once_map::OnceMap;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
@@ -1535,6 +1536,7 @@ impl<'de> Deserialize<'de> for ModelInstance {
 
 pub struct TranslationLanguageData {
     pub translations: HashMap<String, String>,
+    pub item_translations: OnceMap<ItemKey, String>,
 }
 impl TranslationLanguageData {
     pub fn translate<'a>(&'a self, key: &'a str) -> &'a str {
@@ -1543,11 +1545,18 @@ impl TranslationLanguageData {
             .map(|s| s.as_str())
             .unwrap_or(key)
     }
+    pub fn translate_item(&self, item: ItemKey) -> &str {
+        &self.item_translations.insert(item, |_| {
+            self.translate(&format!("item.{}", item.text_id()))
+                .to_string()
+        })
+    }
 }
 impl RegistryConfigLoadable for TranslationLanguageData {
     fn registry_load_from_config(config: &Vec<PathBuf>, _key: Key<Self>) -> anyhow::Result<Self> {
         let mut translation = TranslationLanguageData {
             translations: HashMap::new(),
+            item_translations: OnceMap::new(),
         };
         for source in config {
             for line in std::fs::read_to_string(source).unwrap().lines() {

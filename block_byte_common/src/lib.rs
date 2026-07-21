@@ -615,6 +615,8 @@ pub enum EntityPose {
     Fall,
     Sleeping,
     Mantle,
+    Jump,
+    Knocked,
 }
 impl EntityPose {
     pub fn base_animation(&self) -> &'static str {
@@ -630,6 +632,8 @@ impl EntityPose {
             EntityPose::Fall => "fall",
             EntityPose::Sleeping => "sleep",
             EntityPose::Mantle => "mantle",
+            EntityPose::Jump => "jump",
+            EntityPose::Knocked => "knocked",
         }
     }
     pub fn upper_animation(&self) -> Option<&'static str> {
@@ -645,13 +649,17 @@ impl EntityPose {
             EntityPose::Fall => None,
             EntityPose::Sleeping => None,
             EntityPose::Mantle => None,
+            EntityPose::Jump => None,
+            EntityPose::Knocked => None,
         }
     }
     pub fn disables_upper_animation(&self) -> bool {
         match self {
-            EntityPose::Slide | EntityPose::Fall | EntityPose::Sleeping | EntityPose::Mantle => {
-                true
-            }
+            EntityPose::Slide
+            | EntityPose::Fall
+            | EntityPose::Sleeping
+            | EntityPose::Mantle
+            | EntityPose::Knocked => true,
             _ => false,
         }
     }
@@ -665,10 +673,12 @@ impl EntityPose {
                 | EntityPose::Levitate
                 | EntityPose::Fall
                 | EntityPose::Sleeping
-                | EntityPose::Mantle => 0.,
-                EntityPose::Crouch | EntityPose::CrouchWalk | EntityPose::Slide => {
-                    data.crouch_height_difference
-                }
+                | EntityPose::Mantle
+                | EntityPose::Jump => 0.,
+                EntityPose::Crouch
+                | EntityPose::CrouchWalk
+                | EntityPose::Slide
+                | EntityPose::Knocked => data.crouch_height_difference,
             })
     }
 }
