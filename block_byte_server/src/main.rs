@@ -684,6 +684,8 @@ pub struct User {
     hud_sync_items: Mutex<Vec<Option<ClientItem>>>,
     screen: Mutex<Option<UserScreen>>,
     message_queue: Mutex<VecDeque<NetworkMessageC2S>>,
+    //todo: check this
+    //last_synced_stats: Mutex<EntityStats>,
 }
 impl User {
     pub fn tick_controlling_entity(
@@ -728,8 +730,8 @@ impl User {
                 }
                 NetworkMessageC2S::AttackBlock { position, face: _ } => {
                     let (damage_table, _) = compute_tool_damage_and_knockback(
-                        entity.inventory.get_raw(entity.hand_slot),
-                        &entity.current_stats,
+                        entity.inventory.get_slot_raw(entity.hand_slot),
+                        &entity.current_equipment_stats.0,
                     );
                     let (chunk, offset) = position.to_chunk_pos_offset();
                     let _ = world.schedule_event(
@@ -743,7 +745,7 @@ impl User {
                 }
                 NetworkMessageC2S::ItemInteraction { target, variant } => {
                     let mut is_place = false;
-                    let mut item_stack = &mut entity.inventory.items[entity.hand_slot];
+                    let mut item_stack = entity.inventory.get_slot_mut_raw(entity.hand_slot);
                     if let Some(item) = &mut item_stack {
                         match &item.item.data().action {
                             ItemAction::Ignore => {}
@@ -878,7 +880,7 @@ impl User {
                 }
                 NetworkMessageC2S::HotbarSelect { slot } => {
                     entity.hand_slot = slot;
-                    entity.current_stats_dirty = true;
+                    entity.inventory.modified = true;
                 }
                 NetworkMessageC2S::InteractBlock { position } => {
                     let Some(block) = world.get_block(position) else {
@@ -917,7 +919,6 @@ impl User {
                                     );
                                 }
                             }
-                            entity.current_stats_dirty = true;
                         }
                         BlockInteractAction::ModifyProperty {
                             property,
@@ -957,7 +958,8 @@ impl User {
                             player_view.slots.retain(|slot| {
                                 !entity.key.data().equipment_slots.contains(&slot.slot)
                             });
-                            for slot in &mut other_entity.inventory.items {
+                            for i in 0..other_entity.inventory.size() {
+                                let slot = other_entity.inventory.get_slot_mut_raw(i);
                                 if let Some(item) = &slot {
                                     *slot = entity.inventory.add_item(&player_view, item.clone());
                                     if slot.is_some() {
@@ -965,7 +967,6 @@ impl User {
                                     }
                                 }
                             }
-                            entity.current_stats_dirty = true;
                             if !items_present {
                                 world.remove_entity(other_entity);
                             }
@@ -976,8 +977,8 @@ impl User {
                     entity: other_entity_id,
                 } => {
                     let (damage_table, knockback) = compute_tool_damage_and_knockback(
-                        entity.inventory.get_raw(entity.hand_slot),
-                        &entity.current_stats,
+                        entity.inventory.get_slot_raw(entity.hand_slot),
+                        &entity.current_equipment_stats.0,
                     );
                     world
                         .schedule_event(
@@ -1012,7 +1013,6 @@ impl User {
                     } else {
                         continue;
                     };
-                    entity.current_stats_dirty = true;
                     let mut item_entity =
                         Entity::new(EntityKey::id("item").unwrap(), entity.get_eye());
                     item_entity.direction = LookDirection {
@@ -1023,7 +1023,7 @@ impl User {
                     let mut throw_velocity = entity.direction.make_front() * throw_force;
                     throw_velocity.y = 0.1;
                     item_entity.character_controller.velocity = throw_velocity;
-                    item_entity.inventory.items[0] = Some(drop_item);
+                    item_entity.inventory.set_slot_raw(0, Some(drop_item));
                     world.spawn_entity(item_entity).unwrap();
                 }
                 NetworkMessageC2S::MoveItem { from, to, mode } => {
@@ -1133,8 +1133,7 @@ impl User {
                     if from_provider == to_provider {
                         let [src, dst] = from_provided
                             .get_mut()
-                            .items
-                            .get_disjoint_mut([from_index, to_index])
+                            .get_slots_mut_raw([from_index, to_index])
                             .unwrap();
                         move_item(src, dst, from_slot, to_slot);
                     } else {
@@ -1146,13 +1145,12 @@ impl User {
                         )
                         .unwrap();
                         move_item(
-                            &mut from_provided.get_mut().items[from_index],
-                            &mut to_provided.get_mut().items[to_index],
+                            from_provided.get_mut().get_slot_mut_raw(from_index),
+                            to_provided.get_mut().get_slot_mut_raw(to_index),
                             from_slot,
                             to_slot,
                         );
                     }
-                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::Research {
                     research,
@@ -1180,7 +1178,7 @@ impl User {
                     let mut provided =
                         ProvidedInventory::lock(&provider, world, entity.uuid, &user_inventory)
                             .unwrap();
-                    let item_slot = &mut provided.get_mut().items[index];
+                    let item_slot = provided.get_mut().get_slot_mut_raw(index);
                     if let Some(item) = item_slot {
                         let max_count = mode.get_count(item.count);
                         let mut spend = 0;
@@ -1219,7 +1217,6 @@ impl User {
                             research_progress.unlocked.insert(research);
                         }
                     }
-                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::Craft { recipe, mut count } => {
                     let screen = self.screen.lock();
@@ -1261,7 +1258,6 @@ impl User {
                             }
                         }
                     }
-                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::OpenPlayerInventory => {
                     self.set_screen(
@@ -1336,14 +1332,13 @@ impl User {
                     let mut provided =
                         ProvidedInventory::lock(&provider, world, entity.uuid, &user_inventory)
                             .unwrap();
-                    let item_slot = &mut provided.get_mut().items[index];
+                    let item_slot = provided.get_mut().get_slot_mut_raw(index);
                     if let Some(item) = item_slot {
                         item.count -= mode.get_count(item.count);
                         if item.count <= 0 {
                             *item_slot = None;
                         }
                     }
-                    entity.current_stats_dirty = true;
                 }
                 NetworkMessageC2S::GiveItem { item, stack } => {
                     let screen = self.screen.lock();
@@ -1363,7 +1358,6 @@ impl User {
                         item,
                         if stack { item.data().stack_size } else { 1 },
                     ));
-                    entity.current_stats_dirty = true;
                 }
             }
         }

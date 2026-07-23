@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
 
 use anyhow::anyhow;
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use image_overlay::overlay_dyn_img;
 use once_map::OnceMap;
 use palettevec::PaletteVec;
@@ -1068,6 +1068,30 @@ pub struct TextureData {
     pub color_mask: Option<Arc<DynamicImage>>,
     pub emissive: Option<Arc<DynamicImage>>,
     pub animation: Option<TextureAnimationData>,
+    pub base_average_color: OnceLock<Color>,
+}
+impl TextureData {
+    pub fn get_base_average_color(&self) -> Color {
+        *self.base_average_color.get_or_init(|| {
+            let mut r = 0.;
+            let mut g = 0.;
+            let mut b = 0.;
+            let mut a = 0.;
+            for (_, _, pixel) in self.texture.pixels() {
+                let pixel_a = pixel.0[3] as f32 / 255.;
+                r += pixel.0[0] as f32 * pixel_a;
+                g += pixel.0[1] as f32 * pixel_a;
+                b += pixel.0[2] as f32 * pixel_a;
+                a += pixel_a;
+            }
+            Color {
+                r: (r / a) as u8,
+                g: (g / a) as u8,
+                b: (b / a) as u8,
+                a: (a / (self.texture.width() as f32 * self.texture.height() as f32) * 255.) as u8,
+            }
+        })
+    }
 }
 #[derive(Clone, Deserialize)]
 pub struct TextureAnimationData {
@@ -1158,6 +1182,7 @@ impl RegistryConfigLoadable for TextureData {
             color_mask: material.remove(&LoadTextureType::ColorMask),
             emissive: material.remove(&LoadTextureType::Emissive),
             animation,
+            base_average_color: OnceLock::new(),
         };
         image_cache().insert(key, texture_data.clone());
         Ok(texture_data)

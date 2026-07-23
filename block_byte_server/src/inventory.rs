@@ -275,7 +275,13 @@ macro_rules! create_component_enum{
     }
 }
 
-create_component_enum!(ItemDurability, ItemMana, ItemQuality, ItemCraftStats);
+create_component_enum!(
+    ItemDurability,
+    ItemMana,
+    ItemQuality,
+    ItemCraftStats,
+    ItemComponentPassiveAbility
+);
 
 pub trait ItemComponentManipulation: Sized {
     fn merge(&self, other: &Self) -> Option<Self>;
@@ -367,10 +373,28 @@ impl ItemComponentManipulation for ItemCraftStats {
         "todo".to_string()
     }
 }
-
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
+pub enum ItemComponentPassiveAbility {
+    Flame,
+}
+impl ItemComponentManipulation for ItemComponentPassiveAbility {
+    fn merge(&self, _other: &Self) -> Option<Self> {
+        None
+    }
+    fn split(&self, _first_count: ItemCount, _second_count: ItemCount) -> (Self, Self) {
+        (self.clone(), self.clone())
+    }
+    fn description(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+use serde_default_utils::default_bool;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Inventory {
-    pub items: Box<[Option<ItemStack>]>,
+    items: Box<[Option<ItemStack>]>,
+    //todo: do individual slots with bit vec
+    #[serde(skip_serializing, skip_deserializing, default = "default_bool::<true>")]
+    pub modified: bool,
 }
 impl Inventory {
     pub fn new(size: usize) -> Inventory {
@@ -379,9 +403,10 @@ impl Inventory {
                 .map(|_| None)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            modified: false,
         }
     }
-    pub fn get_raw<'a>(&'a self, slot: usize) -> Option<&'a ItemStack> {
+    pub fn get_slot_raw<'a>(&'a self, slot: usize) -> Option<&'a ItemStack> {
         if slot >= self.items.len() {
             return None;
         }
@@ -389,6 +414,9 @@ impl Inventory {
     }
     pub fn full_view(&self) -> InventoryView {
         InventoryView::from_range(0..self.items.len())
+    }
+    pub fn size(&self) -> usize {
+        self.items.len()
     }
     pub fn get_slot<'a>(&'a self, view: &InventoryView, slot: usize) -> Option<&'a ItemStack> {
         self.items[view.slots.get(slot).unwrap().slot].as_ref()
@@ -398,11 +426,24 @@ impl Inventory {
         view: &InventoryView,
         slot: usize,
     ) -> &'a mut Option<ItemStack> {
+        self.modified = true;
         let index = view.slots.get(slot).unwrap();
         &mut self.items[index.slot]
     }
     pub fn get_slot_mut_raw<'a>(&'a mut self, slot: usize) -> &'a mut Option<ItemStack> {
+        self.modified = true;
         &mut self.items[slot]
+    }
+    pub fn get_slots_mut_raw<const N: usize>(
+        &mut self,
+        indices: [usize; N],
+    ) -> Result<[&mut Option<ItemStack>; N], ()> {
+        self.modified = true;
+        self.items.get_disjoint_mut(indices).map_err(|_| ())
+    }
+    pub fn set_slot_raw(&mut self, slot: usize, item: Option<ItemStack>) {
+        self.modified = true;
+        self.items[slot] = item;
     }
     pub fn set_slot(
         &mut self,
@@ -410,6 +451,7 @@ impl Inventory {
         slot: usize,
         item: Option<ItemStack>,
     ) -> Result<(), ()> {
+        self.modified = true;
         //todo: how should we handle filters and slot size overrides?
         match view.slots.get(slot) {
             Some(slot) => {
@@ -420,6 +462,7 @@ impl Inventory {
         }
     }
     pub fn add_item(&mut self, view: &InventoryView, mut item: ItemStack) -> Option<ItemStack> {
+        self.modified = true;
         let stack_size = item.item.data().stack_size;
         for slot_index in &view.slots {
             if !slot_index.input {
@@ -492,6 +535,7 @@ impl Inventory {
         item: impl ItemMatcher,
         mut count: ItemCount,
     ) -> ItemCount {
+        self.modified = true;
         for slot_index in &view.slots {
             if !slot_index.output {
                 continue;
@@ -514,6 +558,18 @@ impl Inventory {
             }
         }
         count
+    }
+    pub fn iter(&self) -> impl Iterator<Item = Option<&ItemStack>> {
+        self.items.iter().map(|item| item.as_ref())
+    }
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Option<ItemStack>> {
+        self.modified = true;
+        self.items.iter_mut()
+    }
+    pub fn randomly_shuffle(&mut self, rng: &mut impl Rng) {
+        self.modified = true;
+        use rand::seq::SliceRandom;
+        self.items.shuffle(rng);
     }
 }
 pub trait ItemMatcher {

@@ -733,8 +733,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                         .inventory
                                         .add_item(&machine.inventory.full_view(), item);
                                 }
-                                use rand::seq::SliceRandom;
-                                machine.inventory.items.shuffle(rng);
+                                machine.inventory.randomly_shuffle(rng);
                             }
                             chunk
                                 .components

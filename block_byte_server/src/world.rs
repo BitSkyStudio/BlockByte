@@ -28,7 +28,6 @@ use block_byte_common::{
 };
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use serde_default_utils::default_bool;
 use slotmap::SlotMap;
 use smallvec::SmallVec;
 use uuid::Uuid;
@@ -36,8 +35,8 @@ use uuid::Uuid;
 use crate::{
     InventoryProvider, MessageQueue, User, UserIndex, UserScreenState,
     inventory::{
-        Inventory, ItemCraftStats, ItemQuality, ItemStack, LootGenerationContext,
-        generate_loot_table,
+        Inventory, ItemComponentPassiveAbility, ItemCraftStats, ItemQuality, ItemStack,
+        LootGenerationContext, generate_loot_table,
     },
 };
 #[derive(Serialize, Deserialize)]
@@ -255,7 +254,9 @@ pub fn tick_chunk(world: &WorldAccess) {
                 };
                 //todo: better formula?
                 if rand::random_bool(
-                    1. - 1. / (entity.current_stats.evasion().max(0.) as f64 / 100. + 2.).log2(),
+                    1. - 1.
+                        / (entity.current_equipment_stats.0.evasion().max(0.) as f64 / 100. + 2.)
+                            .log2(),
                 ) {
                     continue;
                 }
@@ -267,8 +268,8 @@ pub fn tick_chunk(world: &WorldAccess) {
                     })
                     .sum::<f32>();
                 let received_damage = received_damage
-                    * (entity.current_stats.vulnerability() / 100.)
-                    / (1. + entity.current_stats.armor().max(0.) / 100.);
+                    * (entity.current_equipment_stats.0.vulnerability() / 100.)
+                    / (1. + entity.current_equipment_stats.0.armor().max(0.) / 100.);
                 if let Some(source_entity) = source_entity {
                     if let Some(brain) = &mut entity.brain {
                         *brain.received_attacks.entry(source_entity).or_insert(0.) +=
@@ -281,7 +282,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                         &entity.key.data().loot_table.data(),
                         &mut LootGenerationContext::new(rand::random()),
                     );
-                    for item in &mut entity.inventory.items {
+                    for item in entity.inventory.iter_mut() {
                         if let Some(item) = item.take() {
                             items.push(item);
                         }
@@ -324,15 +325,15 @@ pub fn tick_chunk(world: &WorldAccess) {
         let entity = &mut *entity_ref;
         entity.effects.retain_mut(|effect| {
             if effect.timer <= 1 {
-                entity.current_stats_dirty = true;
                 false
             } else {
                 effect.timer -= 1;
                 true
             }
         });
-        if entity.current_stats_dirty {
-            entity.current_stats_dirty = false;
+        if entity.inventory.modified {
+            entity.inventory.modified = false;
+            entity.current_equipment_stats.1.clear();
             let mut stats = entity.key.data().base_stats.clone();
             for effect in &entity.effects {
                 stats.apply(&effect.stats, 1.);
@@ -347,13 +348,19 @@ pub fn tick_chunk(world: &WorldAccess) {
                 if let Some(craft_stats) = item.components.get_component::<ItemCraftStats>() {
                     stats.apply(&craft_stats.0, quality_multiplier);
                 }
+                if let Some(passive) = item
+                    .components
+                    .get_component::<ItemComponentPassiveAbility>()
+                {
+                    entity.current_equipment_stats.1.insert(*passive);
+                }
             };
             for equipment in entity.key.data().equipment_slots.clone() {
-                if let Some(item) = &entity.inventory.get_raw(equipment) {
+                if let Some(item) = &entity.inventory.get_slot_raw(equipment) {
                     apply_item(item);
                 }
             }
-            if let Some(item) = &entity.inventory.get_raw(entity.hand_slot) {
+            if let Some(item) = &entity.inventory.get_slot_raw(entity.hand_slot) {
                 apply_item(item);
             }
             if let Some(controlling_user) = entity.controlling_user {
@@ -364,7 +371,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                     },
                 );
             }
-            entity.current_stats = stats;
+            entity.current_equipment_stats.0 = stats;
         }
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
@@ -381,7 +388,6 @@ pub fn tick_chunk(world: &WorldAccess) {
                     let hotbar_size = 10;
                     let inventory: Vec<_> = entity
                         .inventory
-                        .items
                         .iter()
                         .take(hotbar_size)
                         .map(|item| item.as_ref().map(|item| item.client()))
@@ -410,12 +416,11 @@ pub fn tick_chunk(world: &WorldAccess) {
                         let mut properties = PropertyMap(HashMap::new());
                         let screen_data = screen.screen.data();
                         for (inventory, view) in &screen.inventories {
-                            let mut load_inventory =
-                                |inventory: &Inventory| {
-                                    items.extend(view.slots.iter().map(|i| {
-                                        inventory.get_raw(i.slot).map(|item| item.client())
-                                    }));
-                                };
+                            let mut load_inventory = |inventory: &Inventory| {
+                                items.extend(view.slots.iter().map(|i| {
+                                    inventory.get_slot_raw(i.slot).map(|item| item.client())
+                                }));
+                            };
                             match inventory {
                                 InventoryProvider::Entity(uuid) => {
                                     if *uuid == entity.uuid {
@@ -545,12 +550,7 @@ pub fn tick_chunk(world: &WorldAccess) {
             }
         }
         {
-            let new_hand_item = entity
-                .inventory
-                .items
-                .get(entity.hand_slot)
-                .cloned()
-                .flatten();
+            let new_hand_item = entity.inventory.get_slot_raw(entity.hand_slot).cloned();
             if new_hand_item != entity.last_hand_item {
                 world.send_viewers(
                     entity.position.to_chunk_pos(),
@@ -727,9 +727,7 @@ pub struct Entity {
     pub pose: EntityPose,
     pub effects: Vec<ActiveEffect>,
     #[serde(skip_serializing, skip_deserializing, default)]
-    pub current_stats: EntityStats,
-    #[serde(skip_serializing, skip_deserializing, default = "default_bool::<true>")]
-    pub current_stats_dirty: bool,
+    pub current_equipment_stats: (EntityStats, HashSet<ItemComponentPassiveAbility>),
 }
 #[derive(Serialize, Deserialize)]
 pub struct EntityResearchProgress {
@@ -874,8 +872,7 @@ impl Entity {
             direction: LookDirection { pitch: 0., yaw: 0. },
             pose: EntityPose::Stand,
             effects: Vec::new(),
-            current_stats: EntityStats::default(),
-            current_stats_dirty: true,
+            current_equipment_stats: Default::default(),
         }
     }
     pub fn has_researched(
@@ -899,7 +896,7 @@ impl Entity {
         match &entity_data.ai {
             Some(ai) => {
                 let entity_eye_position = self.get_eye();
-                let current_health_regen = self.current_stats.regen();
+                let current_health_regen = self.current_equipment_stats.0.regen();
                 let brain = self.brain.as_mut().unwrap();
                 brain.received_attacks.retain(|_, damage| {
                     *damage -= current_health_regen * SERVER_DT;
@@ -954,7 +951,7 @@ impl Entity {
                 }
                 if let Some(target) = &brain.target {
                     brain.goal = Some(target.last_seen_position);
-                    let hand_item = self.inventory.get_raw(self.hand_slot);
+                    let hand_item = self.inventory.get_slot_raw(self.hand_slot);
                     let tool = hand_item
                         .and_then(|item| item.item.data().tool.as_ref())
                         .unwrap_or(&ToolData::HAND);
@@ -965,7 +962,7 @@ impl Entity {
                             if timer.tick(SERVER_DT) {
                                 let (damage_table, knockback) = compute_tool_damage_and_knockback(
                                     hand_item,
-                                    &self.current_stats,
+                                    &self.current_equipment_stats.0,
                                 );
                                 let _ = world.schedule_event(
                                     target.last_seen_position.to_chunk_pos(),
@@ -1061,10 +1058,7 @@ impl Entity {
             pose: self.pose,
             hand_item: self
                 .inventory
-                .items
-                .get(self.hand_slot)
-                .cloned()
-                .flatten()
+                .get_slot_raw(self.hand_slot)
                 .map(|item| item.client()),
         }
     }
@@ -1334,7 +1328,7 @@ impl BlockMachine {
                                                 .unwrap();
                                             item.count -= 1;
                                             if item.count == 0 {
-                                                first_inventory.items[slot.slot] = None;
+                                                first_inventory.set_slot_raw(slot.slot, None);
                                             }
                                             state.pc = *success;
                                             return CallbackResult::Continue;
@@ -1428,11 +1422,11 @@ impl BlockMachine {
                     CallbackResult::Continue
                 }
                 MachineInstrution::GetSlotItemCount { slot, register } => {
-                    if let Some(item) = self.inventory.items.get(state.resolve_value(slot) as usize)
-                    {
-                        state.registers[*register] =
-                            item.as_ref().map(|item| item.count).unwrap_or(0);
-                    }
+                    state.registers[*register] = self
+                        .inventory
+                        .get_slot_raw(state.resolve_value(slot) as usize)
+                        .map(|item| item.count)
+                        .unwrap_or(0);
                     CallbackResult::Continue
                 }
                 MachineInstrution::MoveItem {
@@ -1443,7 +1437,9 @@ impl BlockMachine {
                     let from_view = &machine_data.script_views[*from_view];
                     let to_view = &machine_data.script_views[*to_view];
                     for slot in &from_view.slots {
-                        if let Some(item) = self.inventory.items[slot.slot]
+                        if let Some(item) = self
+                            .inventory
+                            .get_slot_raw(slot.slot)
                             .as_ref()
                             .map(|item| item.copy(1))
                         {
@@ -1452,7 +1448,7 @@ impl BlockMachine {
                                     self.inventory.get_slot_mut_raw(slot.slot).as_mut().unwrap();
                                 item.count -= 1;
                                 if item.count == 0 {
-                                    self.inventory.items[slot.slot] = None;
+                                    self.inventory.set_slot_raw(slot.slot, None);
                                 }
                                 state.pc = *success;
                                 break;
@@ -1667,7 +1663,7 @@ impl WorldAccess<'_> {
 
         if let Some(mut machine) = self.get_block_component::<BlockMachine>(position) {
             //todo: this should probably be returned in remove_block_component
-            for item in &mut machine.inventory.items {
+            for item in machine.inventory.iter_mut() {
                 if let Some(item) = item.take() {
                     drops.push(item);
                 }
@@ -2027,7 +2023,7 @@ impl WorldAccess<'_> {
                 y: rand::random::<f32>() / 2.,
                 z: angle.sin(),
             } * 3.;
-            item_entity.inventory.items[0] = Some(item);
+            item_entity.inventory.set_slot_raw(0, Some(item));
             let _ = self.spawn_entity(item_entity);
         }
     }
