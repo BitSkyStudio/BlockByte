@@ -980,26 +980,12 @@ impl User {
                         entity.inventory.get_slot_raw(entity.hand_slot),
                         &entity.current_equipment_stats.0,
                     );
-                    world
-                        .schedule_event(
-                            world.center_chunk,
-                            WorldEvent::EntityDamage {
-                                entity: other_entity_id,
-                                damage: damage_table,
-                                source_entity: Some(entity.uuid),
-                            },
-                        )
-                        .unwrap();
-                    let knockback_direction = entity.direction.make_front();
-                    world
-                        .schedule_event(
-                            world.center_chunk,
-                            WorldEvent::EntityKnockback {
-                                entity: other_entity_id,
-                                knockback: (knockback_direction + Pos::Y * 0.5) * knockback,
-                            },
-                        )
-                        .unwrap();
+                    if let Some(mut other_entity) = world.get_entity(other_entity_id) {
+                        other_entity.damage(damage_table, Some(entity), world);
+                        let knockback_direction = entity.direction.make_front();
+                        other_entity.character_controller.velocity +=
+                            (knockback_direction + Pos::Y * 0.5) * knockback;
+                    }
                 }
                 NetworkMessageC2S::DropItem { stack } => {
                     let slot = entity.inventory.get_slot_mut_raw(entity.hand_slot);

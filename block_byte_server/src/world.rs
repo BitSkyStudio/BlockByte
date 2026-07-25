@@ -244,80 +244,6 @@ pub fn tick_chunk(world: &WorldAccess) {
                     }
                 }
             }
-            WorldEvent::EntityDamage {
-                entity: entity_id,
-                damage,
-                source_entity,
-            } => {
-                let Some(mut entity) = world.get_entity(entity_id) else {
-                    continue;
-                };
-                //todo: better formula?
-                if rand::random_bool(
-                    1. - 1.
-                        / (entity.current_equipment_stats.0.evasion().max(0.) as f64 / 100. + 2.)
-                            .log2(),
-                ) {
-                    continue;
-                }
-                let entity_data = entity.key.data();
-                let received_damage = damage
-                    .iter()
-                    .map(|(damage_type, damage)| {
-                        damage * entity_data.damage_table[damage_type].unwrap_or(1.)
-                    })
-                    .sum::<f32>();
-                let received_damage = received_damage
-                    * (entity.current_equipment_stats.0.vulnerability() / 100.)
-                    / (1. + entity.current_equipment_stats.0.armor().max(0.) / 100.);
-                if let Some(source_entity) = source_entity {
-                    if let Some(brain) = &mut entity.brain {
-                        *brain.received_attacks.entry(source_entity).or_insert(0.) +=
-                            received_damage;
-                    }
-                }
-                entity.health -= received_damage;
-                if entity.health <= 0. {
-                    let mut items = generate_loot_table(
-                        &entity.key.data().loot_table.data(),
-                        &mut LootGenerationContext::new(rand::random()),
-                    );
-                    for item in entity.inventory.iter_mut() {
-                        if let Some(item) = item.take() {
-                            items.push(item);
-                        }
-                    }
-                    if let Some(source_entity) = source_entity {
-                        if let Some(mut source_entity) = world.get_entity(source_entity) {
-                            let view = source_entity.key.data().pickup_view();
-                            items.retain_mut(|item| {
-                                match source_entity.inventory.add_item(view, item.clone()) {
-                                    Some(overflow) => {
-                                        *item = overflow;
-                                        true
-                                    }
-                                    None => false,
-                                }
-                            });
-                        }
-                    }
-                    world.drop_items(
-                        items.into_iter(),
-                        entity.position + Pos::all(entity.key.data().hitbox_size),
-                    );
-
-                    world.remove_entity(entity);
-                }
-            }
-            WorldEvent::EntityKnockback {
-                entity: entity_id,
-                knockback,
-            } => {
-                let Some(mut entity) = world.get_entity(entity_id) else {
-                    continue;
-                };
-                entity.character_controller.velocity += knockback;
-            }
         }
     }
     for mut entity_ref in world.iter_entities(&[], true) {
@@ -325,6 +251,7 @@ pub fn tick_chunk(world: &WorldAccess) {
         let entity = &mut *entity_ref;
         entity.effects.retain_mut(|effect| {
             if effect.timer <= 1 {
+                entity.inventory.modified = true;
                 false
             } else {
                 effect.timer -= 1;
@@ -569,6 +496,9 @@ pub fn tick_chunk(world: &WorldAccess) {
                 entity.last_hand_item = new_hand_item;
             }
         }
+        if entity.health <= 0. {
+            world.remove_entity(entity_ref);
+        }
     }
     if world.grid.iter().all(Option::is_some) {
         let machine_components = &world.grid[WorldAccess::GRID_CENTER]
@@ -696,15 +626,6 @@ pub enum WorldEvent {
     BlockWakeup {
         block: ChunkOffset,
         inventory_updated: bool,
-    },
-    EntityDamage {
-        entity: Uuid,
-        damage: DamageTable,
-        source_entity: Option<Uuid>,
-    },
-    EntityKnockback {
-        entity: Uuid,
-        knockback: Pos,
     },
 }
 
@@ -875,6 +796,68 @@ impl Entity {
             current_equipment_stats: Default::default(),
         }
     }
+    pub fn damage(
+        &mut self,
+        damage: DamageTable,
+        source_entity: Option<&mut Entity>,
+        world: &WorldAccess,
+    ) {
+        if self.health <= 0. {
+            return;
+        }
+        //todo: better formula?
+        if rand::random_bool(
+            1. - 1. / (self.current_equipment_stats.0.evasion().max(0.) as f64 / 100. + 2.).log2(),
+        ) {
+            return;
+        }
+        let entity_data = self.key.data();
+        let received_damage = damage
+            .iter()
+            .map(|(damage_type, damage)| {
+                damage * entity_data.damage_table[damage_type].unwrap_or(1.)
+            })
+            .sum::<f32>();
+        let received_damage = received_damage
+            * (self.current_equipment_stats.0.vulnerability() / 100.)
+            / (1. + self.current_equipment_stats.0.armor().max(0.) / 100.);
+        if let Some(source_entity) = &source_entity {
+            if let Some(brain) = &mut self.brain {
+                *brain
+                    .received_attacks
+                    .entry(source_entity.uuid)
+                    .or_insert(0.) += received_damage;
+            }
+        }
+        self.health -= received_damage;
+        if self.health <= 0. {
+            let mut items = generate_loot_table(
+                entity_data.loot_table.data(),
+                &mut LootGenerationContext::new(rand::random()),
+            );
+            for item in self.inventory.iter_mut() {
+                if let Some(item) = item.take() {
+                    items.push(item);
+                }
+            }
+            if let Some(source_entity) = source_entity {
+                let view = source_entity.key.data().pickup_view();
+                items.retain_mut(|item| {
+                    match source_entity.inventory.add_item(view, item.clone()) {
+                        Some(overflow) => {
+                            *item = overflow;
+                            true
+                        }
+                        None => false,
+                    }
+                });
+            }
+            world.drop_items(
+                items.into_iter(),
+                self.position + Pos::all(entity_data.hitbox_size),
+            );
+        }
+    }
     pub fn has_researched(
         progress: &Option<Box<EntityResearchProgress>>,
         research: ResearchKey,
@@ -949,63 +932,6 @@ impl Entity {
                         }
                     }
                 }
-                if let Some(target) = &brain.target {
-                    brain.goal = Some(target.last_seen_position);
-                    let hand_item = self.inventory.get_slot_raw(self.hand_slot);
-                    let tool = hand_item
-                        .and_then(|item| item.item.data().tool.as_ref())
-                        .unwrap_or(&ToolData::HAND);
-                    let reach_distance = tool.reach * 0.6;
-                    //todo: eye height
-                    if target.last_seen_position.distance(entity_eye_position) <= reach_distance {
-                        if let Some(timer) = &mut brain.hit_timer {
-                            if timer.tick(SERVER_DT) {
-                                let (damage_table, knockback) = compute_tool_damage_and_knockback(
-                                    hand_item,
-                                    &self.current_equipment_stats.0,
-                                );
-                                let _ = world.schedule_event(
-                                    target.last_seen_position.to_chunk_pos(),
-                                    WorldEvent::EntityDamage {
-                                        entity: target.id,
-                                        damage: damage_table,
-                                        source_entity: Some(self.uuid),
-                                    },
-                                );
-                                let _ = world
-                                    .schedule_event(
-                                        world.center_chunk,
-                                        WorldEvent::EntityKnockback {
-                                            entity: target.id,
-                                            knockback: (self.direction.make_front() + Pos::Y * 0.5)
-                                                * knockback,
-                                        },
-                                    )
-                                    .unwrap();
-                            }
-                            if timer.is_finished() {
-                                brain.hit_timer = None;
-                            }
-                        } else {
-                            world.send_viewers(
-                                self.position.to_chunk_pos(),
-                                NetworkMessageS2C::EntityAction {
-                                    entity: self.uuid,
-                                    action: EntityAction::Attack,
-                                },
-                            );
-                            brain.hit_timer = Some(HitTimer {
-                                current_time: 0.,
-                                swing_time: tool.swing_time * 1.4,
-                            });
-                        }
-                    }
-                } else {
-                    brain.goal = None;
-                    brain.path.clear();
-                    brain.hit_timer = None;
-                }
-
                 if (self.uuid.as_u64_pair().0 + world.ticks_passed) % (SERVER_TPS as u64 / 2) == 0 {
                     brain.recalculate_path(
                         self.position,
@@ -1039,6 +965,48 @@ impl Entity {
                             };
                         }
                     }
+                }
+                if let Some(target) = &brain.target {
+                    brain.goal = Some(target.last_seen_position);
+                    let hand_item = self.inventory.get_slot_raw(self.hand_slot);
+                    let tool = hand_item
+                        .and_then(|item| item.item.data().tool.as_ref())
+                        .unwrap_or(&ToolData::HAND);
+                    let reach_distance = tool.reach * 0.6;
+                    //todo: eye height
+                    if target.last_seen_position.distance(entity_eye_position) <= reach_distance {
+                        if let Some(timer) = &mut brain.hit_timer {
+                            if timer.is_finished() {
+                                brain.hit_timer = None;
+                            } else if timer.tick(SERVER_DT) {
+                                let (damage_table, knockback) = compute_tool_damage_and_knockback(
+                                    hand_item,
+                                    &self.current_equipment_stats.0,
+                                );
+                                if let Some(mut target) = world.get_entity(target.id) {
+                                    target.damage(damage_table, Some(self), world);
+                                    target.character_controller.velocity +=
+                                        (self.direction.make_front() + Pos::Y * 0.5) * knockback;
+                                }
+                            }
+                        } else {
+                            world.send_viewers(
+                                self.position.to_chunk_pos(),
+                                NetworkMessageS2C::EntityAction {
+                                    entity: self.uuid,
+                                    action: EntityAction::Attack,
+                                },
+                            );
+                            brain.hit_timer = Some(HitTimer {
+                                current_time: 0.,
+                                swing_time: tool.swing_time * 1.4,
+                            });
+                        }
+                    }
+                } else {
+                    brain.goal = None;
+                    brain.path.clear();
+                    brain.hit_timer = None;
                 }
             }
             None => {}
