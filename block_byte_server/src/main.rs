@@ -731,7 +731,7 @@ impl User {
                 NetworkMessageC2S::AttackBlock { position, face: _ } => {
                     let (damage_table, _) = compute_tool_damage_and_knockback(
                         entity.inventory.get_slot_raw(entity.hand_slot),
-                        &entity.current_equipment_stats.0,
+                        &entity.current_stats,
                     );
                     let (chunk, offset) = position.to_chunk_pos_offset();
                     let _ = world.schedule_event(
@@ -978,7 +978,7 @@ impl User {
                 } => {
                     let (damage_table, knockback) = compute_tool_damage_and_knockback(
                         entity.inventory.get_slot_raw(entity.hand_slot),
-                        &entity.current_equipment_stats.0,
+                        &entity.current_stats,
                     );
                     if let Some(mut other_entity) = world.get_entity(other_entity_id) {
                         other_entity.damage(damage_table, Some(entity), world);

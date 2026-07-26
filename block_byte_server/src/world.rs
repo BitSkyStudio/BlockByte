@@ -260,7 +260,7 @@ pub fn tick_chunk(world: &WorldAccess) {
         });
         if entity.inventory.modified {
             entity.inventory.modified = false;
-            entity.current_equipment_stats.1.clear();
+            entity.current_passives.clear();
             let mut stats = entity.key.data().base_stats.clone();
             for effect in &entity.effects {
                 stats.apply(&effect.stats, 1.);
@@ -279,7 +279,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                     .components
                     .get_component::<ItemComponentPassiveAbility>()
                 {
-                    entity.current_equipment_stats.1.insert(*passive);
+                    entity.current_passives.insert(*passive);
                 }
             };
             for equipment in entity.key.data().equipment_slots.clone() {
@@ -298,7 +298,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                     },
                 );
             }
-            entity.current_equipment_stats.0 = stats;
+            entity.current_stats = stats;
         }
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
@@ -647,8 +647,10 @@ pub struct Entity {
     pub direction: LookDirection,
     pub pose: EntityPose,
     pub effects: Vec<ActiveEffect>,
-    #[serde(skip_serializing, skip_deserializing, default)]
-    pub current_equipment_stats: (EntityStats, HashSet<ItemComponentPassiveAbility>),
+    #[serde(skip_serializing, skip_deserializing)]
+    pub current_stats: EntityStats,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub current_passives: HashSet<ItemComponentPassiveAbility>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct EntityResearchProgress {
@@ -793,7 +795,8 @@ impl Entity {
             direction: LookDirection { pitch: 0., yaw: 0. },
             pose: EntityPose::Stand,
             effects: Vec::new(),
-            current_equipment_stats: Default::default(),
+            current_stats: EntityStats::default(),
+            current_passives: HashSet::new(),
         }
     }
     pub fn damage(
@@ -807,7 +810,7 @@ impl Entity {
         }
         //todo: better formula?
         if rand::random_bool(
-            1. - 1. / (self.current_equipment_stats.0.evasion().max(0.) as f64 / 100. + 2.).log2(),
+            1. - 1. / (self.current_stats.evasion().max(0.) as f64 / 100. + 2.).log2(),
         ) {
             return;
         }
@@ -818,9 +821,8 @@ impl Entity {
                 damage * entity_data.damage_table[damage_type].unwrap_or(1.)
             })
             .sum::<f32>();
-        let received_damage = received_damage
-            * (self.current_equipment_stats.0.vulnerability() / 100.)
-            / (1. + self.current_equipment_stats.0.armor().max(0.) / 100.);
+        let received_damage = received_damage * (self.current_stats.vulnerability() / 100.)
+            / (1. + self.current_stats.armor().max(0.) / 100.);
         if let Some(source_entity) = &source_entity {
             if let Some(brain) = &mut self.brain {
                 *brain
@@ -879,7 +881,7 @@ impl Entity {
         match &entity_data.ai {
             Some(ai) => {
                 let entity_eye_position = self.get_eye();
-                let current_health_regen = self.current_equipment_stats.0.regen();
+                let current_health_regen = self.current_stats.regen();
                 let brain = self.brain.as_mut().unwrap();
                 brain.received_attacks.retain(|_, damage| {
                     *damage -= current_health_regen * SERVER_DT;
@@ -981,7 +983,7 @@ impl Entity {
                             } else if timer.tick(SERVER_DT) {
                                 let (damage_table, knockback) = compute_tool_damage_and_knockback(
                                     hand_item,
-                                    &self.current_equipment_stats.0,
+                                    &self.current_stats,
                                 );
                                 if let Some(mut target) = world.get_entity(target.id) {
                                     target.damage(damage_table, Some(self), world);
