@@ -1,13 +1,17 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use renet::{ChannelConfig, ConnectionConfig, SendType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ClientItem, EntityAction, EntityPose, EntityStats, InternString, ItemMoveMode, LookDirection,
+    ActiveEffect, ClientItem, EntityAction, EntityPose, EntityStats, InternString, ItemMoveMode,
+    LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
-    registry::{BlockEntry, BlockPalette, EntityKey, ItemKey, RecipeKey, ResearchKey},
+    registry::{BlockEntry, BlockPalette, EffectKey, EntityKey, ItemKey, RecipeKey, ResearchKey},
     scripts::ScriptValue,
     ui::{PropertyMap, UIScreenKey},
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
@@ -122,12 +126,19 @@ pub enum NetworkMessageS2C {
         direction: LookDirection,
         hand_item: Option<ClientItem>,
         pose: EntityPose,
+        effects: HashMap<EffectKey, ActiveEffect>,
     },
     MoveEntity {
         uuid: Uuid,
         position: Pos,
         direction: LookDirection,
         pose: EntityPose,
+    },
+    EntityAddEffect {
+        uuid: Uuid,
+        effect: EffectKey,
+        level: f32,
+        duration: u32,
     },
     RemoveEntity {
         uuid: Uuid,

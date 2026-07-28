@@ -6,17 +6,17 @@ use std::{
 };
 
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, DamageTable, DamageType, EntityAction,
-    EntityPose, EntityStats, HitTimer, InternString, LookDirection, MoveMode, NORMAL_SPEED,
-    SERVER_DT, SERVER_TPS,
+    ACCELERATION_COEFFICIENT, ActiveEffect, CharacterController, DamageTable, DamageType,
+    EntityAction, EntityPose, EntityStats, HitTimer, InternString, LookDirection, MoveMode,
+    NORMAL_SPEED, SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
     },
     net::{NetworkMessageS2C, PropertyModifyMode},
     registry::{
-        BlockEntry, BlockMachineData, BlockMachineFace, BlockPalette, EntityKey, MachineInstrution,
-        PlantKey, ResearchKey, ToolData, air_block,
+        BlockEntry, BlockMachineData, BlockMachineFace, BlockPalette, EffectKey, EntityKey,
+        MachineInstrution, PlantKey, ResearchKey, ToolData, air_block,
     },
     scripts::{CallbackResult, RunResult, ScriptState, ScriptValue},
     time_to_ticks,
@@ -249,21 +249,20 @@ pub fn tick_chunk(world: &WorldAccess) {
     for mut entity_ref in world.iter_entities(&[], true) {
         let entity_data = entity_ref.key.data();
         let entity = &mut *entity_ref;
-        entity.effects.retain_mut(|effect| {
-            if effect.timer <= 1 {
-                entity.inventory.modified = true;
-                false
-            } else {
-                effect.timer -= 1;
-                true
-            }
-        });
-        if entity.inventory.modified {
+        let mut effects_modified = false;
+        entity
+            .effects
+            .extract_if(|_, instance| {
+                effects_modified |= instance.tick();
+                instance.is_empty()
+            })
+            .count();
+        if entity.inventory.modified || effects_modified {
             entity.inventory.modified = false;
             entity.current_passives.clear();
             let mut stats = entity.key.data().base_stats.clone();
-            for effect in &entity.effects {
-                stats.apply(&effect.stats, 1.);
+            for (effect, instance) in &entity.effects {
+                stats.apply(&effect.data().stats, instance.get_level());
             }
             let mut apply_item = |item: &ItemStack| {
                 let quality_multiplier = item
@@ -290,15 +289,17 @@ pub fn tick_chunk(world: &WorldAccess) {
             if let Some(item) = &entity.inventory.get_slot_raw(entity.hand_slot) {
                 apply_item(item);
             }
-            if let Some(controlling_user) = entity.controlling_user {
-                world.send(
-                    controlling_user,
-                    NetworkMessageS2C::UpdatePlayerStats {
-                        stats: stats.clone(),
-                    },
-                );
+            if entity.current_stats != stats {
+                if let Some(controlling_user) = entity.controlling_user {
+                    world.send(
+                        controlling_user,
+                        NetworkMessageS2C::UpdatePlayerStats {
+                            stats: stats.clone(),
+                        },
+                    );
+                }
+                entity.current_stats = stats;
             }
-            entity.current_stats = stats;
         }
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
@@ -642,11 +643,11 @@ pub struct Entity {
     #[serde(skip_serializing, skip_deserializing)]
     pub last_hand_item: Option<ItemStack>,
     pub health: f32,
-    pub research: Option<Box<EntityResearchProgress>>,
-    pub brain: Option<MobBrain>,
+    pub research: Option<EntityResearchProgress>,
+    pub brain: Option<Box<MobBrain>>,
     pub direction: LookDirection,
     pub pose: EntityPose,
-    pub effects: Vec<ActiveEffect>,
+    pub effects: HashMap<EffectKey, ActiveEffect>,
     #[serde(skip_serializing, skip_deserializing)]
     pub current_stats: EntityStats,
     #[serde(skip_serializing, skip_deserializing)]
@@ -657,10 +658,16 @@ pub struct EntityResearchProgress {
     pub unlocked: HashSet<ResearchKey>,
     pub progress: HashMap<ResearchKey, Vec<f32>>,
 }
-#[derive(Serialize, Deserialize)]
-pub struct ActiveEffect {
-    pub stats: EntityStats,
-    pub timer: u32,
+impl EntityResearchProgress {
+    pub fn has_researched(
+        progress: &Option<EntityResearchProgress>,
+        research: ResearchKey,
+    ) -> bool {
+        let Some(progress) = &progress else {
+            return false;
+        };
+        progress.unlocked.contains(&research)
+    }
 }
 #[derive(Serialize, Deserialize)]
 pub struct MobBrainTarget {
@@ -789,12 +796,12 @@ impl Entity {
             health: entity_data.base_stats.vitality(),
             research: None,
             brain: match &entity_data.ai {
-                Some(_) => Some(MobBrain::new(position.to_block_pos())),
+                Some(_) => Some(Box::new(MobBrain::new(position.to_block_pos()))),
                 None => None,
             },
             direction: LookDirection { pitch: 0., yaw: 0. },
             pose: EntityPose::Stand,
-            effects: Vec::new(),
+            effects: HashMap::new(),
             current_stats: EntityStats::default(),
             current_passives: HashSet::new(),
         }
@@ -859,15 +866,6 @@ impl Entity {
                 self.position + Pos::all(entity_data.hitbox_size),
             );
         }
-    }
-    pub fn has_researched(
-        progress: &Option<Box<EntityResearchProgress>>,
-        research: ResearchKey,
-    ) -> bool {
-        let Some(progress) = &progress else {
-            return false;
-        };
-        progress.unlocked.contains(&research)
     }
     pub fn get_eye(&self) -> Pos {
         let entity_data = self.key.data();
@@ -1030,6 +1028,7 @@ impl Entity {
                 .inventory
                 .get_slot_raw(self.hand_slot)
                 .map(|item| item.client()),
+            effects: self.effects.clone(),
         }
     }
     pub fn create_move_message(&self) -> NetworkMessageS2C {

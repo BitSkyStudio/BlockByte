@@ -38,8 +38,9 @@ use crate::{
     inventory::{Inventory, ItemCount, ItemStack, LootGenerationContext, generate_loot_table},
     registry::Key,
     world::{
-        ActiveEffect, BlockMachine, Chunk, ChunkBlocks, ChunkSaveData, Entity, WorldAccess,
-        WorldAccessCell, WorldAccessRef, WorldEvent, compute_tool_damage_and_knockback, tick_chunk,
+        BlockMachine, Chunk, ChunkBlocks, ChunkSaveData, Entity, EntityResearchProgress,
+        WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent,
+        compute_tool_damage_and_knockback, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -544,6 +545,13 @@ impl ChunkViewingManager {
             std::iter::once(user),
             NetworkMessageS2C::UnloadChunk { position },
         );
+        for entity in chunk.entities.keys() {
+            //this could be done on client in unloadchunk, but just to make sure no desyncs happen
+            server.message_queue.send_message(
+                std::iter::once(user),
+                NetworkMessageS2C::RemoveEntity { uuid: *entity },
+            );
+        }
     }
     pub fn manage(
         self,
@@ -684,8 +692,6 @@ pub struct User {
     hud_sync_items: Mutex<Vec<Option<ClientItem>>>,
     screen: Mutex<Option<UserScreen>>,
     message_queue: Mutex<VecDeque<NetworkMessageC2S>>,
-    //todo: check this
-    //last_synced_stats: Mutex<EntityStats>,
 }
 impl User {
     pub fn tick_controlling_entity(
@@ -761,7 +767,10 @@ impl User {
                                     continue;
                                 }
                                 if let Some(research) = place.research {
-                                    if !Entity::has_researched(&entity.research, research) {
+                                    if !EntityResearchProgress::has_researched(
+                                        &entity.research,
+                                        research,
+                                    ) {
                                         continue;
                                     }
                                 }
@@ -847,13 +856,26 @@ impl User {
                                 }
                             }
                             ItemAction::Consume {
-                                effects,
-                                effect_duration,
+                                effect,
+                                level,
+                                duration,
                             } => {
-                                entity.effects.push(ActiveEffect {
-                                    stats: effects.clone(),
-                                    timer: time_to_ticks(*effect_duration),
-                                });
+                                let duration = time_to_ticks(*duration);
+                                entity
+                                    .effects
+                                    .entry(*effect)
+                                    .or_default()
+                                    .add(*level, duration);
+                                //inventory should already be marked as modified
+                                world.send_viewers(
+                                    entity.position.to_chunk_pos(),
+                                    NetworkMessageS2C::EntityAddEffect {
+                                        uuid: entity.uuid,
+                                        effect: *effect,
+                                        level: *level,
+                                        duration,
+                                    },
+                                );
                                 item.count -= 1;
                             }
                         }

@@ -877,3 +877,43 @@ impl std::ops::Deref for InternString {
         self.as_str()
     }
 }
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct ActiveEffect(Vec<(f32, u32)>);
+impl ActiveEffect {
+    pub fn add(&mut self, level: f32, duration: u32) {
+        for i in 0..self.0.len() {
+            let e = self.0[i];
+            if level > e.0 {
+                self.0.insert(i, (level, duration));
+                return;
+            } else if level == e.0 {
+                self.0[i].1 = e.1.max(duration);
+                return;
+            }
+            if duration < e.1 {
+                return;
+            }
+        }
+        self.0.push((level, duration));
+    }
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
+        self.0.retain_mut(|(_, duration)| {
+            if *duration <= 1 {
+                changed = true;
+                true
+            } else {
+                *duration -= 1;
+                false
+            }
+        });
+        changed
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn get_level(&self) -> f32 {
+        self.0.first().map(|e| e.0).unwrap_or(0.)
+    }
+}

@@ -265,7 +265,7 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; PrefabData, prefab; ResearchData, research; WorldGenStructureData, structure);
+create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; PrefabData, prefab; ResearchData, research; WorldGenStructureData, structure; EffectData, effect);
 
 impl<T: 'static> Key<T>
 where
@@ -486,8 +486,9 @@ pub enum ItemAction {
     Plant(PlantKey),
     RotateBlock,
     Consume {
-        effects: EntityStats,
-        effect_duration: f32,
+        effect: EffectKey,
+        level: f32,
+        duration: f32,
     },
 }
 impl ItemAction {
@@ -1764,3 +1765,9 @@ pub struct WorldGenStructureRoom {
     #[serde(default)]
     pub road: Option<(BlockPos, u8)>,
 }
+#[derive(Deserialize)]
+pub struct EffectData {
+    pub stats: EntityStats,
+}
+impl RegistryRonConfigLoadable for EffectData {}
+pub type EffectKey = Key<EffectData>;

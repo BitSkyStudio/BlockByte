@@ -11,17 +11,17 @@ use std::{
 
 use ahash::AHashMap;
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, CharacterController, ClientItem, Color, EntityAction, EntityPose,
-    EntityStats, HitTimer, InternString, LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT,
-    TexCoords,
+    ACCELERATION_COEFFICIENT, ActiveEffect, CharacterController, ClientItem, Color, EntityAction,
+    EntityPose, EntityStats, HitTimer, InternString, LookDirection, MoveMode, NORMAL_SPEED,
+    SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, LoopMode, ModelGeometry},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     number_approach_smooth,
     registry::{
-        BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, EntityData,
-        EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key, ResearchKey,
-        TextureKey, ToolData, TranslationLanguageData, air_block,
+        BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, EffectKey,
+        EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key,
+        ResearchKey, TextureKey, ToolData, TranslationLanguageData, air_block,
     },
     ui::PropertyMap,
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
@@ -886,6 +886,7 @@ impl ClientGame {
                     direction,
                     hand_item,
                     pose,
+                    effects,
                 } => {
                     self.entities.insert(
                         uuid,
@@ -900,6 +901,7 @@ impl ClientGame {
                             pose,
                             pose_player: AnimationPlayer::new(pose.base_animation()),
                             action_player: AnimationPlayer::new("empty"),
+                            effects,
                         },
                     );
                 }
@@ -1036,6 +1038,20 @@ impl ClientGame {
                 NetworkMessageS2C::EntityAction { entity, action } => {
                     if let Some(entity) = self.entities.get_mut(&entity) {
                         entity.action_player.play_animation(action.animation(), 0.1);
+                    }
+                }
+                NetworkMessageS2C::EntityAddEffect {
+                    uuid,
+                    effect,
+                    level,
+                    duration,
+                } => {
+                    if let Some(entity) = self.entities.get_mut(&uuid) {
+                        entity
+                            .effects
+                            .entry(effect)
+                            .or_default()
+                            .add(level, duration);
                     }
                 }
             }
@@ -1784,6 +1800,15 @@ impl ClientGame {
                 health.damage -= dt * data.health.health_regen;
             }
         }
+        for (_, entity) in &mut self.entities {
+            entity
+                .effects
+                .extract_if(|_, instance| {
+                    instance.tick();
+                    instance.is_empty()
+                })
+                .count();
+        }
     }
     pub fn get_player_data(&self) -> Option<&'static EntityData> {
         Some(self.entities.get(&self.player_entity?)?.key.data())
@@ -1800,6 +1825,7 @@ pub struct ClientEntity {
     pose: EntityPose,
     action_player: AnimationPlayer,
     pose_player: AnimationPlayer,
+    effects: HashMap<EffectKey, ActiveEffect>,
 }
 pub struct ChunkMeshBuildData {
     pub blocks: RwLock<BlockPalette>,
