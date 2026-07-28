@@ -7,8 +7,8 @@ use std::{
 
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, ActiveEffect, CharacterController, DamageTable, DamageType,
-    EntityAction, EntityPose, EntityStats, HitTimer, InternString, LookDirection, MoveMode,
-    NORMAL_SPEED, SERVER_DT, SERVER_TPS,
+    EntityAction, EntityPose, EntityResearchProgress, EntityStats, HitTimer, InternString,
+    LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
         Pos, Ray,
@@ -16,7 +16,7 @@ use block_byte_common::{
     net::{NetworkMessageS2C, PropertyModifyMode},
     registry::{
         BlockEntry, BlockMachineData, BlockMachineFace, BlockPalette, EffectKey, EntityKey,
-        MachineInstrution, PlantKey, ResearchKey, ToolData, air_block,
+        MachineInstrution, PlantKey, ToolData, air_block,
     },
     scripts::{CallbackResult, RunResult, ScriptState, ScriptValue},
     time_to_ticks,
@@ -652,22 +652,6 @@ pub struct Entity {
     pub current_stats: EntityStats,
     #[serde(skip_serializing, skip_deserializing)]
     pub current_passives: HashSet<ItemComponentPassiveAbility>,
-}
-#[derive(Serialize, Deserialize)]
-pub struct EntityResearchProgress {
-    pub unlocked: HashSet<ResearchKey>,
-    pub progress: HashMap<ResearchKey, Vec<f32>>,
-}
-impl EntityResearchProgress {
-    pub fn has_researched(
-        progress: &Option<EntityResearchProgress>,
-        research: ResearchKey,
-    ) -> bool {
-        let Some(progress) = &progress else {
-            return false;
-        };
-        progress.unlocked.contains(&research)
-    }
 }
 #[derive(Serialize, Deserialize)]
 pub struct MobBrainTarget {

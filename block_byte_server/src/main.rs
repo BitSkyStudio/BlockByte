@@ -12,8 +12,8 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, EntityAction, InternString, InventoryView, LookDirection, SERVER_DT, SERVER_TPS,
-    ViewSlot,
+    ClientItem, EntityAction, EntityResearchProgress, InternString, InventoryView, LookDirection,
+    SERVER_DT, SERVER_TPS, ViewSlot,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -38,9 +38,8 @@ use crate::{
     inventory::{Inventory, ItemCount, ItemStack, LootGenerationContext, generate_loot_table},
     registry::Key,
     world::{
-        BlockMachine, Chunk, ChunkBlocks, ChunkSaveData, Entity, EntityResearchProgress,
-        WorldAccess, WorldAccessCell, WorldAccessRef, WorldEvent,
-        compute_tool_damage_and_knockback, tick_chunk,
+        BlockMachine, Chunk, ChunkBlocks, ChunkSaveData, Entity, WorldAccess, WorldAccessCell,
+        WorldAccessRef, WorldEvent, compute_tool_damage_and_knockback, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -210,14 +209,11 @@ fn main() {
                 .unwrap(),
                 spawn_position,
             );
+            entity.research = Some(EntityResearchProgress::default());
             server.message_queue.send_message(
                 std::iter::once(user),
                 NetworkMessageS2C::UpdateResearch {
-                    research: entity
-                        .research
-                        .as_ref()
-                        .map(|research| research.unlocked.clone())
-                        .unwrap_or(HashSet::new()),
+                    research: entity.research.clone().unwrap(),
                 },
             );
             entity.controlling_user = Some(user);
@@ -1172,6 +1168,11 @@ impl User {
                         continue;
                     }
                     let research_data = research.data();
+                    for dependency in &research_data.dependencies {
+                        if !research_progress.unlocked.contains(dependency) {
+                            continue;
+                        }
+                    }
                     let screen = self.screen.lock();
                     let Some(screen) = &*screen else {
                         continue;
@@ -1224,6 +1225,12 @@ impl User {
                         {
                             research_progress.unlocked.insert(research);
                         }
+                        world.send(
+                            controlling_user,
+                            NetworkMessageS2C::UpdateResearch {
+                                research: entity.research.clone().unwrap(),
+                            },
+                        );
                     }
                 }
                 NetworkMessageC2S::Craft { recipe, mut count } => {

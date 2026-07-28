@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map},
     path::PathBuf,
 };
 
@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::{
     InternString,
     net::PropertyModifyMode,
-    registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchData, TextureKey},
+    registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchKey, TextureKey},
     scripts::ScriptValue,
 };
 #[derive(Default)]
@@ -62,7 +62,7 @@ pub enum UIElementType {
         filter: Option<Uuid>,
     },
     ResearchTree {
-        research: KeyGroup<ResearchData>,
+        research: HashMap<ResearchKey, ResearchNode>,
     },
     Button {
         text: String,
@@ -71,6 +71,10 @@ pub enum UIElementType {
         modify_mode: PropertyModifyMode,
     },
     TextField {},
+}
+pub struct ResearchNode {
+    pub x: f32,
+    pub y: f32,
 }
 impl UIElementType {
     fn parse(node: &Node, context: &mut UIParseContext) -> anyhow::Result<Self> {
@@ -113,7 +117,40 @@ impl UIElementType {
                 },
             },
             "research" => UIElementType::ResearchTree {
-                research: KeyGroup::parse(node.attribute("research").unwrap()).unwrap(),
+                research: {
+                    let mut research = HashMap::new();
+                    for child in node.children() {
+                        if let Some(text) = child.text() {
+                            if !text.trim().is_empty() {
+                                return Err(anyhow!("text not allowed, was {}", text));
+                            }
+                            continue;
+                        }
+                        if child.tag_name().name() != "node" {
+                            if !child.tag_name().name().trim().is_empty() {
+                                return Err(anyhow!(
+                                    "must be node tag, is {}",
+                                    child.tag_name().name()
+                                ));
+                            }
+                            continue;
+                        }
+                        let research_key =
+                            ResearchKey::id(child.attribute("research").unwrap()).unwrap();
+                        match research.entry(research_key) {
+                            hash_map::Entry::Occupied(_) => {
+                                return Err(anyhow!("node already defined"));
+                            }
+                            hash_map::Entry::Vacant(entry) => {
+                                entry.insert(ResearchNode {
+                                    x: child.attribute("x").unwrap().parse().unwrap(),
+                                    y: child.attribute("y").unwrap().parse().unwrap(),
+                                });
+                            }
+                        }
+                    }
+                    research
+                },
             },
             "buttton" => UIElementType::Button {
                 text: {

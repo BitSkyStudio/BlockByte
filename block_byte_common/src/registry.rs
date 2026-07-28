@@ -1721,8 +1721,6 @@ pub struct ResearchData {
     pub requirements: Vec<ResearchProgressBar>,
     #[serde(default)]
     pub dependencies: Vec<ResearchKey>,
-    pub x: f32,
-    pub y: f32,
 }
 #[derive(Deserialize)]
 pub struct ResearchProgressBar {

@@ -1,4 +1,8 @@
-use std::{hash::Hash, sync::OnceLock};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    sync::OnceLock,
+};
 
 use once_map::OnceMap;
 use rand::Rng;
@@ -6,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     coord::{AABB, BlockPos, Pos},
-    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup},
+    registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup, ResearchKey},
 };
 use serde_default_utils::*;
 
@@ -915,5 +919,22 @@ impl ActiveEffect {
     }
     pub fn get_level(&self) -> f32 {
         self.0.first().map(|e| e.0).unwrap_or(0.)
+    }
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct EntityResearchProgress {
+    pub unlocked: HashSet<ResearchKey>,
+    pub progress: HashMap<ResearchKey, Vec<f32>>,
+}
+impl EntityResearchProgress {
+    pub fn has_researched(
+        progress: &Option<EntityResearchProgress>,
+        research: ResearchKey,
+    ) -> bool {
+        let Some(progress) = &progress else {
+            return false;
+        };
+        progress.unlocked.contains(&research)
     }
 }

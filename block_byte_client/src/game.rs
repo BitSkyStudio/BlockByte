@@ -2,7 +2,7 @@ use core::f32;
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BinaryHeap, HashMap},
     net::{SocketAddr, UdpSocket},
     sync::{Arc, atomic::AtomicU64},
     time::{Duration, Instant, SystemTime},
@@ -12,8 +12,8 @@ use std::{
 use ahash::AHashMap;
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, ActiveEffect, CharacterController, ClientItem, Color, EntityAction,
-    EntityPose, EntityStats, HitTimer, InternString, LookDirection, MoveMode, NORMAL_SPEED,
-    SERVER_DT, TexCoords,
+    EntityPose, EntityResearchProgress, EntityStats, HitTimer, InternString, LookDirection,
+    MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, LoopMode, ModelGeometry},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
@@ -21,7 +21,7 @@ use block_byte_common::{
     registry::{
         BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, EffectKey,
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key,
-        ResearchKey, TextureKey, ToolData, TranslationLanguageData, air_block,
+        TextureKey, ToolData, TranslationLanguageData, air_block,
     },
     ui::PropertyMap,
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
@@ -255,7 +255,7 @@ pub struct ClientGame {
         std::sync::mpsc::Sender<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
         std::sync::mpsc::Receiver<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
     ),
-    pub researched: HashSet<ResearchKey>,
+    pub research: EntityResearchProgress,
     pub stamina: f32,
     pub chunk_mesh_queue_size: usize,
     pub server_ticks_passed: u64,
@@ -546,6 +546,7 @@ impl GameScreen for ClientGame {
             &mut self.hud,
             None,
             renderer.size(),
+            &self.research,
             &mut gui_mesh,
             dt,
             |_| {},
@@ -555,6 +556,7 @@ impl GameScreen for ClientGame {
                 screen,
                 Some(&input),
                 renderer.size(),
+                &self.research,
                 &mut gui_mesh,
                 dt,
                 |event| match event {
@@ -1019,7 +1021,7 @@ impl ClientGame {
                     self.camera.controller.velocity += velocity;
                 }
                 NetworkMessageS2C::UpdateResearch { research } => {
-                    self.researched = research;
+                    self.research = research;
                 }
                 NetworkMessageS2C::HudBarUpdate { health } => {
                     self.hud
@@ -1187,7 +1189,7 @@ impl ClientGame {
             chunk_mesh_channels: std::sync::mpsc::channel(),
             viewmodel_player: AnimationPlayer::new("idle"),
             swap_hand_item: None,
-            researched: HashSet::new(),
+            research: EntityResearchProgress::default(),
             stamina: 0.,
             chunk_mesh_queue_size: 0,
             server_ticks_passed: 0,

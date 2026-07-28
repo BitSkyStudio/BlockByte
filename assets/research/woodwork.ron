@@ -1,6 +1,14 @@
 (
     icon: Block("wood.oak.plank"),
-    requirements: [],
+    requirements: [
+        (
+            total: 10,
+            items: [
+                ("wood.oak.log", 1),
+                ("wood.cherry.log", 2)
+            ]
+        )
+    ],
     x: 0,
     y: 0,
 )

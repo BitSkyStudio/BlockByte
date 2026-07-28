@@ -1,15 +1,12 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 
 use renet::{ChannelConfig, ConnectionConfig, SendType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ActiveEffect, ClientItem, EntityAction, EntityPose, EntityStats, InternString, ItemMoveMode,
-    LookDirection,
+    ActiveEffect, ClientItem, EntityAction, EntityPose, EntityResearchProgress, EntityStats,
+    InternString, ItemMoveMode, LookDirection,
     coord::{BlockPos, ChunkOffset, ChunkPos, Face, Pos},
     registry::{BlockEntry, BlockPalette, EffectKey, EntityKey, ItemKey, RecipeKey, ResearchKey},
     scripts::ScriptValue,
@@ -182,7 +179,7 @@ pub enum NetworkMessageS2C {
         velocity: Pos,
     },
     UpdateResearch {
-        research: HashSet<ResearchKey>,
+        research: EntityResearchProgress,
     },
     EntityAction {
         entity: Uuid,

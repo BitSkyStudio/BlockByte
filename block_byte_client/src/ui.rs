@@ -1,10 +1,10 @@
 use std::{collections::HashMap, u32};
 
 use block_byte_common::{
-    ClientItem, Color, ItemMoveMode, TexCoords,
+    ClientItem, Color, EntityResearchProgress, ItemMoveMode, TexCoords,
     coord::{Pos, Vec3},
     net::NetworkMessageC2S,
-    registry::{ItemKey, ItemModel, TextureKey},
+    registry::{ItemKey, ItemModel, KeyGroup, TextureKey},
     ui::{
         CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, UIElement, UIElementType,
         UIScreenKey, UIStyleRule,
@@ -55,6 +55,7 @@ pub fn render_screen(
     screen_data: &mut ScreenData,
     input: Option<&InputManager>,
     size: PhysicalSize<u32>,
+    research: &EntityResearchProgress,
     mesh: &mut GUIMesh,
     dt: f32,
     mut event_consumer: impl FnMut(UIMessage),
@@ -107,6 +108,7 @@ pub fn render_screen(
         mesh,
         &mut overlay_mesh,
         input,
+        &research,
         &mut event_consumer,
     );
     mesh.append_mesh(overlay_mesh);
@@ -153,6 +155,7 @@ fn render_element(
     mesh: &mut GUIMesh,
     overlay_mesh: &mut GUIMesh,
     input: Option<&InputManager>,
+    player_research: &EntityResearchProgress,
     event_consumer: &mut impl FnMut(UIMessage),
 ) {
     let layout = taffy.layout(node).unwrap();
@@ -263,6 +266,7 @@ fn render_element(
                     mesh,
                     overlay_mesh,
                     input,
+                    &player_research,
                     event_consumer,
                 );
             }
@@ -629,31 +633,32 @@ fn render_element(
                 x: context.content.size.x / 2. + element_data.scroll.x,
                 y: context.content.size.y / 2. + element_data.scroll.y,
             };
-            for research in research.list() {
-                let research_data = research.data();
+            for (research_key, node) in research {
+                let research_data = research_key.data();
                 for dependency in &research_data.dependencies {
-                    let dependency_data = dependency.data();
-                    context.draw_line(
-                        UIPos {
-                            x: (research_data.x + 0.5) * research_size + research_scroll.x,
-                            y: (research_data.y + 0.5) * research_size + research_scroll.y,
-                        },
-                        UIPos {
-                            x: (dependency_data.x + 0.5) * research_size + research_scroll.x,
-                            y: (dependency_data.y + 0.5) * research_size + research_scroll.y,
-                        },
-                        TextureKey::id("crosshair").unwrap().tex_coords(), //todo
-                        Color::WHITE,
-                        3.,
-                    );
+                    if let Some(dependency) = research.get(dependency) {
+                        context.draw_line(
+                            UIPos {
+                                x: (node.x + 0.5) * research_size + research_scroll.x,
+                                y: (node.y + 0.5) * research_size + research_scroll.y,
+                            },
+                            UIPos {
+                                x: (dependency.x + 0.5) * research_size + research_scroll.x,
+                                y: (dependency.y + 0.5) * research_size + research_scroll.y,
+                            },
+                            TextureKey::id("crosshair").unwrap().tex_coords(), //todo
+                            Color::WHITE,
+                            3.,
+                        );
+                    }
                 }
             }
-            for research in research.list() {
-                let research_data = research.data();
+            for (research_key, node) in research {
+                let research_data = research_key.data();
                 let area = UIRect {
                     pos: UIPos {
-                        x: research_data.x * research_size + research_scroll.x,
-                        y: research_data.y * research_size + research_scroll.y,
+                        x: node.x * research_size + research_scroll.x,
+                        y: node.y * research_size + research_scroll.y,
                     },
                     size: UIPos::all(research_size),
                 };
@@ -669,10 +674,52 @@ fn render_element(
                     .contains(input.cursor_position)
                         && mouse_inside
                     {
-                        overlay_context.draw_text(
-                            input.cursor_position,
+                        let mut text = String::new();
+                        use std::fmt::Write;
+                        writeln!(
+                            &mut text,
+                            "{}",
                             language()
-                                .translate(format!("research.{}", research.text_id()).as_str()),
+                                .translate(format!("research.{}", research_key.text_id()).as_str())
+                        )
+                        .unwrap();
+                        for (i, bar) in research_data.requirements.iter().enumerate() {
+                            writeln!(
+                                &mut text,
+                                "{}/{}",
+                                match player_research.progress.get(research_key) {
+                                    Some(progress) => {
+                                        match progress.get(i) {
+                                            Some(progress) => *progress,
+                                            None => 0.,
+                                        }
+                                    }
+                                    None => 0.,
+                                },
+                                bar.total
+                            )
+                            .unwrap();
+                            for (item, progress) in &bar.items {
+                                match item {
+                                    KeyGroup::Single(item) => {
+                                        writeln!(
+                                            &mut text,
+                                            "  {}: {}",
+                                            language().translate_item(*item),
+                                            progress
+                                        )
+                                        .unwrap();
+                                    }
+                                    KeyGroup::Group(_) => {
+                                        writeln!(&mut text, "  [itemgroup]: {}", progress).unwrap();
+                                    }
+                                    KeyGroup::Empty => {}
+                                }
+                            }
+                        }
+                        overlay_context.draw_multiline_text(
+                            input.cursor_position,
+                            &text,
                             40.,
                             Color::WHITE,
                         );
@@ -702,7 +749,7 @@ fn render_element(
                                         NetworkMessageC2S::Research {
                                             slot,
                                             mode,
-                                            research: *research,
+                                            research: *research_key,
                                         },
                                     ));
                                 }
