@@ -61,7 +61,7 @@ pub struct LoadRegistry<T> {
     data_list: Vec<Vec<PathBuf>>,
     id_list: Vec<String>,
     group_id_map: HashMap<String, KeyGroup<T>>,
-    groups: Vec<(Vec<Key<T>>, HashSet<Key<T>>)>,
+    groups: Vec<(Vec<Key<T>>, HashSet<Key<T>>, String)>,
 }
 impl<T> Default for LoadRegistry<T> {
     fn default() -> Self {
@@ -90,7 +90,8 @@ impl<T> LoadRegistry<T> {
         key
     }
     fn register_group(&mut self, id: String, group: HashSet<Key<T>>) -> KeyGroup<T> {
-        self.groups.push((group.iter().cloned().collect(), group));
+        self.groups
+            .push((group.iter().cloned().collect(), group, id.clone()));
         let key_group = KeyGroup::Group(self.groups.len() - 1);
         self.group_id_map.insert(id, key_group);
         key_group
@@ -217,6 +218,35 @@ macro_rules! create_registries{
                 std::process::exit(0);
             }
             REGISTRIES.set(registries).ok().unwrap();
+        }
+        pub trait KeyTranslationProvider<T> {
+            fn translate_key(&self, language: &TranslationLanguageData, key: Key<T>) -> &str;
+            fn translate_group(&self, language: &TranslationLanguageData, group: KeyGroup<T>) -> &str;
+        }
+        paste::paste! {
+            #[derive(Default)]
+            pub struct KeyTranslationCache{
+                $(
+                    $id: OnceMap<Key<$type>, String>,
+                    [<$id _group>]: OnceMap<KeyGroup<$type>, String>,
+                )*
+            }
+            $(
+                impl KeyTranslationProvider<$type> for KeyTranslationCache{
+                    fn translate_key(&self, language: &TranslationLanguageData, key: Key<$type>) -> &str{
+                        &self.$id.insert(key, |_| {
+                            language.translate(&format!("{}.{}", stringify!($id), key.text_id()))
+                                .to_string()
+                        })
+                    }
+                    fn translate_group(&self, language: &TranslationLanguageData, group: KeyGroup<$type>) -> &str{
+                        &self.[<$id _group>].insert(group, |_| {
+                            language.translate(&format!("{}.{}", stringify!($id), group.text_id()))
+                                .to_string()
+                        })
+                    }
+                }
+            )*
         }
     }
 }
@@ -380,7 +410,8 @@ where
         match self {
             KeyGroup::Single(v) => v == key,
             KeyGroup::Group(group) => {
-                let (_, group) = &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[group];
+                let (_, group, _) =
+                    &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[group];
                 group.contains(&key)
             }
             KeyGroup::Empty => false,
@@ -390,10 +421,21 @@ where
         match self {
             KeyGroup::Single(key) => std::slice::from_ref(key),
             KeyGroup::Group(group) => {
-                let (group, _) = &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[*group];
+                let (group, _, _) =
+                    &LOAD_REGISTRIES.get().unwrap().get_load_registry().groups[*group];
                 &group[..]
             }
             KeyGroup::Empty => &[],
+        }
+    }
+    pub fn text_id(&self) -> &str {
+        match self {
+            KeyGroup::Single(key) => key.text_id(),
+            KeyGroup::Group(group) => LOAD_REGISTRIES.get().unwrap().get_load_registry().groups
+                [*group]
+                .2
+                .as_str(),
+            KeyGroup::Empty => "",
         }
     }
 }
@@ -1565,7 +1607,7 @@ impl<'de> Deserialize<'de> for ModelInstance {
 
 pub struct TranslationLanguageData {
     pub translations: HashMap<String, String>,
-    pub item_translations: OnceMap<ItemKey, String>,
+    pub cache: KeyTranslationCache,
 }
 impl TranslationLanguageData {
     pub fn translate<'a>(&'a self, key: &'a str) -> &'a str {
@@ -1574,18 +1616,24 @@ impl TranslationLanguageData {
             .map(|s| s.as_str())
             .unwrap_or(key)
     }
-    pub fn translate_item(&self, item: ItemKey) -> &str {
-        &self.item_translations.insert(item, |_| {
-            self.translate(&format!("item.{}", item.text_id()))
-                .to_string()
-        })
+    pub fn translate_key<T>(&self, key: Key<T>) -> &str
+    where
+        KeyTranslationCache: KeyTranslationProvider<T>,
+    {
+        self.cache.translate_key(self, key)
+    }
+    pub fn translate_group<T>(&self, group: KeyGroup<T>) -> &str
+    where
+        KeyTranslationCache: KeyTranslationProvider<T>,
+    {
+        self.cache.translate_group(self, group)
     }
 }
 impl RegistryConfigLoadable for TranslationLanguageData {
     fn registry_load_from_config(config: &Vec<PathBuf>, _key: Key<Self>) -> anyhow::Result<Self> {
         let mut translation = TranslationLanguageData {
             translations: HashMap::new(),
-            item_translations: OnceMap::new(),
+            cache: Default::default(),
         };
         for source in config {
             for line in std::fs::read_to_string(source).unwrap().lines() {

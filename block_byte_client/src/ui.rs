@@ -4,7 +4,7 @@ use block_byte_common::{
     ClientItem, Color, EntityResearchProgress, ItemMoveMode, TexCoords,
     coord::{Pos, Vec3},
     net::NetworkMessageC2S,
-    registry::{ItemKey, ItemModel, KeyGroup, TextureKey},
+    registry::{ItemKey, ItemModel, TextureKey},
     ui::{
         CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, UIElement, UIElementType,
         UIScreenKey, UIStyleRule,
@@ -347,7 +347,7 @@ fn render_element(
                             let mut shift = overlay_context
                                 .draw_text(
                                     input.cursor_position,
-                                    language().translate_item(item.item),
+                                    language().translate_key(item.item),
                                     40.,
                                     Color::WHITE,
                                 )
@@ -486,7 +486,7 @@ fn render_element(
                 CraftAreaRecipes::CheatMenu => {
                     let mut i = 0;
                     for item in ItemKey::entries() {
-                        let item_name = language().translate_item(item);
+                        let item_name = language().translate_key(item);
                         if !filter_passes(item_name) {
                             continue;
                         }
@@ -574,7 +574,7 @@ fn render_element(
                                     text += format!(
                                         "\n-{}x{}",
                                         *input_count,
-                                        language().translate_item(*input_item)
+                                        language().translate_key(*input_item)
                                     )
                                     .as_str();
                                 }
@@ -582,7 +582,7 @@ fn render_element(
                                     //todo: somehow do modifiers
                                     text += format!(
                                         "\n+{}",
-                                        language().translate_item(loot_entry.entries[0].item)
+                                        language().translate_key(loot_entry.entries[0].item)
                                     )
                                     .as_str();
                                 }
@@ -700,21 +700,13 @@ fn render_element(
                             )
                             .unwrap();
                             for (item, progress) in &bar.items {
-                                match item {
-                                    KeyGroup::Single(item) => {
-                                        writeln!(
-                                            &mut text,
-                                            "  {}: {}",
-                                            language().translate_item(*item),
-                                            progress
-                                        )
-                                        .unwrap();
-                                    }
-                                    KeyGroup::Group(_) => {
-                                        writeln!(&mut text, "  [itemgroup]: {}", progress).unwrap();
-                                    }
-                                    KeyGroup::Empty => {}
-                                }
+                                writeln!(
+                                    &mut text,
+                                    "  {}: {}",
+                                    language().translate_group(*item),
+                                    progress
+                                )
+                                .unwrap();
                             }
                         }
                         overlay_context.draw_multiline_text(
