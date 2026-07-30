@@ -749,7 +749,6 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                 .machine
                                 .set(place_chunk_offset, WorldAccessCell::new(machine));
                         }
-                        return;
                     }
                 }
             },

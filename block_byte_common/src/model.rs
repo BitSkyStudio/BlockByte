@@ -1,4 +1,4 @@
-use cgmath::{Deg, Euler, InnerSpace, Matrix4, SquareMatrix, Vector3, VectorSpace, Zero};
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, SquareMatrix, Vector3, VectorSpace, Zero};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -180,23 +180,16 @@ impl Bone {
         let mut transform = Matrix4::identity();
         for animation in animations {
             let animator = &self.animators[animation.animation];
-            if let Some(value) = animator.sample(AnimatorChannel::Translation, animation.time) {
+            if let Some(value) = BoneAnimation::sample(&animator.position, animation.time) {
                 transform = transform
                     * Matrix4::from_translation(value / BLOCKBENCH_SIZE * animation.weight);
             }
-            if let Some(value) = animator.sample(AnimatorChannel::Rotation, animation.time) {
+            if let Some(value) = BoneAnimation::sample(&animator.rotation, animation.time) {
                 let o = Matrix4::from_translation(self.origin);
                 let io = Matrix4::from_translation(-self.origin);
-                transform = transform
-                    * o
-                    * Matrix4::from(Euler {
-                        x: Deg(value.x * animation.weight),
-                        y: Deg(value.y * animation.weight),
-                        z: Deg(value.z * animation.weight),
-                    })
-                    * io;
+                transform = transform * o * Matrix4::from(value) * io;
             }
-            if let Some(value) = animator.sample(AnimatorChannel::Scale, animation.time) {
+            if let Some(value) = BoneAnimation::sample(&animator.scale, animation.time) {
                 transform = transform
                     * Matrix4::from_nonuniform_scale(
                         1. + (value.x - 1.) * animation.weight,
@@ -333,17 +326,17 @@ pub enum Element {
         from: Pos,
         to: Pos,
         origin: Pos,
-        rotation: Euler<Deg<f32>>,
+        rotation: Quaternion<f32>,
         uvs: FaceMap<(TexCoords, u8, usize)>,
     },
     Locator {
         name: String,
         position: Pos,
-        rotation: Euler<Deg<f32>>,
+        rotation: Quaternion<f32>,
     },
     Mesh {
         origin: Pos,
-        rotation: Euler<Deg<f32>>,
+        rotation: Quaternion<f32>,
         faces: Vec<MeshFace>,
     },
 }
@@ -508,29 +501,39 @@ impl Model {
                     if let Some(uuid) = uuid {
                         if let Some(animator) = animation.animators.get(uuid) {
                             for bb_keyframe in &animator.keyframes {
-                                let keyframe = Keyframe {
-                                    data: bb_keyframe.data_points[0].to_vec(),
-                                    time: bb_keyframe.time,
-                                };
                                 match bb_keyframe.channel {
                                     AnimatorChannel::Translation => {
+                                        let keyframe = Keyframe {
+                                            data: bb_keyframe.data_points[0].to_vec(),
+                                            time: bb_keyframe.time,
+                                        };
                                         bone_animation.position.push(keyframe)
                                     }
                                     AnimatorChannel::Rotation => {
+                                        let r = bb_keyframe.data_points[0].to_vec();
+                                        let keyframe = Keyframe {
+                                            data: make_rotation(r.x, r.y, r.z),
+                                            time: bb_keyframe.time,
+                                        };
                                         bone_animation.rotation.push(keyframe)
                                     }
-                                    AnimatorChannel::Scale => bone_animation.scale.push(keyframe),
+                                    AnimatorChannel::Scale => {
+                                        let keyframe = Keyframe {
+                                            data: bb_keyframe.data_points[0].to_vec(),
+                                            time: bb_keyframe.time,
+                                        };
+                                        bone_animation.scale.push(keyframe)
+                                    }
                                 }
                             }
                         }
                     }
-                    for channel in [
-                        &mut bone_animation.position,
-                        &mut bone_animation.rotation,
-                        &mut bone_animation.scale,
-                    ] {
+                    fn sort_channel<T>(channel: &mut Vec<Keyframe<T>>) {
                         channel.sort_by(|a, b| a.time.total_cmp(&b.time));
                     }
+                    sort_channel(&mut bone_animation.position);
+                    sort_channel(&mut bone_animation.rotation);
+                    sort_channel(&mut bone_animation.scale);
                     bone_animation
                 })
                 .collect(),
@@ -571,11 +574,7 @@ impl Model {
                                 from: Pos::from_array(*from) / BLOCKBENCH_SIZE,
                                 to: Pos::from_array(*to) / BLOCKBENCH_SIZE,
                                 origin: Pos::from_array(*origin) / BLOCKBENCH_SIZE,
-                                rotation: Euler {
-                                    x: Deg(rotation[0]),
-                                    y: Deg(rotation[1]),
-                                    z: Deg(rotation[2]),
-                                },
+                                rotation: make_rotation(rotation[0], rotation[1], rotation[2]),
                                 uvs: FaceMap::init(|face| {
                                     let face = match face {
                                         Face::Back => "south",
@@ -609,11 +608,7 @@ impl Model {
                         } => {
                             bone.elements.push(Element::Locator {
                                 position: Pos::from_array(*position) / BLOCKBENCH_SIZE,
-                                rotation: Euler {
-                                    x: Deg(rotation[0]),
-                                    y: Deg(rotation[1]),
-                                    z: Deg(rotation[2]),
-                                },
+                                rotation: make_rotation(rotation[0], rotation[1], rotation[2]),
                                 name: name.clone(),
                             });
                         }
@@ -627,11 +622,7 @@ impl Model {
                         } => {
                             bone.elements.push(Element::Mesh {
                                 origin: Pos::from_array(*origin) / BLOCKBENCH_SIZE,
-                                rotation: Euler {
-                                    x: Deg(rotation[0]),
-                                    y: Deg(rotation[1]),
-                                    z: Deg(rotation[2]),
-                                },
+                                rotation: make_rotation(rotation[0], rotation[1], rotation[2]),
                                 faces: faces
                                     .values()
                                     .map(|face| {
@@ -678,23 +669,21 @@ impl<'de> Deserialize<'de> for Model {
     }
 }
 #[derive(Debug)]
-pub struct Keyframe {
+pub struct Keyframe<T> {
     time: f32,
-    data: Vector3<f32>,
+    data: T,
 }
 #[derive(Default)]
 pub struct BoneAnimation {
-    position: Vec<Keyframe>,
-    rotation: Vec<Keyframe>,
-    scale: Vec<Keyframe>,
+    position: Vec<Keyframe<Vector3<f32>>>,
+    rotation: Vec<Keyframe<Quaternion<f32>>>,
+    scale: Vec<Keyframe<Vector3<f32>>>,
 }
 impl BoneAnimation {
-    pub fn sample(&self, channel: AnimatorChannel, time: f32) -> Option<Vector3<f32>> {
-        let frames = match channel {
-            AnimatorChannel::Translation => &self.position,
-            AnimatorChannel::Rotation => &self.rotation,
-            AnimatorChannel::Scale => &self.scale,
-        };
+    pub fn sample<T: VectorSpace<Scalar = f32> + Copy>(
+        frames: &Vec<Keyframe<T>>,
+        time: f32,
+    ) -> Option<T> {
         if frames.is_empty() {
             return None;
         }
@@ -714,3 +703,10 @@ impl BoneAnimation {
 }
 
 pub const BLOCKBENCH_SIZE: f32 = 16.;
+
+pub fn make_rotation(x: f32, y: f32, z: f32) -> Quaternion<f32> {
+    use cgmath::Rotation3;
+    Quaternion::from_angle_z(Deg(z))
+        * Quaternion::from_angle_y(Deg(y))
+        * Quaternion::from_angle_x(Deg(x))
+}
