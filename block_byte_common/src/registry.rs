@@ -1684,6 +1684,10 @@ pub struct PrefabBlockEntry {
     pub color: BlockColor,
     #[serde(default, skip_serializing)]
     pub loot_table: Option<OwnOrKey<LootTableData>>,
+    #[serde(default, skip_serializing)]
+    pub placed: Option<InternString>,
+    #[serde(default, skip_serializing)]
+    pub place_check: Option<InternString>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct PrefabEntityEntry {
@@ -1691,6 +1695,8 @@ pub struct PrefabEntityEntry {
     pub y: f32,
     pub z: f32,
     pub entity: EntityKey,
+    #[serde(default = "default_prefab_entry_true_chance", skip_serializing)]
+    pub chance: f32,
 }
 #[derive(Serialize, Deserialize, Default)]
 pub struct PrefabData {
@@ -1724,30 +1730,43 @@ impl PrefabData {
         use rand::Rng;
         use rand::SeedableRng;
         let mut random = Xoshiro256PlusPlus::seed_from_u64(seed);
+        let mut placed_set = HashSet::new();
         for entry in &self.blocks {
-            if random.random_bool(entry.chance as f64) {
-                block_callback(
-                    position
-                        + rotation.rotate_block_pos(BlockPos {
-                            x: entry.x,
-                            y: entry.y,
-                            z: entry.z,
-                        }),
-                    BlockEntry {
-                        block: entry.block,
-                        color: entry.color,
-                        rotation: entry
-                            .block
-                            .data()
-                            .rotation
-                            .get_nearest_valid(rotation.compose(entry.rotation)),
-                    },
-                    entry,
-                    &mut random,
-                );
+            if let Some(place_check) = entry.place_check {
+                if !placed_set.contains(&place_check) {
+                    continue;
+                }
+            }
+            if !random.random_bool(entry.chance as f64) {
+                continue;
+            }
+            block_callback(
+                position
+                    + rotation.rotate_block_pos(BlockPos {
+                        x: entry.x,
+                        y: entry.y,
+                        z: entry.z,
+                    }),
+                BlockEntry {
+                    block: entry.block,
+                    color: entry.color,
+                    rotation: entry
+                        .block
+                        .data()
+                        .rotation
+                        .get_nearest_valid(rotation.compose(entry.rotation)),
+                },
+                entry,
+                &mut random,
+            );
+            if let Some(placed) = entry.placed {
+                placed_set.insert(placed);
             }
         }
         for entry in &self.entities {
+            if !random.random_bool(entry.chance as f64) {
+                continue;
+            }
             entity_callback(
                 position.to_pos()
                     + rotation.rotate_pos(Pos {
@@ -1781,8 +1800,8 @@ pub type ResearchKey = Key<ResearchData>;
 #[derive(Deserialize)]
 pub struct WorldGenStructureData {
     pub exclusion_zone: u16,
-    pub root_room: String,
-    pub rooms: HashMap<String, WorldGenStructureRoom>,
+    pub root_room: InternString,
+    pub rooms: HashMap<InternString, WorldGenStructureRoom>,
 }
 impl RegistryRonConfigLoadable for WorldGenStructureData {}
 pub type WorldGenStructureKey = Key<WorldGenStructureData>;
@@ -1794,7 +1813,7 @@ pub struct WorldGenStructureConnection {
 }
 #[derive(Deserialize)]
 pub struct WorldGenStructureRoomSelection {
-    pub room: String,
+    pub room: InternString,
     pub weight: f32,
     #[serde(default)]
     pub weight_depth_bias: f32,
@@ -1810,6 +1829,8 @@ pub struct WorldGenStructureRoom {
     pub connections: Vec<WorldGenStructureConnection>,
     #[serde(default)]
     pub road: Option<(BlockPos, u8)>,
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
 #[derive(Deserialize)]
 pub struct EffectData {

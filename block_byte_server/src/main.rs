@@ -354,6 +354,8 @@ fn main() {
                                                     rotation: block.rotation,
                                                     color: block.color,
                                                     loot_table: None,
+                                                    place_check: None,
+                                                    placed: None,
                                                 });
                                             }
                                         }

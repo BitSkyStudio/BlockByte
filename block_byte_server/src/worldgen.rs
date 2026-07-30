@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fmt::Debug,
     num::{NonZero, NonZeroU32},
     rc::Rc,
@@ -345,6 +345,7 @@ impl WorldGenerator {
                 let start_rotation = HorizontalFace::all()[rng.random_range(0..4)];
                 let mut queue = VecDeque::new();
                 let mut bounding_boxes = Vec::new();
+                let mut room_limits = HashMap::new();
                 struct QueueEntry<'a> {
                     depth: u32,
                     position: BlockPos,
@@ -401,9 +402,9 @@ impl WorldGenerator {
                         let connection_rotation =
                             BlockRotation::looking_to_horizontal(connection_facing);
                         for room in connection.rooms.get_random_weighted_list(BiasWeightProvider(entry.depth as f32), &mut rng) {
-                            let room = structure_data.rooms.get(&room.room).unwrap();
+                            let room_data = structure_data.rooms.get(&room.room).unwrap();
                             let room_bb = connection_rotation
-                                .rotate_block_aabb(room.prefab.data().bounding_box())
+                                .rotate_block_aabb(room_data.prefab.data().bounding_box())
                                 .offset(connection_position);
                             if bounding_boxes
                                 .iter()
@@ -411,11 +412,19 @@ impl WorldGenerator {
                             {
                                 continue;
                             }
+                            if let Some(limit) = room_data.limit{
+                                let existing: &mut u32 = room_limits.entry(room.room).or_default();
+                                if *existing >= limit{
+                                    continue;
+                                } else {
+                                    *existing += 1;
+                                }
+                            }
                             queue.push_front(QueueEntry {
                                 depth: entry.depth + 1,
                                 position: connection_position,
                                 rotation: connection_facing,
-                                room,
+                                room: room_data,
                             });
                             break;
                         }
@@ -740,6 +749,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                 .machine
                                 .set(place_chunk_offset, WorldAccessCell::new(machine));
                         }
+                        return;
                     }
                 }
             },
