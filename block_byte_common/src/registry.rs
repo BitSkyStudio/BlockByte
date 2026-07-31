@@ -1697,6 +1697,8 @@ pub struct PrefabEntityEntry {
     pub entity: EntityKey,
     #[serde(default = "default_prefab_entry_true_chance", skip_serializing)]
     pub chance: f32,
+    #[serde(default, skip_serializing)]
+    pub loot: Option<(OwnOrKey<LootTableData>, InventoryView)>,
 }
 #[derive(Serialize, Deserialize, Default)]
 pub struct PrefabData {
@@ -1724,7 +1726,7 @@ impl PrefabData {
         rotation: HorizontalFace,
         seed: u64,
         mut block_callback: impl FnMut(BlockPos, BlockEntry, &PrefabBlockEntry, &mut Xoshiro256PlusPlus),
-        mut entity_callback: impl FnMut(Pos, EntityKey, &mut Xoshiro256PlusPlus),
+        mut entity_callback: impl FnMut(Pos, &PrefabEntityEntry, &mut Xoshiro256PlusPlus),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
@@ -1774,7 +1776,7 @@ impl PrefabData {
                         y: entry.y,
                         z: entry.z,
                     }),
-                entry.entity,
+                entry,
                 &mut random,
             );
         }

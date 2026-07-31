@@ -752,11 +752,19 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     }
                 }
             },
-            |entity_position, entity, _rng| {
+            |entity_position, entry, rng| {
                 if entity_position.to_chunk_pos() != chunk_position {
                     return;
                 }
-                let entity = Entity::new(entity, entity_position);
+                let mut entity = Entity::new(entry.entity, entity_position);
+                if let Some(loot) = &entry.loot {
+                    for item in generate_loot_table(
+                        loot.0.data(),
+                        &mut LootGenerationContext::new(rng.next_u64()),
+                    ) {
+                        entity.inventory.add_item(&loot.1, item);
+                    }
+                }
                 chunk
                     .entities
                     .insert(entity.uuid, WorldAccessCell::new(entity));
