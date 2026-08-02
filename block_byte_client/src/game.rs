@@ -1670,9 +1670,14 @@ impl ClientGame {
                         let block_position = position + face.get_block_offset();
                         let block_data = place_block.block.data();
                         let mut blocked = place_block.use_count > held_item.count;
-                        let rotation = block_data
-                            .rotation
-                            .from_look_direction(self.camera.direction, face);
+                        let rotation = block_data.rotation.from_look_direction(
+                            if self.camera.crouching {
+                                self.camera.direction.invert()
+                            } else {
+                                self.camera.direction
+                            },
+                            face,
+                        );
                         let fake_block_entry = BlockEntry {
                             block: place_block.block,
                             rotation,

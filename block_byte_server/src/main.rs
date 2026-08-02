@@ -12,8 +12,8 @@ use std::{
 };
 
 use block_byte_common::{
-    ClientItem, EntityAction, EntityResearchProgress, InternString, InventoryView, LookDirection,
-    SERVER_DT, SERVER_TPS, ViewSlot,
+    ClientItem, EntityAction, EntityPose, EntityResearchProgress, InternString, InventoryView,
+    LookDirection, SERVER_DT, SERVER_TPS, ViewSlot,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
@@ -772,15 +772,20 @@ impl User {
                                         continue;
                                     }
                                 }
+                                let rotation = place.block.data().rotation.from_look_direction(
+                                    match entity.pose {
+                                        EntityPose::Crouch | EntityPose::CrouchWalk => {
+                                            entity.direction.invert()
+                                        }
+                                        _ => entity.direction,
+                                    },
+                                    face,
+                                );
                                 let position = position + face.get_block_offset();
                                 let block = BlockEntry {
                                     block: place.block,
                                     color: BlockColor::default(),
-                                    rotation: place
-                                        .block
-                                        .data()
-                                        .rotation
-                                        .from_look_direction(entity.direction, face),
+                                    rotation,
                                 };
                                 let entity_collider =
                                     entity_data.hitbox(entity.pose).offset(entity.position);

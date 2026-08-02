@@ -180,6 +180,12 @@ impl LookDirection {
             z: self.yaw.sin(),
         }
     }
+    pub fn invert(self) -> LookDirection {
+        LookDirection {
+            pitch: -self.pitch,
+            yaw: self.yaw + std::f32::consts::PI,
+        }
+    }
 }
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum ItemMoveMode {
