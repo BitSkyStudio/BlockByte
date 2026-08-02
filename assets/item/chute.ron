@@ -1,0 +1,5 @@
+(
+    action: Place([(block:"chute"),(block:"chute_side")]),
+    model: Block("chute"),
+    stack_size: 20,
+)

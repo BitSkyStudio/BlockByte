@@ -1048,9 +1048,39 @@ impl User {
                     let Some((from_provider, from_index, from_slot)) = screen.get_slot(from) else {
                         continue;
                     };
+                    match from_provider {
+                        InventoryProvider::Entity(_) => {}
+                        InventoryProvider::Block(position) => {
+                            let (chunk, offset) = position.to_chunk_pos_offset();
+                            world
+                                .schedule_event(
+                                    chunk,
+                                    WorldEvent::BlockWakeup {
+                                        block: offset,
+                                        inventory_updated: true,
+                                    },
+                                )
+                                .unwrap();
+                        }
+                    }
                     let Some((to_provider, to_index, to_slot)) = screen.get_slot(to) else {
                         continue;
                     };
+                    match to_provider {
+                        InventoryProvider::Entity(_) => {}
+                        InventoryProvider::Block(position) => {
+                            let (chunk, offset) = position.to_chunk_pos_offset();
+                            world
+                                .schedule_event(
+                                    chunk,
+                                    WorldEvent::BlockWakeup {
+                                        block: offset,
+                                        inventory_updated: true,
+                                    },
+                                )
+                                .unwrap();
+                        }
+                    }
                     let move_item = |src: &mut Option<ItemStack>,
                                      dst: &mut Option<ItemStack>,
                                      src_viewslot: &ViewSlot,

@@ -866,8 +866,8 @@ pub enum MachineInstrution {
         face: Face,
         value: RegisterOrImmediate,
     },
-    GetSlotItemCount {
-        slot: RegisterOrImmediate,
+    GetItemCount {
+        view: usize,
         register: RegisterId,
     },
     MoveItem {
@@ -911,7 +911,7 @@ impl ExternalScriptByteCode for MachineInstrution {
         Ok(match opcode {
             "yield" => MachineInstrution::Yield,
             "sleep" => {
-                expect_argument_count(parse_context, arguments, 2)?;
+                expect_argument_count(parse_context, arguments, 1)?;
                 MachineInstrution::Sleep {
                     time: arguments[0].parse().unwrap(),
                 }
@@ -947,8 +947,17 @@ impl ExternalScriptByteCode for MachineInstrution {
                     value: parse_context.parse_value(arguments[1]),
                 }
             }
+            "add_observer" => {
+                expect_argument_count(parse_context, arguments, 3)?;
+                let x = arguments[0].parse().unwrap();
+                let y = arguments[1].parse().unwrap();
+                let z = arguments[2].parse().unwrap();
+                MachineInstrution::AddWakeupObserver {
+                    other: BlockPos { x, y, z },
+                }
+            }
             "transfer_pull" | "transfer_push" => {
-                expect_argument_count(parse_context, arguments, 5)?;
+                expect_argument_count(parse_context, arguments, 6)?;
                 let x = arguments[1].parse().unwrap();
                 let y = arguments[2].parse().unwrap();
                 let z = arguments[3].parse().unwrap();
@@ -964,10 +973,10 @@ impl ExternalScriptByteCode for MachineInstrution {
                     success: parse_context.parse_label(arguments[5]).unwrap(),
                 }
             }
-            "get_slot_item_count" => {
+            "get_item_count" => {
                 expect_argument_count(parse_context, arguments, 2)?;
-                MachineInstrution::GetSlotItemCount {
-                    slot: parse_context.parse_value(arguments[1]),
+                MachineInstrution::GetItemCount {
+                    view: arguments[1].parse().unwrap(),
                     register: parse_context.parse_register(arguments[0]),
                 }
             }

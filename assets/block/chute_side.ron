@@ -1,0 +1,43 @@
+(
+    render_data: Model(model:"chute_side;wood.oak.bark"),
+    health: (health: 5., health_regen: 0.05, table: ()),
+    loot_table: Own((
+        pools: [
+            (
+                entries: [
+                    (
+                        item: "chute",
+                    ),
+                ],
+                rolls: Constant(1),
+            )
+        ]
+    )),
+    rotation: Horizontal,
+    interact_action: OpenInventory(screen:"chute", view:[(slot:0, stack_size_override:1)]),
+    machine: Some((
+        inventory_size: 1,
+        script: "
+        start:
+        get_item_count count 0
+        jne begin_transfer count 0
+        block
+        jmp start
+        begin_transfer:
+        sleep 1
+        transfer:
+        transfer_push 0 0 0 -1 back start
+        add_observer 0 0 -1
+        block
+        jmp transfer
+        ",
+        script_views: [
+            [(slot:0)]
+        ],
+        faces: (
+            up: InventoryAccess(
+                input: [(slot:0, stack_size_override:1)]
+            ),
+        )
+    )),
+)

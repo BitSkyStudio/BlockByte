@@ -1374,12 +1374,15 @@ impl BlockMachine {
                         .unwrap();
                     CallbackResult::Continue
                 }
-                MachineInstrution::GetSlotItemCount { slot, register } => {
-                    state.registers[*register] = self
-                        .inventory
-                        .get_slot_raw(state.resolve_value(slot) as usize)
-                        .map(|item| item.count)
-                        .unwrap_or(0);
+                MachineInstrution::GetItemCount { view, register } => {
+                    let view = &machine_data.script_views[*view];
+                    let mut count = 0;
+                    for slot in &view.slots {
+                        if let Some(item) = self.inventory.get_slot_raw(slot.slot) {
+                            count += item.count;
+                        }
+                    }
+                    state.registers[*register] = count;
                     CallbackResult::Continue
                 }
                 MachineInstrution::MoveItem {
