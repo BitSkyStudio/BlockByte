@@ -16,7 +16,7 @@
         inventory_size: 10,
         script: "
         here:
-        craft generate_dirt 0 0 1 here
+        craft generate_dirt 0 1 here
         ",
         script_views: [
             [(slot:0)]

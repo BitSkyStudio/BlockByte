@@ -17,18 +17,9 @@
     machine: Some((
         inventory_size: 1,
         script: "
-        start:
-        get_item_count count 0
-        jne begin_transfer count 0
-        block
-        jmp start
-        begin_transfer:
+        wait_for_items 0
         sleep 1
-        transfer:
-        transfer_push 0 0 -1 0 up start
-        add_observer 0 -1 0
-        block
-        jmp transfer
+        transfer_push_block 0 down
         ",
         script_views: [
             [(slot:0)]

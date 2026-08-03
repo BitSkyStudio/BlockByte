@@ -840,10 +840,14 @@ pub enum MachineInstrution {
     Block,
     TranferItem {
         self_view: usize,
-        other: BlockPos,
-        other_face: Face,
+        face: Face,
         pull: bool,
         success: ScriptLabel,
+    },
+    TranferItemBlock {
+        self_view: usize,
+        face: Face,
+        pull: bool,
     },
     AddWakeupObserver {
         other: BlockPos,
@@ -852,6 +856,10 @@ pub enum MachineInstrution {
         face: Face,
         register: RegisterId,
         success: ScriptLabel,
+    },
+    ReadSignalBlock {
+        face: Face,
+        register: RegisterId,
     },
     ReadLogic {
         face: Face,
@@ -877,13 +885,15 @@ pub enum MachineInstrution {
     },
     Craft {
         recipes: KeyGroup<RecipeData>,
-        input_view: usize,
-        output_view: usize,
+        view: usize,
         speed: f32,
         success: ScriptLabel,
     },
     PlayAnimation {
         animation: String,
+    },
+    WaitForItems {
+        view: usize,
     },
 }
 impl ExternalScriptByteCode for MachineInstrution {
@@ -933,6 +943,13 @@ impl ExternalScriptByteCode for MachineInstrution {
                     success: parse_context.parse_label(arguments[2])?,
                 }
             }
+            "read_signal_block" => {
+                expect_argument_count(parse_context, arguments, 2)?;
+                MachineInstrution::ReadSignalBlock {
+                    face: parse_face(arguments[0])?,
+                    register: arguments[1].parse().unwrap(),
+                }
+            }
             "write_logic" => {
                 expect_argument_count(parse_context, arguments, 2)?;
                 MachineInstrution::WriteLogic {
@@ -948,29 +965,35 @@ impl ExternalScriptByteCode for MachineInstrution {
                 }
             }
             "add_observer" => {
-                expect_argument_count(parse_context, arguments, 3)?;
-                let x = arguments[0].parse().unwrap();
-                let y = arguments[1].parse().unwrap();
-                let z = arguments[2].parse().unwrap();
+                expect_argument_count(parse_context, arguments, 1)?;
+                let face = parse_face(arguments[0])?;
                 MachineInstrution::AddWakeupObserver {
-                    other: BlockPos { x, y, z },
+                    other: face.get_block_offset(),
                 }
             }
             "transfer_pull" | "transfer_push" => {
-                expect_argument_count(parse_context, arguments, 6)?;
-                let x = arguments[1].parse().unwrap();
-                let y = arguments[2].parse().unwrap();
-                let z = arguments[3].parse().unwrap();
+                expect_argument_count(parse_context, arguments, 3)?;
                 MachineInstrution::TranferItem {
                     self_view: arguments[0].parse().unwrap(),
-                    other: BlockPos { x, y, z },
-                    other_face: parse_face(arguments[4])?,
+                    face: parse_face(arguments[1])?,
                     pull: match opcode {
                         "transfer_pull" => true,
                         "transfer_push" => false,
                         _ => unreachable!(),
                     },
-                    success: parse_context.parse_label(arguments[5]).unwrap(),
+                    success: parse_context.parse_label(arguments[2]).unwrap(),
+                }
+            }
+            "transfer_pull_block" | "transfer_push_block" => {
+                expect_argument_count(parse_context, arguments, 2)?;
+                MachineInstrution::TranferItemBlock {
+                    self_view: arguments[0].parse().unwrap(),
+                    face: parse_face(arguments[1])?,
+                    pull: match opcode {
+                        "transfer_pull_block" => true,
+                        "transfer_push_block" => false,
+                        _ => unreachable!(),
+                    },
                 }
             }
             "get_item_count" => {
@@ -978,6 +1001,12 @@ impl ExternalScriptByteCode for MachineInstrution {
                 MachineInstrution::GetItemCount {
                     view: arguments[1].parse().unwrap(),
                     register: parse_context.parse_register(arguments[0]),
+                }
+            }
+            "wait_for_items" => {
+                expect_argument_count(parse_context, arguments, 1)?;
+                MachineInstrution::WaitForItems {
+                    view: arguments[0].parse().unwrap(),
                 }
             }
             "move_item" => {
@@ -989,13 +1018,12 @@ impl ExternalScriptByteCode for MachineInstrution {
                 }
             }
             "craft" => {
-                expect_argument_count(parse_context, arguments, 5)?;
+                expect_argument_count(parse_context, arguments, 4)?;
                 MachineInstrution::Craft {
                     recipes: KeyGroup::parse(arguments[0]).unwrap(),
-                    input_view: arguments[1].parse().unwrap(),
-                    output_view: arguments[2].parse().unwrap(),
-                    speed: arguments[3].parse().unwrap(),
-                    success: parse_context.parse_label(arguments[4]).unwrap(),
+                    view: arguments[1].parse().unwrap(),
+                    speed: arguments[2].parse().unwrap(),
+                    success: parse_context.parse_label(arguments[3]).unwrap(),
                 }
             }
             "play_animation" => {

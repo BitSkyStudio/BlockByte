@@ -597,6 +597,11 @@ pub fn tick_chunk(world: &WorldAccess) {
                         _ => {}
                     }
                 }
+                BlockMachineFace::InventoryAccess { .. } => {
+                    let world_face = block_entry.rotation.rotate_face(face);
+                    let other_position = added_machine + world_face.get_block_offset();
+                    let _ = world.wakeup_component::<BlockMachine>(other_position);
+                }
                 _ => {}
             }
         }
@@ -1232,14 +1237,15 @@ impl BlockMachine {
                 }
                 MachineInstrution::TranferItem {
                     self_view: view,
-                    other: push_offset,
-                    other_face,
+                    face,
                     pull,
                     success,
                 } => {
+                    let push_offset = face.get_block_offset();
+                    let other_face = face.opposite();
                     let view = &machine_data.script_views[*view];
                     let target_position =
-                        block_position + block.rotation.rotate_block_pos(*push_offset);
+                        block_position + block.rotation.rotate_block_pos(push_offset);
                     let Some(target_block) = world.get_block(target_position) else {
                         return CallbackResult::Continue;
                     };
@@ -1250,7 +1256,7 @@ impl BlockMachine {
                             .unwrap();
                         let face_rotated = target_block
                             .rotation
-                            .inverse_rotate_face(block.rotation.rotate_face(*other_face));
+                            .inverse_rotate_face(block.rotation.rotate_face(other_face));
                         let face_data = target_machine_data.faces.by_face(face_rotated);
                         match face_data {
                             BlockMachineFace::InventoryAccess { input, output } => {
@@ -1260,7 +1266,6 @@ impl BlockMachine {
                                 if *pull {
                                     std::mem::swap(&mut first_inventory, &mut second_inventory);
                                 }
-                                let _exit = false;
                                 for slot in &view.slots {
                                     if let Some(item) = first_inventory.get_slot_mut_raw(slot.slot)
                                     {
@@ -1294,6 +1299,70 @@ impl BlockMachine {
                     }
                     CallbackResult::Continue
                 }
+                MachineInstrution::TranferItemBlock {
+                    self_view: view,
+                    face,
+                    pull,
+                } => {
+                    let push_offset = face.get_block_offset();
+                    let other_face = face.opposite();
+                    let view = &machine_data.script_views[*view];
+                    let target_position =
+                        block_position + block.rotation.rotate_block_pos(push_offset);
+                    if let Some(target_block) = world.get_block(target_position) {
+                        let target_block_data = target_block.block.data();
+                        if let Some(target_machine_data) = &target_block_data.machine {
+                            let mut target_machine = world
+                                .get_block_component::<BlockMachine>(target_position)
+                                .unwrap();
+                            let face_rotated = target_block
+                                .rotation
+                                .inverse_rotate_face(block.rotation.rotate_face(other_face));
+                            let face_data = target_machine_data.faces.by_face(face_rotated);
+                            match face_data {
+                                BlockMachineFace::InventoryAccess { input, output } => {
+                                    let other_view = if *pull { output } else { input };
+                                    let mut first_inventory = &mut self.inventory;
+                                    let mut second_inventory = &mut target_machine.inventory;
+                                    if *pull {
+                                        std::mem::swap(&mut first_inventory, &mut second_inventory);
+                                    }
+                                    for slot in &view.slots {
+                                        if let Some(item) =
+                                            first_inventory.get_slot_mut_raw(slot.slot)
+                                        {
+                                            if second_inventory
+                                                .add_item(other_view, item.copy(1))
+                                                .is_none()
+                                            {
+                                                let (target_chunk, target_offset) =
+                                                    target_position.to_chunk_pos_offset();
+                                                world
+                                                    .schedule_event(
+                                                        target_chunk,
+                                                        WorldEvent::BlockWakeup {
+                                                            block: target_offset,
+                                                            inventory_updated: true,
+                                                        },
+                                                    )
+                                                    .unwrap();
+                                                item.count -= 1;
+                                                if item.count == 0 {
+                                                    first_inventory.set_slot_raw(slot.slot, None);
+                                                }
+                                                return CallbackResult::Continue;
+                                            }
+                                        }
+                                    }
+                                    target_machine.inventory_observers.push(block_position);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    result = MachineRunResult::Block;
+                    CallbackResult::Wait
+                }
                 MachineInstrution::ReadSignal {
                     face,
                     register,
@@ -1307,6 +1376,18 @@ impl BlockMachine {
                         None => {}
                     }
                     CallbackResult::Continue
+                }
+                MachineInstrution::ReadSignalBlock { face, register } => {
+                    match self.logic_state.by_face_mut(*face).take() {
+                        Some(value) => {
+                            state.registers[*register] = value;
+                            CallbackResult::Continue
+                        }
+                        None => {
+                            result = MachineRunResult::Block;
+                            CallbackResult::Wait
+                        }
+                    }
                 }
                 MachineInstrution::AddWakeupObserver { other } => {
                     let target_position = block_position + block.rotation.rotate_block_pos(*other);
@@ -1385,6 +1466,16 @@ impl BlockMachine {
                     state.registers[*register] = count;
                     CallbackResult::Continue
                 }
+                MachineInstrution::WaitForItems { view } => {
+                    let view = &machine_data.script_views[*view];
+                    for slot in &view.slots {
+                        if let Some(_) = self.inventory.get_slot_raw(slot.slot) {
+                            return CallbackResult::Continue;
+                        }
+                    }
+                    result = MachineRunResult::Block;
+                    CallbackResult::Wait
+                }
                 MachineInstrution::MoveItem {
                     from_view,
                     to_view,
@@ -1415,18 +1506,16 @@ impl BlockMachine {
                 }
                 MachineInstrution::Craft {
                     recipes,
-                    input_view,
-                    output_view,
+                    view,
                     speed,
                     success,
                 } => {
-                    let input_view = &machine_data.script_views[*input_view];
-                    let output_view = &machine_data.script_views[*output_view];
+                    let view = &machine_data.script_views[*view];
                     for recipe in recipes.list() {
                         let recipe = recipe.data();
                         let mut failed = false;
                         for (input, count) in &recipe.inputs {
-                            if self.inventory.count_removeable_items(input_view, *input) < *count {
+                            if self.inventory.count_removeable_items(view, *input) < *count {
                                 failed = true;
                                 break;
                             }
@@ -1435,13 +1524,13 @@ impl BlockMachine {
                             continue;
                         }
                         for (input, count) in &recipe.inputs {
-                            self.inventory.remove_item(input_view, *input, *count);
+                            self.inventory.remove_item(view, *input, *count);
                         }
                         for output in generate_loot_table(
                             recipe.outputs.data(),
                             &mut LootGenerationContext::new(rand::random()),
                         ) {
-                            self.inventory.add_item(output_view, output);
+                            self.inventory.add_item(view, output);
                         }
                         result = MachineRunResult::Sleep(time_to_ticks(recipe.craft_time * speed));
                         state.pc = *success;
