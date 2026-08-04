@@ -281,15 +281,15 @@ pub fn tick_chunk(world: &WorldAccess) {
                     entity.current_passives.insert(*passive);
                 }
             };
-            for equipment in entity.key.data().equipment_slots.clone() {
-                if let Some(item) = &entity.inventory.get_slot_raw(equipment) {
+            for equipment in &entity.key.data().equipment_view.slots {
+                if let Some(item) = &entity.inventory.get_slot_raw(equipment.slot) {
                     apply_item(item);
                 }
             }
             if let Some(item) = &entity.inventory.get_slot_raw(entity.hand_slot) {
                 apply_item(item);
             }
-            if entity.current_stats != stats {
+            if *entity.current_stats != stats {
                 if let Some(controlling_user) = entity.controlling_user {
                     world.send(
                         controlling_user,
@@ -298,7 +298,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                         },
                     );
                 }
-                entity.current_stats = stats;
+                *entity.current_stats = stats;
             }
         }
         if let Some(controlling_user) = entity.controlling_user {
@@ -313,21 +313,15 @@ pub fn tick_chunk(world: &WorldAccess) {
                     continue;
                 };
                 {
-                    let hotbar_size = 10;
-                    let inventory: Vec<_> = entity
-                        .inventory
-                        .iter()
-                        .take(hotbar_size)
-                        .map(|item| item.as_ref().map(|item| item.client()))
-                        .collect();
-                    let mut last_update = user.hud_sync_items.lock();
-                    last_update.resize(hotbar_size, None);
-                    for (i, item) in inventory.into_iter().enumerate() {
+                    let mut last_update = user.player_sync_items.lock();
+                    last_update.resize(entity.inventory.size(), None);
+                    for (i, item) in entity.inventory.iter().enumerate() {
+                        let item = item.as_ref().cloned().map(ItemStack::client);
                         if item != last_update[i] {
                             last_update[i] = item.clone();
                             world.send(
                                 controlling_user,
-                                NetworkMessageS2C::HUDSlot { slot: i, item },
+                                NetworkMessageS2C::PlayerSetSlot { slot: i, item },
                             );
                         }
                     }
@@ -343,33 +337,38 @@ pub fn tick_chunk(world: &WorldAccess) {
                         let mut should_close = false;
                         let mut properties = PropertyMap(HashMap::new());
                         let screen_data = screen.screen.data();
-                        for (inventory, view) in &screen.inventories {
-                            let mut load_inventory = |inventory: &Inventory| {
-                                items.extend(view.slots.iter().map(|i| {
+                        let mut load_inventory =
+                            |inventory: &Inventory| {
+                                items.extend(screen.view.slots.iter().map(|i| {
                                     inventory.get_slot_raw(i.slot).map(|item| item.client())
                                 }));
                             };
-                            match inventory {
-                                InventoryProvider::Entity(uuid) => {
-                                    if *uuid == entity.uuid {
-                                        load_inventory(&entity.inventory);
-                                    } else {
-                                        let Some(entity) = world.get_entity(*uuid) else {
-                                            should_close = true;
-                                            break;
-                                        };
-                                        load_inventory(&entity.inventory);
-                                    }
-                                }
-                                InventoryProvider::Block(position) => {
-                                    let Some(machine) =
-                                        world.get_block_component::<BlockMachine>(*position)
-                                    else {
+                        let access_distance = 10.;
+                        match screen.provider {
+                            InventoryProvider::Entity(uuid) => {
+                                if let Some(other_entity) = world.get_entity(uuid) {
+                                    if other_entity.position.distance(entity.position)
+                                        > access_distance
+                                    {
                                         should_close = true;
-                                        break;
-                                    };
+                                    }
+                                    load_inventory(&other_entity.inventory);
+                                } else {
+                                    should_close = true;
+                                }
+                            }
+                            InventoryProvider::Block(position) => {
+                                if let Some(machine) =
+                                    world.get_block_component::<BlockMachine>(position)
+                                {
+                                    if (position.to_pos() + Pos::all(0.5)).distance(entity.position)
+                                        > access_distance
+                                    {
+                                        should_close = true;
+                                    }
+                                    load_inventory(&machine.inventory);
                                     let machine_data = world
-                                        .get_block(*position)
+                                        .get_block(position)
                                         .unwrap()
                                         .block
                                         .data()
@@ -389,9 +388,11 @@ pub fn tick_chunk(world: &WorldAccess) {
                                             );
                                         }
                                     }
-                                    load_inventory(&machine.inventory);
-                                }
+                                } else {
+                                    should_close = true;
+                                };
                             }
+                            InventoryProvider::None => {}
                         }
                         if !should_close {
                             match screen.state {
@@ -404,7 +405,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                             properties,
                                         },
                                     );
-                                    screen.previous_state = items;
+                                    screen.previous_items = items;
                                     screen.state = UserScreenState::Normal;
                                 }
                                 UserScreenState::Normal => {
@@ -426,7 +427,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                         }
                                     }
                                     for (slot, (previous, new)) in
-                                        screen.previous_state.iter().zip(items.iter()).enumerate()
+                                        screen.previous_items.iter().zip(items.iter()).enumerate()
                                     {
                                         if previous != new {
                                             world.send(
@@ -438,7 +439,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                             );
                                         }
                                     }
-                                    screen.previous_state = items;
+                                    screen.previous_items = items;
                                 }
                                 UserScreenState::Close => {
                                     should_close = true;
@@ -654,7 +655,7 @@ pub struct Entity {
     pub pose: EntityPose,
     pub effects: HashMap<EffectKey, ActiveEffect>,
     #[serde(skip_serializing, skip_deserializing)]
-    pub current_stats: EntityStats,
+    pub current_stats: Box<EntityStats>,
     #[serde(skip_serializing, skip_deserializing)]
     pub current_passives: HashSet<ItemComponentPassiveAbility>,
 }
@@ -791,7 +792,7 @@ impl Entity {
             direction: LookDirection { pitch: 0., yaw: 0. },
             pose: EntityPose::Stand,
             effects: HashMap::new(),
-            current_stats: EntityStats::default(),
+            current_stats: Box::new(EntityStats::default()),
             current_passives: HashSet::new(),
         }
     }
@@ -1377,17 +1378,18 @@ impl BlockMachine {
                     }
                     CallbackResult::Continue
                 }
-                MachineInstrution::ReadSignalBlock { face, register } => {
-                    match self.logic_state.by_face_mut(*face).take() {
-                        Some(value) => {
-                            state.registers[*register] = value;
-                            CallbackResult::Continue
-                        }
-                        None => {
-                            result = MachineRunResult::Block;
-                            CallbackResult::Wait
+                MachineInstrution::ReadSignalBlock { faces, register } => {
+                    for face in faces {
+                        match self.logic_state.by_face_mut(*face).take() {
+                            Some(value) => {
+                                state.registers[*register] = value;
+                                return CallbackResult::Continue;
+                            }
+                            None => {}
                         }
                     }
+                    result = MachineRunResult::Block;
+                    CallbackResult::Wait
                 }
                 MachineInstrution::AddWakeupObserver { other } => {
                     let target_position = block_position + block.rotation.rotate_block_pos(*other);
@@ -1820,11 +1822,11 @@ impl WorldAccess<'_> {
         let Some(index) = components.tree.get(offset) else {
             return Err(());
         };
-        components
-            .tick_list
-            .lock()
-            .unwrap()
-            .set_ticking(index as usize, true);
+        let mut tick_list = components.tick_list.lock().unwrap();
+        if tick_list.has_wakeup_scheduled(offset) {
+            return Ok(());
+        }
+        tick_list.set_ticking(index as usize, true);
         Ok(())
     }
     pub fn iter_block_components<'a, C: 'a>(

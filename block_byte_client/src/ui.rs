@@ -3,7 +3,7 @@ use std::{collections::HashMap, u32};
 use block_byte_common::{
     ClientItem, Color, EntityResearchProgress, ItemMoveMode, TexCoords,
     coord::{Pos, Vec3},
-    net::NetworkMessageC2S,
+    net::{NetworkMessageC2S, ScreenSlot},
     registry::{ItemKey, ItemModel, TextureKey},
     ui::{
         CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, UIElement, UIElementType,
@@ -28,8 +28,8 @@ pub struct ScreenData {
     pub screen: UIScreenKey,
     pub slots: Vec<Option<ClientItem>>,
     pub properties: PropertyMap,
-    pub selected_slot: Option<(usize, MouseButton)>,
-    pub slot_action_prediction: HashMap<usize, (MouseButton, f32)>,
+    pub selected_slot: Option<(ScreenSlot, MouseButton)>,
+    pub slot_action_prediction: HashMap<ScreenSlot, (MouseButton, f32)>,
     pub element_data: HashMap<Uuid, InstantiatedElementData>,
     pub time: f32,
 }
@@ -51,11 +51,15 @@ impl Default for InstantiatedElementData {
         }
     }
 }
+pub struct GameData<'a> {
+    pub research: &'a EntityResearchProgress,
+    pub player_inventory: &'a Vec<Option<ClientItem>>,
+}
 pub fn render_screen(
     screen_data: &mut ScreenData,
     input: Option<&InputManager>,
     size: PhysicalSize<u32>,
-    research: &EntityResearchProgress,
+    game_data: &GameData,
     mesh: &mut GUIMesh,
     dt: f32,
     mut event_consumer: impl FnMut(UIMessage),
@@ -108,7 +112,7 @@ pub fn render_screen(
         mesh,
         &mut overlay_mesh,
         input,
-        &research,
+        game_data,
         &mut event_consumer,
     );
     mesh.append_mesh(overlay_mesh);
@@ -155,7 +159,7 @@ fn render_element(
     mesh: &mut GUIMesh,
     overlay_mesh: &mut GUIMesh,
     input: Option<&InputManager>,
-    player_research: &EntityResearchProgress,
+    game_data: &GameData,
     event_consumer: &mut impl FnMut(UIMessage),
 ) {
     let layout = taffy.layout(node).unwrap();
@@ -266,7 +270,7 @@ fn render_element(
                     mesh,
                     overlay_mesh,
                     input,
-                    &player_research,
+                    &game_data,
                     event_consumer,
                 );
             }
@@ -339,7 +343,12 @@ fn render_element(
             }
             match slot {
                 SlotId::Id(slot) => {
-                    if let Some(item) = data.slots.get(*slot).cloned().flatten() {
+                    let slots = if slot.player {
+                        game_data.player_inventory
+                    } else {
+                        &data.slots
+                    };
+                    if let Some(item) = slots.get(slot.slot).cloned().flatten() {
                         if let Some(input) = input
                             && context.content.contains(input.cursor_position)
                             && data.selected_slot.is_none()
@@ -687,7 +696,7 @@ fn render_element(
                             writeln!(
                                 &mut text,
                                 "{}/{}",
-                                match player_research.progress.get(research_key) {
+                                match game_data.research.progress.get(research_key) {
                                     Some(progress) => {
                                         match progress.get(i) {
                                             Some(progress) => *progress,

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     InternString,
-    net::PropertyModifyMode,
+    net::{PropertyModifyMode, ScreenSlot},
     registry::{Key, KeyGroup, RecipeData, RegistryConfigLoadable, ResearchKey, TextureKey},
     scripts::ScriptValue,
 };
@@ -44,7 +44,7 @@ impl RegistryConfigLoadable for UIScreen {
 }
 #[derive(Clone, Copy)]
 pub enum SlotId {
-    Id(usize),
+    Id(ScreenSlot),
     Trash,
 }
 pub enum CraftAreaRecipes {
@@ -102,7 +102,19 @@ impl UIElementType {
                     let attribute = node.attribute("id").unwrap();
                     match attribute {
                         "trash" => SlotId::Trash,
-                        id => SlotId::Id(id.parse().unwrap()),
+                        id => {
+                            if id.starts_with("p") {
+                                SlotId::Id(ScreenSlot {
+                                    slot: id[1..].parse().unwrap(),
+                                    player: true,
+                                })
+                            } else {
+                                SlotId::Id(ScreenSlot {
+                                    slot: id.parse().unwrap(),
+                                    player: false,
+                                })
+                            }
+                        }
                     }
                 },
             },

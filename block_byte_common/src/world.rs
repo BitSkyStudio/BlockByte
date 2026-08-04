@@ -318,6 +318,9 @@ impl BlockTickList {
             }
         }
     }
+    pub fn has_wakeup_scheduled(&self, block: ChunkOffset) -> bool {
+        self.wakeup_timer.contains(&block)
+    }
     pub fn schedule_wakeup(&mut self, block: ChunkOffset, at: u64) {
         self.wakeup_timer.push(block, at);
     }

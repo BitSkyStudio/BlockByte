@@ -858,7 +858,7 @@ pub enum MachineInstrution {
         success: ScriptLabel,
     },
     ReadSignalBlock {
-        face: Face,
+        faces: Box<[Face]>,
         register: RegisterId,
     },
     ReadLogic {
@@ -945,8 +945,12 @@ impl ExternalScriptByteCode for MachineInstrution {
             }
             "read_signal_block" => {
                 expect_argument_count(parse_context, arguments, 2)?;
+
                 MachineInstrution::ReadSignalBlock {
-                    face: parse_face(arguments[0])?,
+                    faces: arguments[0]
+                        .split(",")
+                        .map(|face| parse_face(face).unwrap())
+                        .collect(),
                     register: arguments[1].parse().unwrap(),
                 }
             }
@@ -1382,7 +1386,7 @@ pub struct EntityData {
     #[cfg(feature = "server")]
     pub inventory_size: usize,
     #[serde(default)]
-    pub equipment_slots: std::ops::Range<usize>,
+    pub equipment_view: InventoryView,
     pub hitbox_size: f32,
     pub hitbox_height: f32,
     #[serde(default)]
@@ -1401,20 +1405,40 @@ pub struct EntityData {
     #[serde(default)]
     pub base_stats: EntityStats,
     pub loot_table: OwnOrKey<LootTableData>,
-    #[serde(skip_deserializing, skip_serializing, default)]
+    #[serde(skip_deserializing, default)]
     pickup_view_cache: Option<InventoryView>,
+    #[serde(skip_deserializing, default)]
+    screen_view_cache: Option<InventoryView>,
 }
 impl EntityData {
     pub fn pickup_view<'a>(&'a self) -> &'a InventoryView {
         self.pickup_view_cache.as_ref().unwrap()
     }
+    pub fn screen_view<'a>(&'a self) -> &'a InventoryView {
+        self.screen_view_cache.as_ref().unwrap()
+    }
 }
 impl RegistryRonConfigLoadable for EntityData {
     fn preload_hook(&mut self) {
         let mut view = InventoryView::from_range(0..self.inventory_size);
-        view.slots
-            .retain(|i| !self.equipment_slots.contains(&i.slot));
+        view.slots.retain(|i| {
+            !self
+                .equipment_view
+                .slots
+                .iter()
+                .any(|slot| slot.slot == i.slot)
+        });
         self.pickup_view_cache = Some(view);
+
+        let mut view = InventoryView::from_range(0..self.inventory_size);
+        for slot in &mut view.slots {
+            for equipment_slot in &self.equipment_view.slots {
+                if slot.slot == equipment_slot.slot {
+                    *slot = equipment_slot.clone();
+                }
+            }
+        }
+        self.screen_view_cache = Some(view);
     }
 }
 fn default_defence_damage_score() -> f32 {

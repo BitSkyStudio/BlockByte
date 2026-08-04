@@ -20,7 +20,11 @@ pub enum ItemInteractTarget {
     Entity { entity: Uuid },
     Empty,
 }
-
+#[derive(Copy, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
+pub struct ScreenSlot {
+    pub slot: usize,
+    pub player: bool,
+}
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageC2S {
     PlayerPosition {
@@ -54,13 +58,13 @@ pub enum NetworkMessageC2S {
         stack: bool,
     },
     MoveItem {
-        from: usize,
-        to: usize,
+        from: ScreenSlot,
+        to: ScreenSlot,
         mode: ItemMoveMode,
     },
     Research {
         research: ResearchKey,
-        slot: usize,
+        slot: ScreenSlot,
         mode: ItemMoveMode,
     },
     Craft {
@@ -68,7 +72,7 @@ pub enum NetworkMessageC2S {
         count: u16,
     },
     TrashItem {
-        slot: usize,
+        slot: ScreenSlot,
         mode: ItemMoveMode,
     },
     GiveItem {
@@ -168,7 +172,7 @@ pub enum NetworkMessageS2C {
         value: f32,
     },
     UIClose,
-    HUDSlot {
+    PlayerSetSlot {
         slot: usize,
         item: Option<ClientItem>,
     },

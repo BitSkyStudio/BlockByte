@@ -16,7 +16,10 @@ use block_byte_common::{
     MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, LoopMode, ModelGeometry},
-    net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
+    net::{
+        ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, ScreenSlot,
+        make_connection_config,
+    },
     number_approach_smooth,
     registry::{
         BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, EffectKey,
@@ -45,7 +48,7 @@ use crate::{
         MeshVertexConsumer, RenderState, SurfaceError, draw_model, get_block_matrix,
         get_block_rotation_face_vertices,
     },
-    ui::{ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
+    ui::{GameData, ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
 };
 
 use crate::GameScreen;
@@ -244,6 +247,7 @@ pub struct ClientGame {
     pub entities: AHashMap<Uuid, ClientEntity>,
     pub player_entity: Option<Uuid>,
     pub screen: Option<ScreenData>,
+    pub player_inventory: Vec<Option<ClientItem>>,
     pub hud: ScreenData,
     pub hit_timer: Option<HitTimer>,
     pub hotbar_slot: usize,
@@ -542,11 +546,15 @@ impl GameScreen for ClientGame {
             Color::WHITE,
             &mut gui_mesh,
         );
+        let game_data = GameData {
+            player_inventory: &self.player_inventory,
+            research: &self.research,
+        };
         render_screen(
             &mut self.hud,
             None,
             renderer.size(),
-            &self.research,
+            &game_data,
             &mut gui_mesh,
             dt,
             |_| {},
@@ -556,7 +564,7 @@ impl GameScreen for ClientGame {
                 screen,
                 Some(&input),
                 renderer.size(),
-                &self.research,
+                &game_data,
                 &mut gui_mesh,
                 dt,
                 |event| match event {
@@ -984,7 +992,10 @@ impl ClientGame {
                     if let Some(screen) = &mut self.screen {
                         if slot < screen.slots.len() {
                             screen.slots[slot] = item;
-                            screen.slot_action_prediction.remove(&slot);
+                            screen.slot_action_prediction.remove(&ScreenSlot {
+                                slot,
+                                player: false,
+                            });
                         }
                     }
                 }
@@ -992,25 +1003,22 @@ impl ClientGame {
                     self.screen = None;
                     renderer.window().set_cursor_visible(false);
                 }
-                NetworkMessageS2C::HUDSlot { slot, item } => {
+                NetworkMessageS2C::PlayerSetSlot { slot, item } => {
+                    if slot >= self.player_inventory.len() {
+                        self.player_inventory.resize_with(slot + 1, || None);
+                    }
                     if self.hotbar_slot == slot
-                        && self.hud.slots[slot].as_ref().map(|item| item.item)
+                        && self.player_inventory[slot].as_ref().map(|item| item.item)
                             != item.as_ref().map(|item| item.item)
                     {
                         self.needs_equip = true;
                     }
-                    self.hud.slots[slot] = item;
-                    /*match (&self.game.held_item, &held_item) {
-                        (None, None) => {}
-                        (Some(first), Some(second)) => {
-                            if first.item != second.item {
-                                self.game.hit_timer = None;
-                            }
-                        }
-                        _ => {
-                            self.game.hit_timer = None;
-                        }
-                    }*/
+                    self.player_inventory[slot] = item;
+                    if let Some(screen) = &mut self.screen {
+                        screen
+                            .slot_action_prediction
+                            .remove(&ScreenSlot { slot, player: true });
+                    }
                 }
                 NetworkMessageS2C::EntityHandItem { uuid, item } => {
                     if let Some(entity) = self.entities.get_mut(&uuid) {
@@ -1203,6 +1211,7 @@ impl ClientGame {
             delta_time_average: 0.,
             mspt: 0.,
             teleport_id: 0,
+            player_inventory: Vec::new(),
         }
     }
     pub fn mark_modified(&mut self, chunk_position: ChunkPos) {
@@ -1223,12 +1232,11 @@ impl ClientGame {
             }
         }
     }
-    pub fn held_item(&self) -> &Option<ClientItem> {
-        &self.hud.slots[self.hotbar_slot]
+    pub fn held_item(&self) -> Option<&ClientItem> {
+        self.player_inventory.get(self.hotbar_slot)?.as_ref()
     }
     pub fn active_tool(&self) -> &ToolData {
         self.held_item()
-            .as_ref()
             .and_then(|item| item.item.data().tool.as_ref())
             .unwrap_or(&ToolData::HAND)
     }
