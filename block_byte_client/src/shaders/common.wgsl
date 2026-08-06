@@ -9,5 +9,6 @@ fn normal_shading(normal: vec3<f32>) -> f32{
 
 struct CameraUniform {
     view_proj: mat4x4<f32>,
+    view: mat4x4<f32>,
     direction: vec3<f32>,
 };

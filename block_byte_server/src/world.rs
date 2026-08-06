@@ -301,6 +301,10 @@ pub fn tick_chunk(world: &WorldAccess) {
                 *entity.current_stats = stats;
             }
         }
+        if world.ticks_passed % SERVER_TPS as u64 == 0 {
+            entity.health += entity.current_stats.regen();
+        }
+        entity.health = entity.health.min(entity.current_stats.vitality());
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
             std::mem::swap(&mut velocity, &mut entity.character_controller.velocity);
@@ -792,7 +796,7 @@ impl Entity {
             direction: LookDirection { pitch: 0., yaw: 0. },
             pose: EntityPose::Stand,
             effects: HashMap::new(),
-            current_stats: Box::new(EntityStats::default()),
+            current_stats: Box::new(entity_data.base_stats.clone()),
             current_passives: HashSet::new(),
         }
     }
@@ -869,10 +873,9 @@ impl Entity {
         match &entity_data.ai {
             Some(ai) => {
                 let entity_eye_position = self.get_eye();
-                let current_health_regen = self.current_stats.regen();
                 let brain = self.brain.as_mut().unwrap();
                 brain.received_attacks.retain(|_, damage| {
-                    *damage -= current_health_regen * SERVER_DT;
+                    *damage -= 1. * SERVER_DT;
                     *damage > 0.
                 });
                 let target_entity = world

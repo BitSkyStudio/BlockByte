@@ -218,6 +218,12 @@ fn main() {
                     research: entity.research.clone().unwrap(),
                 },
             );
+            server.message_queue.send_message(
+                std::iter::once(user),
+                NetworkMessageS2C::UpdatePlayerStats {
+                    stats: (*entity.current_stats).clone(),
+                },
+            );
             entity.controlling_user = Some(user);
             let player_uuid = entity.uuid;
             let add_message = entity.create_add_message();

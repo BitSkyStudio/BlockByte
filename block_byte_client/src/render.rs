@@ -8,6 +8,7 @@ use block_byte_common::{Color, TexCoords};
 use bytemuck::{NoUninit, Pod};
 use cgmath::{InnerSpace, Matrix4, Point3, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::iter;
 use std::marker::PhantomData;
@@ -18,6 +19,7 @@ use wgpu::{
     BackendOptions, BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferSize,
     CommandEncoder, CompareFunction, Device, FilterMode, IndexFormat, InstanceFlags,
     MemoryBudgetThresholds, Queue, RenderPass, Sampler, TextureFormat, TextureView,
+    VertexBufferLayout,
 };
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -59,6 +61,9 @@ pub struct RenderState {
     pub animation_time: f32,
     pub staging_belt: StagingBelt,
     animation_data_uniform: GPUUniform<()>,
+    particle_gpu_mesh: GPUMesh,
+    billboard_mesh: GPUMesh,
+    particle_render_pipeline: GPURenderPipeline,
 }
 
 pub enum SurfaceError {
@@ -205,7 +210,7 @@ impl RenderState {
             TextureFormat::Depth32Float,
             wgpu::FilterMode::Linear,
         );
-        let base_render_pipeline = GPURenderPipeline::new::<Vertex>(
+        let base_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
             &device,
             "base",
             &[
@@ -223,7 +228,7 @@ impl RenderState {
             Some(TextureFormat::Depth32Float),
         );
 
-        let chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex>(
+        let chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex, ()>(
             &device,
             "chunk",
             &[
@@ -241,7 +246,7 @@ impl RenderState {
             Some(TextureFormat::Depth32Float),
         );
 
-        let gui_render_pipeline = GPURenderPipeline::new::<GUIVertex>(
+        let gui_render_pipeline = GPURenderPipeline::new::<GUIVertex, ()>(
             &device,
             "gui",
             &[
@@ -254,7 +259,7 @@ impl RenderState {
             None,
         );
 
-        let damage_render_pipeline = GPURenderPipeline::new::<DamageVertex>(
+        let damage_render_pipeline = GPURenderPipeline::new::<DamageVertex, ()>(
             &device,
             "damage",
             &[Some(&camera_uniform.bind_group_layout)],
@@ -264,7 +269,7 @@ impl RenderState {
             Some(TextureFormat::Depth32Float),
         );
 
-        let skybox_render_pipeline = GPURenderPipeline::new::<Vertex>(
+        let skybox_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
             &device,
             "skybox",
             &[
@@ -277,7 +282,7 @@ impl RenderState {
             None,
         );
 
-        let blur_render_pipeline = GPURenderPipeline::new::<()>(
+        let blur_render_pipeline = GPURenderPipeline::new::<(), ()>(
             &device,
             "blur",
             &[
@@ -290,7 +295,7 @@ impl RenderState {
             None,
         );
 
-        let hdr_render_pipeline = GPURenderPipeline::new::<()>(
+        let hdr_render_pipeline = GPURenderPipeline::new::<(), ()>(
             &device,
             "postprocess",
             &[
@@ -302,7 +307,7 @@ impl RenderState {
             Some(config.format),
             None,
         );
-        let shadow_chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex>(
+        let shadow_chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex, ()>(
             &device,
             "chunk_shadow",
             &[
@@ -316,7 +321,7 @@ impl RenderState {
             Some(TextureFormat::Depth32Float),
         );
 
-        let shadow_base_render_pipeline = GPURenderPipeline::new::<Vertex>(
+        let shadow_base_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
             &device,
             "base_shadow",
             &[
@@ -326,6 +331,21 @@ impl RenderState {
             None,
             Some(wgpu::Face::Back),
             None,
+            Some(TextureFormat::Depth32Float),
+        );
+
+        let particle_render_pipeline = GPURenderPipeline::new::<BillboardVertex, ParticleInstance>(
+            &device,
+            "particle",
+            &[
+                Some(&texture_atlas.bind_group_layout),
+                Some(&camera_uniform.bind_group_layout),
+                Some(&shadow_camera.bind_group_layout),
+                Some(&shadow_texture.bind_group_layout),
+            ],
+            None,
+            None,
+            Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
         );
 
@@ -361,9 +381,23 @@ impl RenderState {
                 );
             }
         }
+        let mut billboard_mesh: Mesh<BillboardVertex> = Mesh::default();
+        {
+            billboard_mesh.add_vertex(BillboardVertex { position: [0., 0.] });
+            billboard_mesh.add_vertex(BillboardVertex { position: [1., 0.] });
+            billboard_mesh.add_vertex(BillboardVertex { position: [1., 1.] });
+            billboard_mesh.add_vertex(BillboardVertex { position: [0., 1.] });
+            billboard_mesh.add_index(0);
+            billboard_mesh.add_index(1);
+            billboard_mesh.add_index(2);
+            billboard_mesh.add_index(2);
+            billboard_mesh.add_index(3);
+            billboard_mesh.add_index(0);
+        }
         Self {
             staging_belt: StagingBelt::new(device.clone(), 4 * 1024 * 1024),
             skybox_mesh: GPUMesh::allocate(&skybox_mesh, 0, &device),
+            billboard_mesh: GPUMesh::allocate(&billboard_mesh, 0, &device),
             window,
             surface,
             queue,
@@ -397,7 +431,9 @@ impl RenderState {
             gui_gpu_mesh: GPUMesh::empty(),
             viewmodel_gpu_mesh: GPUMesh::empty(),
             local_player_gpu_mesh: GPUMesh::empty(),
+            particle_gpu_mesh: GPUMesh::empty(),
             animation_data_uniform,
+            particle_render_pipeline,
         }
     }
 
@@ -433,6 +469,7 @@ impl RenderState {
         gui_mesh: GUIMesh,
         viewmodel_mesh: BaseMesh,
         damage_mesh: DamageMesh,
+        particles: Vec<ParticleInstance>,
         frustum: &Frustum,
     ) -> Result<(), SurfaceError> {
         let should_update_shadowmap = true;
@@ -492,6 +529,16 @@ impl RenderState {
         );
         self.local_player_gpu_mesh.upload(
             &local_player_mesh,
+            &self.device,
+            &mut self.staging_belt,
+            &mut encoder,
+        );
+        let particles_count = particles.len();
+        self.particle_gpu_mesh.upload(
+            &Mesh {
+                vertices: particles,
+                indices: Vec::new(),
+            },
             &self.device,
             &mut self.staging_belt,
             &mut encoder,
@@ -736,6 +783,40 @@ impl RenderState {
             render_pass.set_pipeline(&self.damage_render_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_uniform.bind_group, &[]);
             self.damage_gpu_mesh.draw(&mut render_pass);
+        }
+        if particles_count > 0 {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Particle Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.hdr_texture.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            render_pass.set_pipeline(&self.particle_render_pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
+            render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
+            render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
+            render_pass
+                .set_vertex_buffer(1, self.particle_gpu_mesh.buffer.as_ref().unwrap().slice(..));
+            self.billboard_mesh
+                .draw_instanced(&mut render_pass, particles_count as u32);
         }
         if !viewmodel_mesh.vertices.is_empty() {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1079,9 +1160,52 @@ impl VertexDescription for DamageVertex {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BillboardVertex {
+    pub position: [f32; 2],
+}
+impl BillboardVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
+}
+impl VertexDescription for BillboardVertex {
+    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
+        use std::mem;
+        Some(wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        })
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ParticleInstance {
+    pub position: [f32; 3],
+    pub uv1: [f32; 2],
+    pub uv2: [f32; 2],
+    pub size: [f32; 2],
+}
+impl ParticleInstance {
+    const ATTRIBS: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![1 => Float32x3, 2 => Float32x2, 3 => Float32x2, 4 => Float32x2];
+}
+impl VertexDescription for ParticleInstance {
+    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
+        use std::mem;
+        Some(wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBS,
+        })
+    }
+}
+
+#[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    view: [[f32; 4]; 4],
     direction: [f32; 3],
     _pad: f32,
 }
@@ -1089,6 +1213,7 @@ impl CameraUniform {
     fn new() -> Self {
         Self {
             view_proj: cgmath::Matrix4::identity().into(),
+            view: cgmath::Matrix4::identity().into(),
             direction: [0.; 3],
             _pad: 0.,
         }
@@ -1140,6 +1265,17 @@ impl CameraUniform {
         };
         self.view_proj = (Self::OPENGL_TO_WGPU_MATRIX
             * ClientPlayer::create_projection_matrix(aspect_ratio, fov)
+            * cgmath::Matrix4::look_at_rh(
+                eye,
+                eye + cgmath::Vector3 {
+                    x: front.x,
+                    y: front.y,
+                    z: front.z,
+                },
+                Vector3::unit_y(),
+            ))
+        .into();
+        self.view = (Self::OPENGL_TO_WGPU_MATRIX
             * cgmath::Matrix4::look_at_rh(
                 eye,
                 eye + cgmath::Vector3 {
@@ -1562,7 +1698,7 @@ impl GPUMesh {
         ((unpadded_size + align_mask) & !align_mask).max(wgpu::COPY_BUFFER_ALIGNMENT)
     }
     pub fn allocate<T: Pod>(mesh: &Mesh<T>, min_size: usize, device: &Device) -> GPUMesh {
-        if mesh.indices.is_empty() && min_size == 0 {
+        if mesh.vertices.is_empty() && min_size == 0 {
             return GPUMesh::empty();
         }
         let (vertex_buffer_size, index_buffer_size, index_format) = mesh.get_data_size();
@@ -1621,7 +1757,7 @@ impl GPUMesh {
         staging_belt: &mut StagingBelt,
         command_encoder: &mut CommandEncoder,
     ) {
-        if new_mesh.indices.is_empty() {
+        if new_mesh.vertices.is_empty() {
             self.render_data = None;
             return;
         }
@@ -1669,6 +1805,9 @@ impl GPUMesh {
         });
     }
     pub fn draw(&self, render_pass: &mut RenderPass<'_>) {
+        self.draw_instanced(render_pass, 1);
+    }
+    pub fn draw_instanced(&self, render_pass: &mut RenderPass<'_>, instances: u32) {
         match (&self.buffer, &self.render_data) {
             (Some(buffer), Some(render_data)) => {
                 render_pass.set_vertex_buffer(0, buffer.slice(..render_data.vertex_length));
@@ -1676,7 +1815,7 @@ impl GPUMesh {
                     buffer.slice(render_data.vertex_length..),
                     render_data.index_format,
                 );
-                render_pass.draw_indexed(0..render_data.index_count, 0, 0..1);
+                render_pass.draw_indexed(0..render_data.index_count, 0, 0..instances);
             }
             _ => {}
         }
@@ -2070,7 +2209,7 @@ pub struct GPURenderPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
 }
 impl GPURenderPipeline {
-    pub fn new<T: VertexDescription>(
+    pub fn new<T: VertexDescription, I: VertexDescription>(
         device: &Device,
         shader: &str,
         bind_group_layouts: &[Option<&BindGroupLayout>],
@@ -2089,7 +2228,6 @@ impl GPURenderPipeline {
                 bind_group_layouts,
                 immediate_size: 0,
             });
-        let vertex_description = T::vertex_description();
         let targets = match target_format {
             Some(target_format) => Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -2098,16 +2236,20 @@ impl GPURenderPipeline {
             }),
             None => None,
         };
+        let mut vertex_state = SmallVec::<[VertexBufferLayout<'static>; 2]>::new();
+        if let Some(vertex_desc) = T::vertex_description() {
+            vertex_state.push(vertex_desc);
+            if let Some(instance_desc) = I::vertex_description() {
+                vertex_state.push(instance_desc);
+            }
+        }
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(std::any::type_name::<T>()),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: match &vertex_description {
-                    Some(desc) => std::slice::from_ref(desc),
-                    None => &[],
-                },
+                buffers: vertex_state.as_slice(),
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {

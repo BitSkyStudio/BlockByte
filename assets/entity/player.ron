@@ -9,6 +9,6 @@
     damage_table: (),
     loot_table: Key("empty"),
     base_stats: (
-        
+        speed_mul: 1,
     )
 )

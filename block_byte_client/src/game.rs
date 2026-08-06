@@ -45,8 +45,8 @@ use crate::{
     game::clipping::Frustum,
     render::{
         self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUMesh, GUIMesh, Mesh, MeshVertex,
-        MeshVertexConsumer, RenderState, SurfaceError, draw_model, get_block_matrix,
-        get_block_rotation_face_vertices,
+        MeshVertexConsumer, ParticleInstance, RenderState, SurfaceError, draw_model,
+        get_block_matrix, get_block_rotation_face_vertices,
     },
     ui::{GameData, ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
 };
@@ -650,6 +650,16 @@ impl GameScreen for ClientGame {
             input,
         );
         let ps = profiler::profiler_scope("render");
+        let mut particles = Vec::new();
+        let particle_texture = TextureKey::id("dirt.grass_block_side")
+            .unwrap()
+            .tex_coords();
+        particles.push(ParticleInstance {
+            position: [0., 85., 0.],
+            uv1: [particle_texture.u1, particle_texture.v1],
+            uv2: [particle_texture.u2, particle_texture.v2],
+            size: [1., 1.],
+        });
         match renderer.render(
             self,
             entity_mesh,
@@ -657,6 +667,7 @@ impl GameScreen for ClientGame {
             gui_mesh,
             viewmodel_mesh,
             damage_mesh,
+            particles,
             &frustum,
         ) {
             Ok(_) => {}
