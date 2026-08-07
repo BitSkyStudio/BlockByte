@@ -1339,80 +1339,78 @@ impl ClientGame {
         world_animation_time: f32,
         input: &InputManager,
     ) {
-        let viewmodel = self
+        if let Some(viewmodel) = self
             .get_player_data()
-            .and_then(|data| data.viewmodel.as_ref());
-        let mut viewmodel_animations: Vec<DrawAnimation<'static>> = Vec::new();
-        let (animation, time) = self.viewmodel_player.get_animation();
-        let idle_or_run = if self.camera.running {
-            "running"
-        } else {
-            "idle"
-        };
-        if let Some(action) = self.current_local_action {
-            self.viewmodel_player
-                .play_animation(action.animation(), 0.1);
-        } else {
-            match animation {
-                "idle" => {
-                    if self.camera.running {
-                        self.viewmodel_player.play_animation("running", 0.1);
-                    } else if time > 4. {
-                        self.viewmodel_player.restart_animation();
-                    }
-                }
-                "running" => {
-                    if !self.camera.running {
-                        self.viewmodel_player.play_animation("idle", 0.1);
-                    } else if time > 1. {
-                        self.viewmodel_player.restart_animation();
-                    }
-                }
-                _ => {}
-            }
-        }
-        match animation {
-            "idle" | "running" => {}
-            "hit" => {
-                let swing_time = self
-                    .hit_timer
-                    .as_ref()
-                    .map(|hit_timer| hit_timer.swing_time)
-                    .unwrap_or(0.);
-                if time >= swing_time {
-                    self.viewmodel_player.play_animation(idle_or_run, 0.1);
-                }
-            }
-            _ => {
-                if time >= 0.25 {
-                    self.viewmodel_player.play_animation(idle_or_run, 0.1);
-                }
-            }
-        }
-        if time >= 0.1 {
-            self.swap_hand_item = match self.held_item() {
-                Some(item) => {
-                    let item = item.item;
-                    Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
-                }
-                None => None,
+            .and_then(|data| data.viewmodel.as_ref())
+        {
+            let mut viewmodel_animations: Vec<DrawAnimation<'static>> = Vec::new();
+            let (animation, time) = self.viewmodel_player.get_animation();
+            let animation_length = viewmodel
+                .model
+                .data()
+                .model
+                .get_animation_info(animation)
+                .unwrap()
+                .length;
+            let idle_or_run = if self.camera.running {
+                "running"
+            } else {
+                "idle"
             };
-        }
-        self.current_local_action = None;
-        for entry in &mut viewmodel_animations {
-            if entry.animation == "hit" {
-                let swing_time = self
-                    .hit_timer
-                    .as_ref()
-                    .map(|hit_timer| hit_timer.swing_time)
-                    .unwrap_or(1.);
-                entry.time = entry.time / swing_time * 0.58;
+            if let Some(action) = self.current_local_action {
+                self.viewmodel_player
+                    .play_animation(action.animation(), 0.1);
             }
-        }
+            match animation {
+                "hit" => {
+                    let swing_time = self
+                        .hit_timer
+                        .as_ref()
+                        .map(|hit_timer| hit_timer.swing_time)
+                        .unwrap_or(0.);
+                    if time >= swing_time {
+                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
+                    }
+                }
+                _ => {
+                    if time >= animation_length
+                        || ((animation == "idle" || animation == "running")
+                            && animation != idle_or_run)
+                    {
+                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
+                    }
+                }
+            }
+            if time >= animation_length / 2. {
+                self.swap_hand_item = match self.held_item() {
+                    Some(item) => {
+                        let item = item.item;
+                        Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
+                    }
+                    None => None,
+                };
+            }
+            self.current_local_action = None;
+            for entry in &mut viewmodel_animations {
+                if entry.animation == "hit" {
+                    let swing_time = self
+                        .hit_timer
+                        .as_ref()
+                        .map(|hit_timer| hit_timer.swing_time)
+                        .unwrap_or(1.);
+                    let hit_length = viewmodel
+                        .model
+                        .data()
+                        .model
+                        .get_animation_info("hit")
+                        .unwrap()
+                        .length;
+                    entry.time = entry.time / swing_time * hit_length;
+                }
+            }
 
-        self.viewmodel_player.tick(dt, &mut viewmodel_animations);
+            self.viewmodel_player.tick(dt, &mut viewmodel_animations);
 
-        if let Some(viewmodel) = viewmodel {
             render::draw_model(
                 viewmodel,
                 Matrix4::from_translation(Vector3::from(

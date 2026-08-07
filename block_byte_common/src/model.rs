@@ -187,7 +187,10 @@ impl Bone {
             if let Some(value) = BoneAnimation::sample(&animator.rotation, animation.time) {
                 let o = Matrix4::from_translation(self.origin);
                 let io = Matrix4::from_translation(-self.origin);
-                transform = transform * o * Matrix4::from(value) * io;
+                transform = transform
+                    * o
+                    * Matrix4::from(Quaternion::zero().slerp(value, animation.weight))
+                    * io;
             }
             if let Some(value) = BoneAnimation::sample(&animator.scale, animation.time) {
                 transform = transform
@@ -680,10 +683,7 @@ pub struct BoneAnimation {
     scale: Vec<Keyframe<Vector3<f32>>>,
 }
 impl BoneAnimation {
-    pub fn sample<T: VectorSpace<Scalar = f32> + Copy>(
-        frames: &Vec<Keyframe<T>>,
-        time: f32,
-    ) -> Option<T> {
+    pub fn sample<T: AnimationLerpable + Copy>(frames: &Vec<Keyframe<T>>, time: f32) -> Option<T> {
         if frames.is_empty() {
             return None;
         }
@@ -695,10 +695,23 @@ impl BoneAnimation {
             let b = &w[1];
             if time >= a.time && time <= b.time {
                 let t = (time - a.time) / (b.time - a.time);
-                return Some(a.data.lerp(b.data, t));
+                return Some(a.data.animation_lerp(b.data, t));
             }
         }
         Some(frames.last().unwrap().data)
+    }
+}
+pub trait AnimationLerpable {
+    fn animation_lerp(&self, other: Self, t: f32) -> Self;
+}
+impl AnimationLerpable for Vector3<f32> {
+    fn animation_lerp(&self, other: Self, t: f32) -> Self {
+        self.lerp(other, t)
+    }
+}
+impl AnimationLerpable for Quaternion<f32> {
+    fn animation_lerp(&self, other: Self, t: f32) -> Self {
+        self.slerp(other, t)
     }
 }
 
