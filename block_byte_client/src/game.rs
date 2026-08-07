@@ -32,6 +32,7 @@ use block_byte_common::{
 use bytemuck::Pod;
 use cgmath::{Matrix4, Rad, Vector3};
 use parking_lot::{Mutex, RwLock};
+use rand::{Rng, RngCore, rng};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use smallvec::SmallVec;
@@ -44,8 +45,8 @@ use crate::{
     atlas::{TexCoordsExt, TexCoordsIndexExt},
     game::clipping::Frustum,
     render::{
-        self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUMesh, GUIMesh, Mesh, MeshVertex,
-        MeshVertexConsumer, ParticleInstance, RenderState, SurfaceError, draw_model,
+        self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUMesh, GPUParticleInstance,
+        GUIMesh, Mesh, MeshVertex, MeshVertexConsumer, RenderState, SurfaceError, draw_model,
         get_block_matrix, get_block_rotation_face_vertices,
     },
     ui::{GameData, ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
@@ -55,8 +56,8 @@ use crate::GameScreen;
 
 pub enum RayCastResult {
     Empty,
-    Block(BlockPos, Face),
-    Entity(Uuid),
+    Block(BlockPos, Face, Pos),
+    Entity(Uuid, Pos),
     Plant(BlockPos, usize),
 }
 pub struct ClientPlayer {
@@ -127,7 +128,7 @@ impl ClientPlayer {
             None
         }) {
             min_distance = ray.position.distance(position);
-            raycast_result = RayCastResult::Block(block, face);
+            raycast_result = RayCastResult::Block(block, face, position);
         }
         for (id, entity) in &world.entities {
             if Some(*id) == world.player_entity {
@@ -140,7 +141,7 @@ impl ClientPlayer {
                 let distance = result.position.distance(ray.position);
                 if distance < min_distance {
                     min_distance = distance;
-                    raycast_result = RayCastResult::Entity(*id);
+                    raycast_result = RayCastResult::Entity(*id, result.position);
                 }
             }
         }
@@ -272,6 +273,7 @@ pub struct ClientGame {
     pub teleport_id: u32,
     pub mspt: f32,
     pub delta_time_average: f32,
+    pub particles: Vec<Particle>,
 }
 impl GameScreen for ClientGame {
     fn render(
@@ -336,7 +338,7 @@ impl GameScreen for ClientGame {
             if input.keys.is_just_down(KeyCode::KeyE) {
                 match self.camera.raycast(self, false) {
                     RayCastResult::Empty => {}
-                    RayCastResult::Block(position, _) => {
+                    RayCastResult::Block(position, _, _) => {
                         let block = self.get_block(position).unwrap().block.data();
                         match &block.interact_action {
                             BlockInteractAction::Ignore => {}
@@ -346,7 +348,7 @@ impl GameScreen for ClientGame {
                             }
                         }
                     }
-                    RayCastResult::Entity(entity) => {
+                    RayCastResult::Entity(entity, _) => {
                         let entity_data = self.entities.get(&entity).unwrap().key.data();
                         match &entity_data.interact_action {
                             EntityInteractAction::Ignore => {}
@@ -398,9 +400,7 @@ impl GameScreen for ClientGame {
             }
             let crosshair_color = match self.camera.raycast(self, true) {
                 RayCastResult::Empty => Color::grayscale(200),
-                RayCastResult::Block(_, _) => Color::grayscale(255),
-                RayCastResult::Entity(_) => Color::grayscale(255),
-                RayCastResult::Plant(_, _) => unreachable!(),
+                _ => Color::grayscale(255),
             };
             let crosshair_texture = TextureKey::id("crosshair").unwrap();
             let crosshair_data = &*crosshair_texture.data().texture;
@@ -425,14 +425,14 @@ impl GameScreen for ClientGame {
 
             if let Some(tooltip) = match self.camera.raycast(self, false) {
                 RayCastResult::Empty => None,
-                RayCastResult::Block(pos, _face) => self
+                RayCastResult::Block(pos, _, _) => self
                     .get_block(pos)
                     .unwrap()
                     .block
                     .data()
                     .interact_action
                     .tooltip(),
-                RayCastResult::Entity(uuid) => self
+                RayCastResult::Entity(uuid, _) => self
                     .entities
                     .get(&uuid)
                     .unwrap()
@@ -537,7 +537,7 @@ impl GameScreen for ClientGame {
                     .join(","),
                 self.mspt,
                 match self.camera.raycast(&self, true) {
-                    RayCastResult::Block(position, face) =>
+                    RayCastResult::Block(position, face, _) =>
                         format!("looking at {:?} {:?} ", position, face),
                     _ => String::new(),
                 },
@@ -614,10 +614,48 @@ impl GameScreen for ClientGame {
         if let Some(hit_timer) = &mut self.hit_timer {
             if hit_timer.tick(dt) {
                 match self.camera.raycast(self, true) {
-                    RayCastResult::Block(position, face) => {
+                    RayCastResult::Block(position, face, hit_position) => {
+                        let block = self.get_block(position).unwrap();
+                        let block = block.block.data();
+                        for _ in 0..5 {
+                            match &block.render_data {
+                                BlockRenderData::Air => {}
+                                BlockRenderData::Full { faces, .. } => {
+                                    let texture = faces.by_face(face).tex_coords(0);
+                                    let mut cc = CharacterController::new();
+                                    cc.velocity = face.get_offset();
+                                    for i in
+                                        [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z]
+                                    {
+                                        if *i == 0. {
+                                            *i = rng().random::<f32>() * 2. - 1.;
+                                        }
+                                    }
+                                    cc.velocity = cc.velocity.normalize() * 5.;
+                                    let tx = rng().next_u32() % 15;
+                                    let ty = rng().next_u32() % 15;
+                                    self.particles.push(Particle {
+                                        position: hit_position + face.get_offset() * 0.1,
+                                        controller: cc,
+                                        size: UIPos {
+                                            x: 2. / 16.,
+                                            y: 2. / 16.,
+                                        },
+                                        texture: texture.map_sub(TexCoords {
+                                            u1: tx as f32 / 16.,
+                                            v1: ty as f32 / 16.,
+                                            u2: (tx + 2) as f32 / 16.,
+                                            v2: (ty + 2) as f32 / 16.,
+                                        }),
+                                        lifetime: 0.2,
+                                    });
+                                }
+                                BlockRenderData::Model { .. } => {}
+                            }
+                        }
                         self.send_message(NetworkMessageC2S::AttackBlock { position, face });
                     }
-                    RayCastResult::Entity(entity) => {
+                    RayCastResult::Entity(entity, _) => {
                         self.send_message(NetworkMessageC2S::AttackEntity { entity });
                     }
                     RayCastResult::Empty => {}
@@ -649,17 +687,34 @@ impl GameScreen for ClientGame {
             renderer.animation_time,
             input,
         );
-        let ps = profiler::profiler_scope("render");
-        let mut particles = Vec::new();
-        let particle_texture = TextureKey::id("dirt.grass_block_side")
-            .unwrap()
-            .tex_coords();
-        particles.push(ParticleInstance {
-            position: [0., 85., 0.],
-            uv1: [particle_texture.u1, particle_texture.v1],
-            uv2: [particle_texture.u2, particle_texture.v2],
-            size: [1., 1.],
+        self.particles.retain_mut(|particle| {
+            particle.lifetime -= dt;
+            particle.controller.tick(
+                &mut particle.position,
+                dt,
+                |block| {
+                    let (chunk, offset) = block.to_chunk_pos_offset();
+                    Some(
+                        *self
+                            .chunks
+                            .get(&chunk)?
+                            .mesh_build_data
+                            .blocks
+                            .read()
+                            .get(offset.index())
+                            .unwrap(),
+                    )
+                },
+                Pos::all(0.),
+                MoveMode::Normal,
+                AABB::new(Pos::all(0.), Pos::all(0.1)),
+                0.,
+                0.,
+                false,
+            );
+            particle.lifetime > 0.
         });
+        let ps = profiler::profiler_scope("render");
         match renderer.render(
             self,
             entity_mesh,
@@ -667,7 +722,15 @@ impl GameScreen for ClientGame {
             gui_mesh,
             viewmodel_mesh,
             damage_mesh,
-            particles,
+            self.particles
+                .iter()
+                .map(|particle| GPUParticleInstance {
+                    position: particle.position.into_array(),
+                    size: [particle.size.x, particle.size.y],
+                    uv1: [particle.texture.u1, particle.texture.v1],
+                    uv2: [particle.texture.u2, particle.texture.v2],
+                })
+                .collect(),
             &frustum,
         ) {
             Ok(_) => {}
@@ -1223,6 +1286,7 @@ impl ClientGame {
             mspt: 0.,
             teleport_id: 0,
             player_inventory: Vec::new(),
+            particles: Vec::new(),
         }
     }
     pub fn mark_modified(&mut self, chunk_position: ChunkPos) {
@@ -1684,7 +1748,7 @@ impl ClientGame {
             let raycast = self.camera.raycast(self, true);
             match &held_item.item.data().action {
                 ItemAction::Place(place_block) => match raycast {
-                    RayCastResult::Block(position, face) => {
+                    RayCastResult::Block(position, face, _) => {
                         let place_block = &place_block[variant_id];
                         let block_position = position + face.get_block_offset();
                         let block_data = place_block.block.data();
@@ -1781,7 +1845,7 @@ impl ClientGame {
                 },
                 ItemAction::Plant(_) | ItemAction::RotateBlock | ItemAction::SpawnEntity(_) => {
                     match raycast {
-                        RayCastResult::Block(position, face) => {
+                        RayCastResult::Block(position, face, _) => {
                             if input.buttons.is_just_down(MouseButton::Right) {
                                 self.current_local_action = Some(EntityAction::Interact);
                                 self.send_message(NetworkMessageC2S::ItemInteraction {
@@ -1800,10 +1864,10 @@ impl ClientGame {
                         self.send_message(NetworkMessageC2S::ItemInteraction {
                             target: match raycast {
                                 RayCastResult::Empty => ItemInteractTarget::Empty,
-                                RayCastResult::Block(position, face) => {
+                                RayCastResult::Block(position, face, _) => {
                                     ItemInteractTarget::Block { position, face }
                                 }
-                                RayCastResult::Entity(entity) => {
+                                RayCastResult::Entity(entity, _) => {
                                     ItemInteractTarget::Entity { entity }
                                 }
                                 RayCastResult::Plant(_, _) => unreachable!(),
@@ -2436,4 +2500,11 @@ impl AnimationPlayer {
                 }),
         );
     }
+}
+pub struct Particle {
+    pub position: Pos,
+    pub controller: CharacterController,
+    pub size: UIPos,
+    pub texture: TexCoords,
+    pub lifetime: f32,
 }

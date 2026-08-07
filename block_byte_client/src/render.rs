@@ -334,7 +334,7 @@ impl RenderState {
             Some(TextureFormat::Depth32Float),
         );
 
-        let particle_render_pipeline = GPURenderPipeline::new::<BillboardVertex, ParticleInstance>(
+        let particle_render_pipeline = GPURenderPipeline::new::<BillboardVertex, GPUParticleInstance>(
             &device,
             "particle",
             &[
@@ -469,7 +469,7 @@ impl RenderState {
         gui_mesh: GUIMesh,
         viewmodel_mesh: BaseMesh,
         damage_mesh: DamageMesh,
-        particles: Vec<ParticleInstance>,
+        particles: Vec<GPUParticleInstance>,
         frustum: &Frustum,
     ) -> Result<(), SurfaceError> {
         let should_update_shadowmap = true;
@@ -1180,17 +1180,17 @@ impl VertexDescription for BillboardVertex {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ParticleInstance {
+pub struct GPUParticleInstance {
     pub position: [f32; 3],
     pub uv1: [f32; 2],
     pub uv2: [f32; 2],
     pub size: [f32; 2],
 }
-impl ParticleInstance {
+impl GPUParticleInstance {
     const ATTRIBS: [wgpu::VertexAttribute; 4] =
         wgpu::vertex_attr_array![1 => Float32x3, 2 => Float32x2, 3 => Float32x2, 4 => Float32x2];
 }
-impl VertexDescription for ParticleInstance {
+impl VertexDescription for GPUParticleInstance {
     fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
         use std::mem;
         Some(wgpu::VertexBufferLayout {
