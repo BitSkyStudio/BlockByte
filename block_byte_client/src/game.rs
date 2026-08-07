@@ -460,9 +460,9 @@ impl GameScreen for ClientGame {
                     &mut gui_mesh,
                 );
             }
-            if input.buttons.is_just_down(MouseButton::Left)
+            if input.buttons.is_down(MouseButton::Left)
                 && match &self.hit_timer {
-                    Some(hit_timer) => hit_timer.current_time > hit_timer.current_time * 0.5,
+                    Some(hit_timer) => hit_timer.current_time > hit_timer.swing_time * 0.8,
                     None => true,
                 }
             {
@@ -578,19 +578,16 @@ impl GameScreen for ClientGame {
             self.needs_equip = false;
             self.current_local_action = Some(EntityAction::Equip);
         }
-        if self.current_local_action.is_none() {
-            if self.is_attack_queued && self.hit_timer.is_none() {
-                self.is_attack_queued = false;
-                let stamina_cost = self.active_tool().stamina;
-                if self.stamina >= stamina_cost {
-                    self.stamina -= stamina_cost;
-                    self.current_local_action = Some(EntityAction::Attack);
-                    self.hit_timer = Some(HitTimer {
-                        current_time: 0.,
-                        swing_time: self.active_tool().swing_time
-                            / (self.player_stats.haste() / 100.),
-                    });
-                }
+        if self.is_attack_queued && self.hit_timer.is_none() {
+            self.is_attack_queued = false;
+            let stamina_cost = self.active_tool().stamina;
+            if self.stamina >= stamina_cost {
+                self.stamina -= stamina_cost;
+                self.current_local_action = Some(EntityAction::Attack);
+                self.hit_timer = Some(HitTimer {
+                    current_time: 0.,
+                    swing_time: self.active_tool().swing_time / (self.player_stats.haste() / 100.),
+                });
             }
         }
         self.tick_camera(dt, input, self.screen.is_none());
@@ -1353,43 +1350,8 @@ impl ClientGame {
             "idle"
         };
         if let Some(action) = self.current_local_action {
-            match animation {
-                "idle" | "running" => {
-                    self.viewmodel_player
-                        .play_animation(action.animation(), 0.1);
-                }
-                "hit" => {
-                    let swing_time = self
-                        .hit_timer
-                        .as_ref()
-                        .map(|hit_timer| hit_timer.swing_time)
-                        .unwrap_or(0.);
-                    if time >= swing_time {
-                        match self.current_local_action {
-                            Some(EntityAction::Attack) => {
-                                self.current_local_action = None;
-                            }
-                            _ => {}
-                        }
-                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
-                    }
-                }
-                _ => {
-                    if time >= 0.25 {
-                        self.current_local_action = None;
-                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
-                    }
-                    if time >= 0.1 {
-                        self.swap_hand_item = match self.held_item() {
-                            Some(item) => {
-                                let item = item.item;
-                                Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
-                            }
-                            None => None,
-                        };
-                    }
-                }
-            }
+            self.viewmodel_player
+                .play_animation(action.animation(), 0.1);
         } else {
             match animation {
                 "idle" => {
@@ -1409,6 +1371,34 @@ impl ClientGame {
                 _ => {}
             }
         }
+        match animation {
+            "idle" | "running" => {}
+            "hit" => {
+                let swing_time = self
+                    .hit_timer
+                    .as_ref()
+                    .map(|hit_timer| hit_timer.swing_time)
+                    .unwrap_or(0.);
+                if time >= swing_time {
+                    self.viewmodel_player.play_animation(idle_or_run, 0.1);
+                }
+            }
+            _ => {
+                if time >= 0.25 {
+                    self.viewmodel_player.play_animation(idle_or_run, 0.1);
+                }
+            }
+        }
+        if time >= 0.1 {
+            self.swap_hand_item = match self.held_item() {
+                Some(item) => {
+                    let item = item.item;
+                    Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
+                }
+                None => None,
+            };
+        }
+        self.current_local_action = None;
         for entry in &mut viewmodel_animations {
             if entry.animation == "hit" {
                 let swing_time = self
