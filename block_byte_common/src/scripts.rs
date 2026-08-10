@@ -247,6 +247,22 @@ impl ScriptParseContext {
                 label: input,
             })
     }
+    pub fn parse_result<'a>(
+        &self,
+        input: &'a str,
+    ) -> Result<FallibleInstructionResult, ScriptParseError<'a>> {
+        Ok(match input {
+            "wait" => FallibleInstructionResult::Wait,
+            "ignore" => FallibleInstructionResult::Ignore,
+            input => {
+                if input.starts_with("!") {
+                    FallibleInstructionResult::JumpNot(self.parse_label(&input[1..])?)
+                } else {
+                    FallibleInstructionResult::Jump(self.parse_label(input)?)
+                }
+            }
+        })
+    }
 }
 #[derive(Debug)]
 pub enum ScriptParseError<'a> {
@@ -315,6 +331,9 @@ impl ScriptState {
                             self.pc = previous_pc;
                             return RunResult::Suspended;
                         }
+                        CallbackResult::Jump(pc) => {
+                            self.pc = pc;
+                        }
                     }
                 }
                 ScriptByteCode::Jump { label } => {
@@ -378,8 +397,33 @@ pub enum CallbackResult {
     Continue,
     Suspend,
     Wait,
+    Jump(usize),
 }
 pub enum RunResult {
     Suspended,
     TimedOut,
+}
+pub enum FallibleInstructionResult {
+    Jump(usize),
+    JumpNot(usize),
+    Wait,
+    Ignore,
+}
+impl FallibleInstructionResult {
+    pub fn succeed(&self) -> CallbackResult {
+        match self {
+            FallibleInstructionResult::Jump(label) => CallbackResult::Jump(*label),
+            FallibleInstructionResult::JumpNot(_) => CallbackResult::Continue,
+            FallibleInstructionResult::Wait => CallbackResult::Continue,
+            FallibleInstructionResult::Ignore => CallbackResult::Continue,
+        }
+    }
+    pub fn fail(&self) -> CallbackResult {
+        match self {
+            FallibleInstructionResult::Jump(_) => CallbackResult::Continue,
+            FallibleInstructionResult::JumpNot(label) => CallbackResult::Jump(*label),
+            FallibleInstructionResult::Wait => CallbackResult::Wait,
+            FallibleInstructionResult::Ignore => CallbackResult::Continue,
+        }
+    }
 }

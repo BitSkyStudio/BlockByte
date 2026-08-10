@@ -699,6 +699,24 @@ impl<T: Default> Default for FaceMap<T> {
         Self::init(|_| Default::default())
     }
 }
+#[derive(Copy, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FaceSet(u8);
+impl FaceSet {
+    pub fn set(&mut self, face: Face, state: bool) {
+        let mask = 1 << (face as usize);
+        if state {
+            self.0 |= mask;
+        } else {
+            self.0 &= !mask;
+        }
+    }
+    pub fn get(&self, face: Face) -> bool {
+        (self.0 >> (face as usize)) & 1 != 0
+    }
+    pub fn iter_set(&self) -> impl Iterator<Item = Face> {
+        Face::all().into_iter().filter(|face| self.get(*face))
+    }
+}
 #[derive(Clone, Copy)]
 pub struct Ray {
     pub position: Pos,

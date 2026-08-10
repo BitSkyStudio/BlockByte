@@ -22,8 +22,9 @@ use crate::model::Model;
 use crate::net::PropertyModifyMode;
 use crate::rotation::BlockRotation;
 use crate::scripts::{
-    CompiledScript, ExternalScriptByteCode, RegisterId, RegisterOrImmediate, ScriptByteCode,
-    ScriptLabel, ScriptParseContext, ScriptParseError, expect_argument_count,
+    CompiledScript, ExternalScriptByteCode, FallibleInstructionResult, RegisterId,
+    RegisterOrImmediate, ScriptByteCode, ScriptParseContext, ScriptParseError,
+    expect_argument_count,
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
@@ -842,29 +843,20 @@ pub enum MachineInstrution {
         self_view: usize,
         face: Face,
         pull: bool,
-        success: ScriptLabel,
-    },
-    TranferItemBlock {
-        self_view: usize,
-        face: Face,
-        pull: bool,
+        result: FallibleInstructionResult,
     },
     AddWakeupObserver {
-        other: BlockPos,
+        face: Face,
     },
     ReadSignal {
         face: Face,
         register: RegisterId,
-        success: ScriptLabel,
-    },
-    ReadSignalBlock {
-        faces: Box<[Face]>,
-        register: RegisterId,
+        result: FallibleInstructionResult,
     },
     ReadLogic {
         face: Face,
         register: RegisterId,
-        success: ScriptLabel,
+        result: FallibleInstructionResult,
     },
     WriteSignal {
         face: Face,
@@ -881,13 +873,13 @@ pub enum MachineInstrution {
     MoveItem {
         from_view: usize,
         to_view: usize,
-        success: ScriptLabel,
+        result: FallibleInstructionResult,
     },
     Craft {
         recipes: KeyGroup<RecipeData>,
         view: usize,
         speed: f32,
-        success: ScriptLabel,
+        result: FallibleInstructionResult,
     },
     PlayAnimation {
         animation: String,
@@ -932,7 +924,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                 MachineInstrution::ReadLogic {
                     face: parse_face(arguments[0])?,
                     register: arguments[1].parse().unwrap(),
-                    success: parse_context.parse_label(arguments[2])?,
+                    result: parse_context.parse_result(arguments[2])?,
                 }
             }
             "read_signal" => {
@@ -940,18 +932,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                 MachineInstrution::ReadSignal {
                     face: parse_face(arguments[0])?,
                     register: arguments[1].parse().unwrap(),
-                    success: parse_context.parse_label(arguments[2])?,
-                }
-            }
-            "read_signal_block" => {
-                expect_argument_count(parse_context, arguments, 2)?;
-
-                MachineInstrution::ReadSignalBlock {
-                    faces: arguments[0]
-                        .split(",")
-                        .map(|face| parse_face(face).unwrap())
-                        .collect(),
-                    register: arguments[1].parse().unwrap(),
+                    result: parse_context.parse_result(arguments[2])?,
                 }
             }
             "write_logic" => {
@@ -971,9 +952,7 @@ impl ExternalScriptByteCode for MachineInstrution {
             "add_observer" => {
                 expect_argument_count(parse_context, arguments, 1)?;
                 let face = parse_face(arguments[0])?;
-                MachineInstrution::AddWakeupObserver {
-                    other: face.get_block_offset(),
-                }
+                MachineInstrution::AddWakeupObserver { face }
             }
             "transfer_pull" | "transfer_push" => {
                 expect_argument_count(parse_context, arguments, 3)?;
@@ -985,19 +964,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                         "transfer_push" => false,
                         _ => unreachable!(),
                     },
-                    success: parse_context.parse_label(arguments[2]).unwrap(),
-                }
-            }
-            "transfer_pull_block" | "transfer_push_block" => {
-                expect_argument_count(parse_context, arguments, 2)?;
-                MachineInstrution::TranferItemBlock {
-                    self_view: arguments[0].parse().unwrap(),
-                    face: parse_face(arguments[1])?,
-                    pull: match opcode {
-                        "transfer_pull_block" => true,
-                        "transfer_push_block" => false,
-                        _ => unreachable!(),
-                    },
+                    result: parse_context.parse_result(arguments[2]).unwrap(),
                 }
             }
             "get_item_count" => {
@@ -1018,7 +985,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                 MachineInstrution::MoveItem {
                     from_view: arguments[0].parse().unwrap(),
                     to_view: arguments[1].parse().unwrap(),
-                    success: parse_context.parse_label(arguments[2]).unwrap(),
+                    result: parse_context.parse_result(arguments[2]).unwrap(),
                 }
             }
             "craft" => {
@@ -1027,7 +994,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                     recipes: KeyGroup::parse(arguments[0]).unwrap(),
                     view: arguments[1].parse().unwrap(),
                     speed: arguments[2].parse().unwrap(),
-                    success: parse_context.parse_label(arguments[3]).unwrap(),
+                    result: parse_context.parse_result(arguments[3]).unwrap(),
                 }
             }
             "play_animation" => {

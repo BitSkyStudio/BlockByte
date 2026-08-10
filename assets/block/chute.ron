@@ -19,7 +19,7 @@
         script: "
         wait_for_items 0
         sleep 1
-        transfer_push_block 0 down
+        transfer_push 0 down wait
         ",
         script_views: [
             [(slot:0)]

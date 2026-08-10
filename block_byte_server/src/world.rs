@@ -10,8 +10,8 @@ use block_byte_common::{
     EntityAction, EntityPose, EntityResearchProgress, EntityStats, HitTimer, InternString,
     LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
     coord::{
-        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, HorizontalFace,
-        Pos, Ray,
+        self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, FaceSet,
+        HorizontalFace, Pos, Ray,
     },
     net::{NetworkMessageS2C, PropertyModifyMode},
     registry::{
@@ -229,8 +229,9 @@ pub fn tick_chunk(world: &WorldAccess) {
                         .wakeup_component::<BlockMachine>(block_position)
                         .unwrap();
                     if inventory_updated {
-                        for to_wakeup in machine.inventory_observers.drain(..) {
-                            let (target_chunk, target_offset) = to_wakeup.to_chunk_pos_offset();
+                        for face in machine.inventory_observers.iter_set() {
+                            let (target_chunk, target_offset) =
+                                (face.get_block_offset() + block_position).to_chunk_pos_offset();
                             world
                                 .schedule_event(
                                     target_chunk,
@@ -241,6 +242,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                 )
                                 .unwrap();
                         }
+                        machine.inventory_observers = FaceSet::default();
                     }
                 }
             }
@@ -1201,7 +1203,7 @@ pub struct BlockMachine {
     pub inventory: Inventory,
     pub script_state: ScriptState,
     pub logic_state: FaceMap<Option<ScriptValue>>,
-    pub inventory_observers: SmallVec<[BlockPos; 1]>,
+    pub inventory_observers: FaceSet,
     pub current_animation: u16,
     pub animation_start_time: u64,
 }
@@ -1214,7 +1216,7 @@ impl BlockMachine {
                 BlockMachineFace::LogicOutput => Some(0),
                 _ => None,
             }),
-            inventory_observers: SmallVec::new(),
+            inventory_observers: FaceSet::default(),
             current_animation: 0,
             animation_start_time: ticks_passed,
         }
@@ -1226,24 +1228,24 @@ impl BlockMachine {
         machine_data: &BlockMachineData,
         world: &WorldAccess,
     ) -> MachineRunResult {
-        let mut result = MachineRunResult::Continue;
+        let mut run_result = MachineRunResult::Block;
         match self.script_state.run(
             &machine_data.script,
             |state, instruction| match instruction {
-                MachineInstrution::Yield => CallbackResult::Suspend,
+                MachineInstrution::Yield => {
+                    run_result = MachineRunResult::Continue;
+                    CallbackResult::Suspend
+                }
                 MachineInstrution::Sleep { time } => {
-                    result = MachineRunResult::Sleep(time_to_ticks(*time));
+                    run_result = MachineRunResult::Sleep(time_to_ticks(*time));
                     CallbackResult::Suspend
                 }
-                MachineInstrution::Block => {
-                    result = MachineRunResult::Block;
-                    CallbackResult::Suspend
-                }
+                MachineInstrution::Block => CallbackResult::Suspend,
                 MachineInstrution::TranferItem {
                     self_view: view,
                     face,
                     pull,
-                    success,
+                    result,
                 } => {
                     let push_offset = face.get_block_offset();
                     let other_face = face.opposite();
@@ -1251,7 +1253,7 @@ impl BlockMachine {
                     let target_position =
                         block_position + block.rotation.rotate_block_pos(push_offset);
                     let Some(target_block) = world.get_block(target_position) else {
-                        return CallbackResult::Continue;
+                        return result.fail();
                     };
                     let target_block_data = target_block.block.data();
                     if let Some(target_machine_data) = &target_block_data.machine {
@@ -1292,133 +1294,58 @@ impl BlockMachine {
                                             if item.count == 0 {
                                                 first_inventory.set_slot_raw(slot.slot, None);
                                             }
-                                            state.pc = *success;
-                                            return CallbackResult::Continue;
+                                            self.inventory.modified = true;
+                                            return result.succeed();
                                         }
                                     }
+                                }
+                                match result.fail() {
+                                    CallbackResult::Wait => {
+                                        target_machine
+                                            .inventory_observers
+                                            .set(face.opposite(), true);
+                                        return CallbackResult::Wait;
+                                    }
+                                    result => return result,
                                 }
                             }
                             _ => {}
                         }
                     }
-                    CallbackResult::Continue
-                }
-                MachineInstrution::TranferItemBlock {
-                    self_view: view,
-                    face,
-                    pull,
-                } => {
-                    let push_offset = face.get_block_offset();
-                    let other_face = face.opposite();
-                    let view = &machine_data.script_views[*view];
-                    let target_position =
-                        block_position + block.rotation.rotate_block_pos(push_offset);
-                    if let Some(target_block) = world.get_block(target_position) {
-                        let target_block_data = target_block.block.data();
-                        if let Some(target_machine_data) = &target_block_data.machine {
-                            let mut target_machine = world
-                                .get_block_component::<BlockMachine>(target_position)
-                                .unwrap();
-                            let face_rotated = target_block
-                                .rotation
-                                .inverse_rotate_face(block.rotation.rotate_face(other_face));
-                            let face_data = target_machine_data.faces.by_face(face_rotated);
-                            match face_data {
-                                BlockMachineFace::InventoryAccess { input, output } => {
-                                    let other_view = if *pull { output } else { input };
-                                    let mut first_inventory = &mut self.inventory;
-                                    let mut second_inventory = &mut target_machine.inventory;
-                                    if *pull {
-                                        std::mem::swap(&mut first_inventory, &mut second_inventory);
-                                    }
-                                    for slot in &view.slots {
-                                        if let Some(item) =
-                                            first_inventory.get_slot_mut_raw(slot.slot)
-                                        {
-                                            if second_inventory
-                                                .add_item(other_view, item.copy(1))
-                                                .is_none()
-                                            {
-                                                let (target_chunk, target_offset) =
-                                                    target_position.to_chunk_pos_offset();
-                                                world
-                                                    .schedule_event(
-                                                        target_chunk,
-                                                        WorldEvent::BlockWakeup {
-                                                            block: target_offset,
-                                                            inventory_updated: true,
-                                                        },
-                                                    )
-                                                    .unwrap();
-                                                item.count -= 1;
-                                                if item.count == 0 {
-                                                    first_inventory.set_slot_raw(slot.slot, None);
-                                                }
-                                                return CallbackResult::Continue;
-                                            }
-                                        }
-                                    }
-                                    target_machine.inventory_observers.push(block_position);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    result = MachineRunResult::Block;
-                    CallbackResult::Wait
+                    result.fail()
                 }
                 MachineInstrution::ReadSignal {
                     face,
                     register,
-                    success,
-                } => {
-                    match self.logic_state.by_face_mut(*face).take() {
-                        Some(value) => {
-                            state.registers[*register] = value;
-                            state.pc = *success;
-                        }
-                        None => {}
+                    result,
+                } => match self.logic_state.by_face_mut(*face).take() {
+                    Some(value) => {
+                        state.registers[*register] = value;
+                        result.succeed()
                     }
-                    CallbackResult::Continue
-                }
-                MachineInstrution::ReadSignalBlock { faces, register } => {
-                    for face in faces {
-                        match self.logic_state.by_face_mut(*face).take() {
-                            Some(value) => {
-                                state.registers[*register] = value;
-                                return CallbackResult::Continue;
-                            }
-                            None => {}
-                        }
-                    }
-                    result = MachineRunResult::Block;
-                    CallbackResult::Wait
-                }
-                MachineInstrution::AddWakeupObserver { other } => {
-                    let target_position = block_position + block.rotation.rotate_block_pos(*other);
+                    None => result.fail(),
+                },
+                MachineInstrution::AddWakeupObserver { face } => {
+                    let target_position = block_position + face.get_block_offset();
                     let Some(mut other_machine) =
                         world.get_block_component::<BlockMachine>(target_position)
                     else {
                         return CallbackResult::Continue;
                     };
-                    other_machine.inventory_observers.push(block_position);
+                    other_machine.inventory_observers.set(face.opposite(), true);
                     CallbackResult::Continue
                 }
                 MachineInstrution::ReadLogic {
                     face,
                     register,
-                    success,
-                } => {
-                    match self.logic_state.by_face(*face) {
-                        Some(value) => {
-                            state.registers[*register] = *value;
-                            state.pc = *success;
-                        }
-                        None => {}
+                    result,
+                } => match self.logic_state.by_face(*face) {
+                    Some(value) => {
+                        state.registers[*register] = *value;
+                        result.succeed()
                     }
-
-                    CallbackResult::Continue
-                }
+                    None => result.fail(),
+                },
                 MachineInstrution::WriteSignal { face, value } => {
                     let value = state.resolve_value(value);
                     let world_face = block.rotation.rotate_face(*face);
@@ -1478,13 +1405,13 @@ impl BlockMachine {
                             return CallbackResult::Continue;
                         }
                     }
-                    result = MachineRunResult::Block;
+                    run_result = MachineRunResult::Block;
                     CallbackResult::Wait
                 }
                 MachineInstrution::MoveItem {
                     from_view,
                     to_view,
-                    success,
+                    result,
                 } => {
                     let from_view = &machine_data.script_views[*from_view];
                     let to_view = &machine_data.script_views[*to_view];
@@ -1502,18 +1429,18 @@ impl BlockMachine {
                                 if item.count == 0 {
                                     self.inventory.set_slot_raw(slot.slot, None);
                                 }
-                                state.pc = *success;
-                                break;
+                                self.inventory.modified = true;
+                                return result.succeed();
                             }
                         }
                     }
-                    CallbackResult::Continue
+                    result.fail()
                 }
                 MachineInstrution::Craft {
                     recipes,
                     view,
                     speed,
-                    success,
+                    result,
                 } => {
                     let view = &machine_data.script_views[*view];
                     for recipe in recipes.list() {
@@ -1537,11 +1464,12 @@ impl BlockMachine {
                         ) {
                             self.inventory.add_item(view, output);
                         }
-                        result = MachineRunResult::Sleep(time_to_ticks(recipe.craft_time * speed));
-                        state.pc = *success;
+                        self.inventory.modified = true;
+                        run_result =
+                            MachineRunResult::Sleep(time_to_ticks(recipe.craft_time * speed));
                         return CallbackResult::Suspend;
                     }
-                    CallbackResult::Continue
+                    result.fail()
                 }
                 MachineInstrution::PlayAnimation { animation } => {
                     self.current_animation = machine_data
@@ -1560,7 +1488,23 @@ impl BlockMachine {
                 println!("timed out");
             }
         }
-        result
+        if self.inventory.modified {
+            for face in self.inventory_observers.iter_set() {
+                let (target_chunk, target_offset) =
+                    (face.get_block_offset() + block_position).to_chunk_pos_offset();
+                world
+                    .schedule_event(
+                        target_chunk,
+                        WorldEvent::BlockWakeup {
+                            block: target_offset,
+                            inventory_updated: false,
+                        },
+                    )
+                    .unwrap();
+            }
+            self.inventory_observers = FaceSet::default();
+        }
+        run_result
     }
     pub fn modify_property(
         &mut self,
