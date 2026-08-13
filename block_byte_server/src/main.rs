@@ -742,10 +742,8 @@ impl User {
                 })
             }
         }
-        struct InventoryList<'a, const N: usize>(
-            SmallVec<[(&'a mut Inventory, &'a InventoryView); N]>,
-        );
-        impl<const N: usize> InventoryList<'_, N> {
+        struct InventoryList<'a>(SmallVec<[(&'a mut Inventory, &'a InventoryView); 4]>);
+        impl InventoryList<'_> {
             fn add_item(&mut self, mut item: ItemStack) -> Option<ItemStack> {
                 for (inv, view) in &mut self.0 {
                     match inv.add_item(view, item) {
@@ -1339,7 +1337,7 @@ impl User {
                         continue;
                     };
                     let mut provided = ProvidedInventory::lock(world, &screen.provider);
-                    let mut list: InventoryList<'_, 2> = InventoryList(smallvec::smallvec![(
+                    let mut list: InventoryList = InventoryList(smallvec::smallvec![(
                         &mut entity.inventory,
                         entity_data.pickup_view()
                     ),]);
@@ -1458,7 +1456,7 @@ impl User {
                         continue;
                     };
                     let mut provided = ProvidedInventory::lock(world, &screen.provider);
-                    let mut list: InventoryList<'_, 2> = InventoryList(smallvec::smallvec![(
+                    let mut list: InventoryList = InventoryList(smallvec::smallvec![(
                         &mut entity.inventory,
                         entity_data.pickup_view()
                     ),]);
