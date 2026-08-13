@@ -614,40 +614,35 @@ impl GameScreen for ClientGame {
                     RayCastResult::Block(position, face, hit_position) => {
                         let block = self.get_block(position).unwrap();
                         let block = block.block.data();
-                        for _ in 0..5 {
-                            match &block.render_data {
-                                BlockRenderData::Air => {}
-                                BlockRenderData::Full { faces, .. } => {
-                                    let texture = faces.by_face(face).tex_coords(0);
-                                    let mut cc = CharacterController::new();
-                                    cc.velocity = face.get_offset();
-                                    for i in
-                                        [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z]
-                                    {
-                                        if *i == 0. {
-                                            *i = rng().random::<f32>() * 2. - 1.;
-                                        }
+                        if let Some(texture) = &block.break_particle_texture {
+                            for _ in 0..5 {
+                                let mut cc = CharacterController::new();
+                                cc.velocity = face.get_offset();
+                                for i in
+                                    [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z]
+                                {
+                                    if *i == 0. {
+                                        *i = rng().random::<f32>() * 2. - 1.;
                                     }
-                                    cc.velocity = cc.velocity.normalize() * 5.;
-                                    let tx = rng().next_u32() % 15;
-                                    let ty = rng().next_u32() % 15;
-                                    self.particles.push(Particle {
-                                        position: hit_position + face.get_offset() * 0.1,
-                                        controller: cc,
-                                        size: UIPos {
-                                            x: 2. / 16.,
-                                            y: 2. / 16.,
-                                        },
-                                        texture: texture.map_sub(TexCoords {
-                                            u1: tx as f32 / 16.,
-                                            v1: ty as f32 / 16.,
-                                            u2: (tx + 2) as f32 / 16.,
-                                            v2: (ty + 2) as f32 / 16.,
-                                        }),
-                                        lifetime: 0.2,
-                                    });
                                 }
-                                BlockRenderData::Model { .. } => {}
+                                cc.velocity = cc.velocity.normalize() * 5.;
+                                let tx = rng().next_u32() % 15;
+                                let ty = rng().next_u32() % 15;
+                                self.particles.push(Particle {
+                                    position: hit_position + face.get_offset() * 0.1,
+                                    controller: cc,
+                                    size: UIPos {
+                                        x: 2. / 16.,
+                                        y: 2. / 16.,
+                                    },
+                                    texture: texture.tex_coords().map_sub(TexCoords {
+                                        u1: tx as f32 / 16.,
+                                        v1: ty as f32 / 16.,
+                                        u2: (tx + 2) as f32 / 16.,
+                                        v2: (ty + 2) as f32 / 16.,
+                                    }),
+                                    lifetime: 0.2,
+                                });
                             }
                         }
                         self.send_message(NetworkMessageC2S::AttackBlock { position, face });

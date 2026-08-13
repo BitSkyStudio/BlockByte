@@ -713,8 +713,11 @@ impl FaceSet {
     pub fn get(&self, face: Face) -> bool {
         (self.0 >> (face as usize)) & 1 != 0
     }
-    pub fn iter_set(&self) -> impl Iterator<Item = Face> {
-        Face::all().into_iter().filter(|face| self.get(*face))
+    pub fn iter_set(self) -> impl Iterator<Item = Face> {
+        Face::all().into_iter().filter(move |face| self.get(*face))
+    }
+    pub fn clear(&mut self) {
+        self.0 = 0;
     }
 }
 #[derive(Clone, Copy)]

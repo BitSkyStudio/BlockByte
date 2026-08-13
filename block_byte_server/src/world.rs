@@ -242,7 +242,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                                 )
                                 .unwrap();
                         }
-                        machine.inventory_observers = FaceSet::default();
+                        machine.inventory_observers.clear();
                     }
                 }
             }
@@ -1485,7 +1485,7 @@ impl BlockMachine {
         ) {
             RunResult::Suspended => {}
             RunResult::TimedOut => {
-                println!("timed out");
+                println!("timed out {:?} {}", block_position, block.block.text_id());
             }
         }
         if self.inventory.modified {
@@ -1502,7 +1502,7 @@ impl BlockMachine {
                     )
                     .unwrap();
             }
-            self.inventory_observers = FaceSet::default();
+            self.inventory_observers.clear();
         }
         run_result
     }

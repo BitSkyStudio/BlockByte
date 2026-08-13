@@ -619,6 +619,8 @@ pub struct BlockData {
     pub hanging: Option<Face>,
     #[serde(default = "default_supporting_map")]
     pub supporting: FaceMap<bool>,
+    #[serde(default)]
+    pub break_particle_texture: Option<TextureKey>,
 }
 #[derive(Deserialize)]
 pub struct BlockRenderConnection {
@@ -670,6 +672,15 @@ impl RegistryRonConfigLoadable for BlockData {
                 }
             }
             _ => {}
+        }
+        if self.break_particle_texture.is_none() {
+            match &self.render_data {
+                BlockRenderData::Air => {}
+                BlockRenderData::Full { faces, .. } => {
+                    self.break_particle_texture = Some(faces.front.list()[0]);
+                }
+                BlockRenderData::Model { .. } => {}
+            }
         }
     }
 }
@@ -1372,6 +1383,8 @@ pub struct EntityData {
     #[serde(default)]
     pub base_stats: EntityStats,
     pub loot_table: OwnOrKey<LootTableData>,
+    #[serde(default)]
+    pub break_particle_texture: Option<TextureKey>,
     #[serde(skip_deserializing, default)]
     pickup_view_cache: Option<InventoryView>,
     #[serde(skip_deserializing, default)]
