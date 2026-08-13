@@ -373,7 +373,7 @@ impl EntityStats {
         GRAVITY_ACCELERATION * t
     }
 }
-create_entity_stats!(strength: 100., speed: 100., haste: 100., evasion: 0., vitality: 100., regen: 5., mana: 100., mana_regen: 5., stamina: 100., stamina_regen: 10., vulnerability: 100., jump_height: 1.3, armor: 0., flight: 0.);
+create_entity_stats!(strength: 100., speed: 100., haste: 100., evasion: 0., vitality: 100., regen: 1., mana: 100., mana_regen: 5., stamina: 100., stamina_regen: 10., vulnerability: 100., jump_height: 1.3, armor: 0., flight: 0.);
 
 #[derive(Serialize, Deserialize)]
 pub struct CharacterController {

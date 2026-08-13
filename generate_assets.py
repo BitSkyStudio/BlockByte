@@ -29,7 +29,7 @@ wood_types = [
     {"woodType": "pine", "barkColor": "4d381e", "woodColor": "8a602c"},
 ]
 for data in wood_types:
-    generate("bb:wood_type", data)
+    generate("bb_wood_type", data)
 generate_tag("#sticks", ["wood." + data["woodType"] + ".stick" for data in wood_types])
 
 rock_types = [
@@ -47,13 +47,13 @@ rock_types = [
     {"rockType": "claystone", "rockColor": "716b5c"},
 ]
 for data in rock_types:
-    generate("bb:rock_type", data)
+    generate("bb_rock_type", data)
 
 ore_types = [{"oreType": "magnetite", "oreColor": "646464"}]
 for ore_data in ore_types:
     break
-    generate("bb:ore_type", ore_data)
+    generate("bb_ore_type", ore_data)
     for rock_data in rock_types:
         data = dict(ore_data)
         data.update(rock_data)
-        generate("bb:rock_ore", data)
+        generate("bb_rock_ore", data)
