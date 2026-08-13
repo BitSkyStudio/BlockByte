@@ -465,7 +465,7 @@ impl Inventory {
         self.modified = true;
         let stack_size = item.item.data().stack_size;
         for slot_index in &view.slots {
-            if !slot_index.input {
+            if !slot_index.mode.is_input() {
                 continue;
             }
             let slot = &mut self.items[slot_index.slot];
@@ -482,7 +482,7 @@ impl Inventory {
             }
         }
         for slot_index in &view.slots {
-            if !slot_index.input {
+            if !slot_index.mode.is_input() {
                 continue;
             }
             if let Some(filter) = &slot_index.filter {
@@ -515,7 +515,7 @@ impl Inventory {
     ) -> ItemCount {
         let mut count = 0;
         for slot in &view.slots {
-            if !slot.output {
+            if !slot.mode.is_output() {
                 continue;
             }
             match &self.items[slot.slot] {
@@ -537,7 +537,7 @@ impl Inventory {
     ) -> ItemCount {
         self.modified = true;
         for slot_index in &view.slots {
-            if !slot_index.output {
+            if !slot_index.mode.is_output() {
                 continue;
             }
             let slot = &mut self.items[slot_index.slot];

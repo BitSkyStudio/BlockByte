@@ -26,9 +26,7 @@
             [(slot:0)]
         ],
         faces: (
-            up: InventoryAccess(
-                input: [(slot:0, stack_size_override:1)]
-            ),
+            up: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
         )
     )),
 )

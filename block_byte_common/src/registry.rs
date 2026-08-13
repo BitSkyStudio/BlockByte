@@ -653,10 +653,7 @@ impl RegistryRonConfigLoadable for BlockData {
                 if let Some(machine) = self.machine.as_mut() {
                     for face in Face::all() {
                         let connector = match machine.faces.by_face(face) {
-                            BlockMachineFace::InventoryAccess {
-                                input: _,
-                                output: _,
-                            } => Some("inventory"),
+                            BlockMachineFace::InventoryAccess(_) => Some("inventory"),
                             BlockMachineFace::LogicInput => Some("logic_input"),
                             BlockMachineFace::LogicOutput => Some("logic_output"),
                             BlockMachineFace::SignalInput => Some("signal_input"),
@@ -1026,12 +1023,7 @@ impl ExternalScriptByteCode for MachineInstrution {
 
 #[derive(Deserialize)]
 pub enum BlockMachineFace {
-    InventoryAccess {
-        #[serde(default)]
-        input: InventoryView,
-        #[serde(default)]
-        output: InventoryView,
-    },
+    InventoryAccess(InventoryView),
     LogicInput,
     LogicOutput,
     SignalInput,

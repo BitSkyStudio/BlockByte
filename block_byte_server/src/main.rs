@@ -1128,7 +1128,7 @@ impl User {
                                      dst: &mut Option<ItemStack>,
                                      src_viewslot: &ViewSlot,
                                      dst_viewslot: &ViewSlot| {
-                        if !src_viewslot.output || !dst_viewslot.input {
+                        if !src_viewslot.mode.is_output() || !dst_viewslot.mode.is_input() {
                             return;
                         }
                         if let Some(source) = src.as_mut() {
@@ -1144,10 +1144,10 @@ impl User {
                                         *src = None;
                                     }
                                 } else if mode.can_swap() {
-                                    if !(src_viewslot.input
-                                        && src_viewslot.output
-                                        && dst_viewslot.input
-                                        && dst_viewslot.output)
+                                    if !(src_viewslot.mode.is_input()
+                                        && src_viewslot.mode.is_output()
+                                        && dst_viewslot.mode.is_input()
+                                        && dst_viewslot.mode.is_output())
                                     {
                                         return;
                                     }
@@ -1274,7 +1274,7 @@ impl User {
                     } else {
                         &screen.view
                     };
-                    if !view.slots[slot.slot].output {
+                    if !view.slots[slot.slot].mode.is_output() {
                         continue;
                     }
                     let inventory = if slot.player {
@@ -1431,7 +1431,7 @@ impl User {
                     } else {
                         &screen.view
                     };
-                    if !view.slots[slot.slot].output {
+                    if !view.slots[slot.slot].mode.is_output() {
                         continue;
                     }
                     let inventory = if slot.player {

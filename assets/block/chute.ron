@@ -25,21 +25,11 @@
             [(slot:0)]
         ],
         faces: (
-            back: InventoryAccess(
-                input: [(slot:0, stack_size_override:1)]
-            ),
-            front: InventoryAccess(
-                input: [(slot:0, stack_size_override:1)]
-            ),
-            left: InventoryAccess(
-                input: [(slot:0, stack_size_override:1)]
-            ),
-            right: InventoryAccess(
-                input: [(slot:0, stack_size_override:1)]
-            ),
-            up: InventoryAccess(
-                input: [(slot:0, stack_size_override:1)]
-            ),
+            back: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
+            front: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
+            left: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
+            right: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
+            up: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
         )
     )),
 )

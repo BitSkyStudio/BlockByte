@@ -12,7 +12,6 @@ use crate::{
     coord::{AABB, BlockPos, Pos},
     registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup, ResearchKey},
 };
-use serde_default_utils::*;
 
 pub mod coord;
 pub mod model;
@@ -223,10 +222,33 @@ pub struct ViewSlot {
     pub stack_size_override: Option<u16>,
     #[serde(default)]
     pub filter: Option<KeyGroup<ItemData>>,
-    #[serde(default = "default_bool::<true>")]
-    pub input: bool,
-    #[serde(default = "default_bool::<true>")]
-    pub output: bool,
+    #[serde(default)]
+    pub mode: ViewSlotMode,
+}
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub enum ViewSlotMode {
+    Input,
+    Output,
+    Both,
+}
+impl Default for ViewSlotMode {
+    fn default() -> Self {
+        ViewSlotMode::Both
+    }
+}
+impl ViewSlotMode {
+    pub fn is_input(self) -> bool {
+        match self {
+            ViewSlotMode::Input | ViewSlotMode::Both => true,
+            ViewSlotMode::Output => false,
+        }
+    }
+    pub fn is_output(self) -> bool {
+        match self {
+            ViewSlotMode::Output | ViewSlotMode::Both => true,
+            ViewSlotMode::Input => false,
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -241,8 +263,7 @@ impl InventoryView {
                     slot,
                     stack_size_override: None,
                     filter: None,
-                    input: true,
-                    output: true,
+                    mode: ViewSlotMode::Both,
                 })
                 .collect(),
         }

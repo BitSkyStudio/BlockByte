@@ -1265,8 +1265,7 @@ impl BlockMachine {
                             .inverse_rotate_face(block.rotation.rotate_face(other_face));
                         let face_data = target_machine_data.faces.by_face(face_rotated);
                         match face_data {
-                            BlockMachineFace::InventoryAccess { input, output } => {
-                                let other_view = if *pull { output } else { input };
+                            BlockMachineFace::InventoryAccess(other_view) => {
                                 let mut first_inventory = &mut self.inventory;
                                 let mut second_inventory = &mut target_machine.inventory;
                                 if *pull {
