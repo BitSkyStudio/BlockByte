@@ -5,7 +5,8 @@ bbtpl_path = shutil.which("bbtpl")
 asset_dir = os.path.join(os.getcwd(), "assets_generated")
 print("bbtpl: " + bbtpl_path)
 print("assets: " + asset_dir)
-shutil.rmtree(asset_dir)
+if os.path.exists(asset_dir):
+    shutil.rmtree(asset_dir)
 os.mkdir(asset_dir)
 
 def generate(name, params):
