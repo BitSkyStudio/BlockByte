@@ -21,8 +21,8 @@ use wgpu::{
     MemoryBudgetThresholds, Queue, RenderPass, Sampler, TextureFormat, TextureView,
     VertexBufferLayout,
 };
-use winit::dpi::PhysicalSize;
-use winit::window::Window;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::window::{CursorGrabMode, Window};
 
 pub struct RenderState {
     surface: wgpu::Surface<'static>,
@@ -439,6 +439,20 @@ impl RenderState {
 
     pub fn window(&self) -> &Window {
         &self.window
+    }
+    pub fn set_cursor_visible(&self, visible: bool) {
+        self.window().set_cursor_visible(visible);
+        let _ = self.window().set_cursor_grab(if visible {
+            CursorGrabMode::None
+        } else {
+            CursorGrabMode::Confined
+        });
+        if visible {
+            let _ = self.window().set_cursor_position(PhysicalPosition::new(
+                self.size.width / 2,
+                self.size.height / 2,
+            ));
+        }
     }
     pub fn size(&self) -> PhysicalSize<u32> {
         self.size

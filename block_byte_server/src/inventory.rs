@@ -662,6 +662,8 @@ impl LootGenerationContext {
             LootModifierNumber::VarOr(variable, default) => {
                 self.variables.get(variable).cloned().unwrap_or(*default)
             }
+            LootModifierNumber::Neg(value) => -self.generate_number(value),
+            LootModifierNumber::Inv(value) => 1. / self.generate_number(value),
         }
     }
     pub fn generate_number_const(&self, number: &LootModifierNumber) -> f32 {
@@ -682,6 +684,8 @@ impl LootGenerationContext {
             LootModifierNumber::VarOr(variable, default) => {
                 self.variables.get(variable).cloned().unwrap_or(*default)
             }
+            LootModifierNumber::Neg(value) => -self.generate_number_const(value),
+            LootModifierNumber::Inv(value) => 1. / self.generate_number_const(value),
         }
     }
 }

@@ -49,6 +49,7 @@ fn main() {
 }
 
 trait GameScreen {
+    fn start(&mut self, renderer: &mut RenderState);
     fn render(
         &mut self,
         input: &InputManager,
@@ -56,7 +57,7 @@ trait GameScreen {
         dt: f32,
         screen_transition: &mut Option<Box<dyn GameScreen>>,
     );
-    fn exit(&mut self);
+    fn exit(&mut self, renderer: &mut RenderState);
 }
 
 struct App {
@@ -76,8 +77,6 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        let _ = window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
-        window.set_cursor_visible(false);
         window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         self.render_state = Some(pollster::block_on(RenderState::new(
             window,
@@ -115,7 +114,7 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                self.screen.exit();
+                self.screen.exit(self.render_state.as_mut().unwrap());
                 event_loop.exit();
             }
             WindowEvent::CursorMoved {
@@ -185,7 +184,9 @@ impl ApplicationHandler for App {
                     .render(&self.input, render_state, dt, &mut screen_transition);
 
                 if let Some(screen_transition) = screen_transition {
+                    self.screen.exit(render_state);
                     self.screen = screen_transition;
+                    self.screen.start(render_state);
                 }
 
                 self.render_state
@@ -328,9 +329,10 @@ impl GameScreen for ConnectionScreen {
             }
         }
     }
-    fn exit(&mut self) {
+    fn exit(&mut self, renderer: &mut RenderState) {
         if let Some(connection) = &self.connection {
             *connection.state.lock() = ClientConnectionState::Disconnect;
         }
     }
+    fn start(&mut self, _renderer: &mut RenderState) {}
 }

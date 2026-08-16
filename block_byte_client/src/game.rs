@@ -38,7 +38,7 @@ use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use smallvec::SmallVec;
 use uuid::Uuid;
 use wgpu::{CommandEncoder, Device, Queue, util::StagingBelt};
-use winit::{dpi::PhysicalPosition, event::MouseButton, keyboard::KeyCode};
+use winit::{event::MouseButton, keyboard::KeyCode};
 
 use crate::{
     InputManager,
@@ -276,6 +276,9 @@ pub struct ClientGame {
     pub particles: Vec<Particle>,
 }
 impl GameScreen for ClientGame {
+    fn start(&mut self, renderer: &mut RenderState) {
+        renderer.set_cursor_visible(false);
+    }
     fn render(
         &mut self,
         input: &crate::InputManager,
@@ -733,8 +736,9 @@ impl GameScreen for ClientGame {
         }
         ps.end();
     }
-    fn exit(&mut self) {
+    fn exit(&mut self, renderer: &mut RenderState) {
         *self.connection.state.lock() = ClientConnectionState::Disconnect;
+        renderer.set_cursor_visible(true);
     }
 }
 impl ClientGame {
@@ -1047,12 +1051,7 @@ impl ClientGame {
                         element_data: HashMap::new(),
                         time: 0.,
                     });
-                    renderer.window().set_cursor_visible(true);
-                    let size = renderer.size();
-                    let _ = renderer.window().set_cursor_position(PhysicalPosition::new(
-                        size.width / 2,
-                        size.height / 2,
-                    ));
+                    renderer.set_cursor_visible(true);
                 }
                 NetworkMessageS2C::UISetSlot { slot, item } => {
                     if let Some(screen) = &mut self.screen {
@@ -1067,7 +1066,7 @@ impl ClientGame {
                 }
                 NetworkMessageS2C::UIClose => {
                     self.screen = None;
-                    renderer.window().set_cursor_visible(false);
+                    renderer.set_cursor_visible(false);
                 }
                 NetworkMessageS2C::PlayerSetSlot { slot, item } => {
                     if slot >= self.player_inventory.len() {

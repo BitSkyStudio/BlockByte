@@ -1590,6 +1590,8 @@ pub enum LootModifierNumber {
     Num(f32),
     Add(Box<LootModifierNumber>, Box<LootModifierNumber>),
     Mul(Box<LootModifierNumber>, Box<LootModifierNumber>),
+    Neg(Box<LootModifierNumber>),
+    Inv(Box<LootModifierNumber>),
     Var(InternString),
     VarOr(InternString, f32),
     Random(f32, f32),
