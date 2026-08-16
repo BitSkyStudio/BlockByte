@@ -12,5 +12,5 @@
             )
         ]
     )),
-    craft_time: 5,
+    craft_time: Num(5),
 )

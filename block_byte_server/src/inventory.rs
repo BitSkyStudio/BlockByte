@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use block_byte_common::{
-    ClientItem, EntityStats, InternString, InventoryView, ViewSlot, WeightProvider, WeightedList,
+    ClientItem, EntityStats, InternString, InventoryView, LinearMap, PassiveAbility, ViewSlot,
+    WeightProvider, WeightedList,
     registry::{
         ItemData, ItemKey, KeyGroup, LootItemModifier, LootModifierNumber, LootTableData,
         LootTableEntry,
@@ -360,7 +359,7 @@ impl ItemComponentManipulation for ItemQuality {
         format!("Quality: {:?}", self)
     }
 }
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ItemCraftStats(pub Box<EntityStats>);
 impl ItemComponentManipulation for ItemCraftStats {
     fn merge(&self, _other: &Self) -> Option<Self> {
@@ -374,9 +373,7 @@ impl ItemComponentManipulation for ItemCraftStats {
     }
 }
 #[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
-pub enum ItemComponentPassiveAbility {
-    Flame,
-}
+pub struct ItemComponentPassiveAbility(pub PassiveAbility);
 impl ItemComponentManipulation for ItemComponentPassiveAbility {
     fn merge(&self, _other: &Self) -> Option<Self> {
         None
@@ -611,6 +608,23 @@ pub fn generate_loot_table(
                         //todo: randomness
                         item.components.set_component(ItemQuality::Good);
                     }
+                    LootItemModifier::ApplyStats { stat, add, mul } => {
+                        let stat_component = item
+                            .components
+                            .get_or_init_component(|| ItemCraftStats::default());
+                        let (stat_add, stat_mul) = stat_component.0.get_pair_mut(*stat);
+                        *stat_add += context.generate_number(add);
+                        *stat_mul *= context.generate_number(mul);
+                    }
+                    LootItemModifier::AddPassive { passive, chance } => {
+                        if context
+                            .rng
+                            .random_bool(context.generate_number_const(chance) as f64)
+                        {
+                            item.components
+                                .set_component(ItemComponentPassiveAbility(*passive));
+                        }
+                    }
                 }
             }
             if item.count > 0 {
@@ -623,13 +637,13 @@ pub fn generate_loot_table(
 
 pub struct LootGenerationContext {
     rng: Xoshiro256PlusPlus,
-    pub variables: HashMap<InternString, f32>,
+    pub variables: LinearMap<InternString, f32>,
 }
 impl LootGenerationContext {
     pub fn new(seed: u64) -> LootGenerationContext {
         LootGenerationContext {
             rng: Xoshiro256PlusPlus::seed_from_u64(seed),
-            variables: HashMap::new(),
+            variables: LinearMap::default(),
         }
     }
     pub fn generate_number(&mut self, number: &LootModifierNumber) -> f32 {
@@ -644,6 +658,9 @@ impl LootGenerationContext {
             }
             LootModifierNumber::Var(variable) => {
                 self.variables.get(variable).cloned().unwrap_or(0.)
+            }
+            LootModifierNumber::VarOr(variable, default) => {
+                self.variables.get(variable).cloned().unwrap_or(*default)
             }
         }
     }
@@ -661,6 +678,9 @@ impl LootGenerationContext {
             }
             LootModifierNumber::Var(variable) => {
                 self.variables.get(variable).cloned().unwrap_or(0.)
+            }
+            LootModifierNumber::VarOr(variable, default) => {
+                self.variables.get(variable).cloned().unwrap_or(*default)
             }
         }
     }

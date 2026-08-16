@@ -1362,7 +1362,7 @@ impl User {
                         let mut loot_context = LootGenerationContext::new(rand::random());
                         for (catalyst, max_count, variable) in &recipe.catalysts {
                             let not_removed = list.remove_item(*catalyst, *max_count);
-                            *loot_context.variables.entry(*variable).or_default() +=
+                            *loot_context.variables.or_insert_default(*variable) +=
                                 (*max_count - not_removed) as f32;
                         }
                         for item in generate_loot_table(recipe.outputs.data(), loot_context) {

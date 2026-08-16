@@ -331,7 +331,6 @@ macro_rules! create_damage_types {
     };
 }
 create_damage_types!(Blunt, Pierce, Slash, Cut);
-
 macro_rules! create_entity_stats {
     ($($id:ident : $default_val:literal),*) => {
         fn default_mul_identity() -> f32{1.}
@@ -373,8 +372,8 @@ macro_rules! create_entity_stats {
             pub fn apply(&mut self, other: &EntityStats, quality: f32){
                 $(
                     paste::paste! {
-                    self.[<$id _add>] += other.[<$id _add>] * quality;
-                    self.[<$id _mul>] *= (other.[<$id _mul>] - 1.) * quality + 1.;
+                        self.[<$id _add>] += other.[<$id _add>] * quality;
+                        self.[<$id _mul>] *= (other.[<$id _mul>] - 1.) * quality + 1.;
                     }
                 )*
             }
@@ -383,6 +382,25 @@ macro_rules! create_entity_stats {
                     paste::paste! {($default_val + self.[<$id _add>]) * self.[<$id _mul>]}
                 }
             )*
+            pub fn get_pair_mut(&mut self, kind: StatKind) -> (&mut f32, &mut f32){
+                paste::paste! {
+                    match kind{
+                        $(
+                            StatKind::[<$id:camel>] => {
+                                (&mut self.[<$id _add>], &mut self.[<$id _mul>])
+                            }
+                        )*
+                    }
+                }
+            }
+        }
+        paste::paste! {
+            #[derive(Copy, Clone, Deserialize)]
+            pub enum StatKind{
+                $(
+                    [<$id:camel>],
+                )*
+            }
         }
     };
 }
@@ -964,4 +982,72 @@ impl EntityResearchProgress {
         };
         progress.unlocked.contains(&research)
     }
+}
+
+#[derive(Clone)]
+pub struct LinearMap<K: Eq, V>(Vec<(K, V)>);
+impl<K: Eq, V> LinearMap<K, V> {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+    pub fn insert(&mut self, key: K, mut value: V) -> Option<V> {
+        match self.0.iter_mut().find_map(|(map_key, map_value)| {
+            if *map_key == key {
+                Some(map_value)
+            } else {
+                None
+            }
+        }) {
+            Some(map_value) => {
+                std::mem::swap(map_value, &mut value);
+                Some(value)
+            }
+            None => {
+                self.0.push((key, value));
+                None
+            }
+        }
+    }
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        match self.0.iter().position(|(map_key, _)| map_key == key) {
+            Some(index) => Some(self.0.swap_remove(index).1),
+            None => None,
+        }
+    }
+    pub fn get<'a>(&'a self, key: &K) -> Option<&'a V> {
+        self.0.iter().find_map(|(map_key, map_value)| {
+            if map_key == key {
+                Some(map_value)
+            } else {
+                None
+            }
+        })
+    }
+    pub fn get_mut<'a>(&'a mut self, key: &K) -> Option<&'a mut V> {
+        self.0.iter_mut().find_map(|(map_key, map_value)| {
+            if map_key == key {
+                Some(map_value)
+            } else {
+                None
+            }
+        })
+    }
+}
+impl<K: Eq, V: Default> LinearMap<K, V> {
+    pub fn or_insert_default<'a>(&'a mut self, key: K) -> &'a mut V {
+        if let Some(index) = self.0.iter().position(|(map_key, _)| *map_key == key) {
+            return &mut self.0[index].1;
+        }
+        self.0.push((key, V::default()));
+        &mut self.0.last_mut().unwrap().1
+    }
+}
+impl<K: Eq, V> Default for LinearMap<K, V> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub enum PassiveAbility {
+    Flame,
 }

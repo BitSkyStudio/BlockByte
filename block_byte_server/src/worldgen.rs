@@ -360,7 +360,7 @@ impl WorldGenerator {
                         z: structure.z,
                     },
                     rotation: start_rotation,
-                    room: structure_data.rooms.get(&structure_data.root_room).unwrap(),
+                    room: structure_data.rooms.get(&structure_data.root_room.get_random(BiasWeightProvider(0.), &mut rng).unwrap().room).unwrap(),
                 });
                 while let Some(entry) = queue.pop_back() {
                     region.add_structure_prefab(

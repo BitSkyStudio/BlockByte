@@ -29,7 +29,7 @@ use crate::scripts::{
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
     BiasWeightProvider, Color, DamageTable, EntityPose, EntityStats, InternString, InventoryView,
-    LookDirection, WeightProvider,
+    LookDirection, PassiveAbility, StatKind, WeightProvider,
 };
 
 use serde_default_utils::*;
@@ -886,7 +886,7 @@ pub enum MachineInstrution {
     Craft {
         recipes: KeyGroup<RecipeData>,
         view: usize,
-        speed: f32,
+        process_speed_constant: f32,
         result: FallibleInstructionResult,
     },
     PlayAnimation {
@@ -1001,7 +1001,7 @@ impl ExternalScriptByteCode for MachineInstrution {
                 MachineInstrution::Craft {
                     recipes: KeyGroup::parse(arguments[0]).unwrap(),
                     view: arguments[1].parse().unwrap(),
-                    speed: arguments[2].parse().unwrap(),
+                    process_speed_constant: arguments[2].parse().unwrap(),
                     result: parse_context.parse_result(arguments[3]).unwrap(),
                 }
             }
@@ -1559,15 +1559,12 @@ pub struct LootTablePool {
     pub entries: Vec<LootTableEntry>,
     pub rolls: LootModifierNumber,
 }
-fn default_loot_modifier_weight() -> LootModifierNumber {
-    LootModifierNumber::Num(1.)
-}
 #[derive(Deserialize)]
 pub struct LootTableEntry {
     pub item: ItemKey,
     #[serde(default)]
     pub modifiers: Vec<LootItemModifier>,
-    #[serde(default = "default_loot_modifier_weight")]
+    #[serde(default = "loot_modifier_num_one")]
     pub weight: LootModifierNumber,
 }
 
@@ -1575,6 +1572,18 @@ pub struct LootTableEntry {
 pub enum LootItemModifier {
     SetCount(LootModifierNumber),
     ApplyQuality,
+    ApplyStats {
+        stat: StatKind,
+        #[serde(default = "loot_modifier_num_zero")]
+        add: LootModifierNumber,
+        #[serde(default = "loot_modifier_num_one")]
+        mul: LootModifierNumber,
+    },
+    AddPassive {
+        passive: PassiveAbility,
+        #[serde(default = "loot_modifier_num_one")]
+        chance: LootModifierNumber,
+    },
 }
 #[derive(Deserialize)]
 pub enum LootModifierNumber {
@@ -1582,7 +1591,14 @@ pub enum LootModifierNumber {
     Add(Box<LootModifierNumber>, Box<LootModifierNumber>),
     Mul(Box<LootModifierNumber>, Box<LootModifierNumber>),
     Var(InternString),
+    VarOr(InternString, f32),
     Random(f32, f32),
+}
+fn loot_modifier_num_zero() -> LootModifierNumber {
+    LootModifierNumber::Num(1.)
+}
+fn loot_modifier_num_one() -> LootModifierNumber {
+    LootModifierNumber::Num(1.)
 }
 pub struct ModelData {
     pub model: Model,
@@ -1685,8 +1701,8 @@ pub struct RecipeData {
     pub outputs: OwnOrKey<LootTableData>,
     #[serde(default)]
     pub catalysts: Vec<(KeyGroup<ItemData>, u16, InternString)>,
-    #[serde(default)]
-    pub craft_time: f32,
+    #[serde(default = "loot_modifier_num_one")]
+    pub craft_time: LootModifierNumber,
     #[serde(default)]
     pub research: Option<ResearchKey>,
     #[serde(default)]
@@ -1837,7 +1853,7 @@ pub type ResearchKey = Key<ResearchData>;
 #[derive(Deserialize)]
 pub struct WorldGenStructureData {
     pub exclusion_zone: u16,
-    pub root_room: InternString,
+    pub root_room: Vec<WorldGenStructureRoomSelection>,
     pub rooms: HashMap<InternString, WorldGenStructureRoom>,
 }
 impl RegistryRonConfigLoadable for WorldGenStructureData {}

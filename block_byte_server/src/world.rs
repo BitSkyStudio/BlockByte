@@ -8,7 +8,7 @@ use std::{
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, ActiveEffect, CharacterController, DamageTable, DamageType,
     EntityAction, EntityPose, EntityResearchProgress, EntityStats, HitTimer, InternString,
-    LookDirection, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
+    LookDirection, MoveMode, NORMAL_SPEED, PassiveAbility, SERVER_DT, SERVER_TPS,
     coord::{
         self, AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, FaceSet,
         HorizontalFace, Pos, Ray,
@@ -280,7 +280,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                     .components
                     .get_component::<ItemComponentPassiveAbility>()
                 {
-                    entity.current_passives.insert(*passive);
+                    entity.current_passives.insert(passive.0);
                 }
             };
             for equipment in &entity.key.data().equipment_view.slots {
@@ -663,7 +663,7 @@ pub struct Entity {
     #[serde(skip_serializing, skip_deserializing)]
     pub current_stats: Box<EntityStats>,
     #[serde(skip_serializing, skip_deserializing)]
-    pub current_passives: HashSet<ItemComponentPassiveAbility>,
+    pub current_passives: HashSet<PassiveAbility>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct MobBrainTarget {
@@ -1438,7 +1438,7 @@ impl BlockMachine {
                 MachineInstrution::Craft {
                     recipes,
                     view,
-                    speed,
+                    process_speed_constant,
                     result,
                 } => {
                     let view = &machine_data.script_views[*view];
@@ -1461,15 +1461,17 @@ impl BlockMachine {
                         for (catalyst, max_count, variable) in &recipe.catalysts {
                             let not_removed =
                                 self.inventory.remove_item(view, *catalyst, *max_count);
-                            *loot_context.variables.entry(*variable).or_default() +=
+                            *loot_context.variables.or_insert_default(*variable) +=
                                 (*max_count - not_removed) as f32;
                         }
+                        let craft_time = loot_context.generate_number(&recipe.craft_time);
                         for output in generate_loot_table(recipe.outputs.data(), loot_context) {
                             self.inventory.add_item(view, output);
                         }
                         self.inventory.modified = true;
-                        run_result =
-                            MachineRunResult::Sleep(time_to_ticks(recipe.craft_time * speed));
+                        run_result = MachineRunResult::Sleep(time_to_ticks(
+                            craft_time * process_speed_constant,
+                        ));
                         return CallbackResult::Suspend;
                     }
                     result.fail()

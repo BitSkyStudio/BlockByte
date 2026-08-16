@@ -1,6 +1,8 @@
 (
     exclusion_zone: 32,
-    root_room: "root",
+    root_room: [
+        (room: "root", weight: 1.),
+    ],
     rooms: {
         "root": (
             prefab: "outpost",
