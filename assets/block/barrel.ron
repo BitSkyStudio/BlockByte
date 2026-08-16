@@ -22,7 +22,7 @@
             [(slot:0)]
         ],
         faces: (
-            back: InventoryAccess([(slot:2),(slot:3)]),
+            back: Inventory([(slot:2),(slot:3)]),
         )
     )),
 )

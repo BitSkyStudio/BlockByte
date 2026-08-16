@@ -15,11 +15,11 @@
                     (
                         item: "wood.§%{woodType}.stick",
                         modifiers: [
-                            SetCount(Constant(0))
+                            SetCount(Num(0))
                         ]
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),

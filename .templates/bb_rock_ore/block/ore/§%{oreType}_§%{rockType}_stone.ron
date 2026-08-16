@@ -11,7 +11,7 @@
                 item: "ore.§%{oreType}",
                 
                 modifiers: [
-                    SetCount(Constant(1))
+                    SetCount(Num(1))
                 ]
             )
         ]

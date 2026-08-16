@@ -16,14 +16,14 @@
                 item: "rock.§%{rockType}.stone",
                 
                 modifiers: [
-                    SetCount(Constant(4))
+                    SetCount(Num(4))
                 ]
             ),
             (
                 item: "ore.§%{oreType}",
                 
                 modifiers: [
-                    SetCount(Constant(2))
+                    SetCount(Num(2))
                 ]
             )
         ]

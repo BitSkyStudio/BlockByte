@@ -17,11 +17,11 @@
                     (
                         item: "rock.§%{rockType}.brick",
                         modifiers: [
-                            SetCount(Constant(4))
+                            SetCount(Num(4))
                         ]
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),

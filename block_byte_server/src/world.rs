@@ -604,7 +604,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                         _ => {}
                     }
                 }
-                BlockMachineFace::InventoryAccess { .. } => {
+                BlockMachineFace::Inventory { .. } => {
                     let world_face = block_entry.rotation.rotate_face(face);
                     let other_position = added_machine + world_face.get_block_offset();
                     let _ = world.wakeup_component::<BlockMachine>(other_position);
@@ -838,7 +838,7 @@ impl Entity {
         if self.health <= 0. {
             let mut items = generate_loot_table(
                 entity_data.loot_table.data(),
-                &mut LootGenerationContext::new(rand::random()),
+                LootGenerationContext::new(rand::random()),
             );
             for item in self.inventory.iter_mut() {
                 if let Some(item) = item.take() {
@@ -1265,7 +1265,7 @@ impl BlockMachine {
                             .inverse_rotate_face(block.rotation.rotate_face(other_face));
                         let face_data = target_machine_data.faces.by_face(face_rotated);
                         match face_data {
-                            BlockMachineFace::InventoryAccess(other_view) => {
+                            BlockMachineFace::Inventory(other_view) => {
                                 let mut first_inventory = &mut self.inventory;
                                 let mut second_inventory = &mut target_machine.inventory;
                                 if *pull {
@@ -1457,10 +1457,14 @@ impl BlockMachine {
                         for (input, count) in &recipe.inputs {
                             self.inventory.remove_item(view, *input, *count);
                         }
-                        for output in generate_loot_table(
-                            recipe.outputs.data(),
-                            &mut LootGenerationContext::new(rand::random()),
-                        ) {
+                        let mut loot_context = LootGenerationContext::new(rand::random());
+                        for (catalyst, max_count, variable) in &recipe.catalysts {
+                            let not_removed =
+                                self.inventory.remove_item(view, *catalyst, *max_count);
+                            *loot_context.variables.entry(*variable).or_default() +=
+                                (*max_count - not_removed) as f32;
+                        }
+                        for output in generate_loot_table(recipe.outputs.data(), loot_context) {
                             self.inventory.add_item(view, output);
                         }
                         self.inventory.modified = true;
@@ -1646,7 +1650,7 @@ impl WorldAccess<'_> {
 
         let mut drops = generate_loot_table(
             block_data.loot_table.data(),
-            &mut LootGenerationContext::new(rand::random()),
+            LootGenerationContext::new(rand::random()),
         );
 
         if let Some(plant) = self.get_block_component::<BlockPlants>(position) {

@@ -1,5 +1,5 @@
 (
-    inputs: {},
+    inputs: [],
     outputs: Own((
         pools: [
             (
@@ -8,7 +8,7 @@
                         item: "dirt",
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),

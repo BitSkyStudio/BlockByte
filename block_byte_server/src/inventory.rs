@@ -572,7 +572,7 @@ impl Inventory {
         self.items.shuffle(rng);
     }
 }
-pub trait ItemMatcher {
+pub trait ItemMatcher: Copy {
     fn matches(&self, item: &ItemStack) -> bool;
 }
 impl ItemMatcher for ItemKey {
@@ -588,13 +588,13 @@ impl ItemMatcher for KeyGroup<ItemData> {
 
 pub fn generate_loot_table(
     loot_table: &LootTableData,
-    context: &mut LootGenerationContext,
+    mut context: LootGenerationContext,
 ) -> Vec<ItemStack> {
     let mut items = Vec::new();
     let mut rng = Xoshiro256PlusPlus::seed_from_u64(context.rng.next_u64());
     for pool in &loot_table.pools {
         for _ in 0..context.generate_number(&pool.rolls) as usize {
-            let Some(entry) = pool.entries.get_random(&*context, &mut rng) else {
+            let Some(entry) = pool.entries.get_random(&context, &mut rng) else {
                 continue;
             };
             let mut item = ItemStack {
@@ -623,7 +623,7 @@ pub fn generate_loot_table(
 
 pub struct LootGenerationContext {
     rng: Xoshiro256PlusPlus,
-    variables: HashMap<InternString, f32>,
+    pub variables: HashMap<InternString, f32>,
 }
 impl LootGenerationContext {
     pub fn new(seed: u64) -> LootGenerationContext {
@@ -634,7 +634,7 @@ impl LootGenerationContext {
     }
     pub fn generate_number(&mut self, number: &LootModifierNumber) -> f32 {
         match number {
-            LootModifierNumber::Constant(value) => *value,
+            LootModifierNumber::Num(value) => *value,
             LootModifierNumber::Random(min, max) => self.rng.random_range(*min..*max),
             LootModifierNumber::Add(first, second) => {
                 self.generate_number(first) + self.generate_number(second)
@@ -649,7 +649,7 @@ impl LootGenerationContext {
     }
     pub fn generate_number_const(&self, number: &LootModifierNumber) -> f32 {
         match number {
-            LootModifierNumber::Constant(value) => *value,
+            LootModifierNumber::Num(value) => *value,
             LootModifierNumber::Random(_min, _max) => {
                 panic!("attempting to use random in const lootcontext")
             }

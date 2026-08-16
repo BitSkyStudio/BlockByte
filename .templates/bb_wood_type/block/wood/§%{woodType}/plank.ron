@@ -21,11 +21,11 @@
                     (
                         item: "wood.§%{woodType}.plank",
                         modifiers: [
-                            SetCount(Constant(4))
+                            SetCount(Num(4))
                         ],
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),

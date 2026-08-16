@@ -653,7 +653,7 @@ impl RegistryRonConfigLoadable for BlockData {
                 if let Some(machine) = self.machine.as_mut() {
                     for face in Face::all() {
                         let connector = match machine.faces.by_face(face) {
-                            BlockMachineFace::InventoryAccess(_) => Some("inventory"),
+                            BlockMachineFace::Inventory(_) => Some("inventory"),
                             BlockMachineFace::LogicInput => Some("logic_input"),
                             BlockMachineFace::LogicOutput => Some("logic_output"),
                             BlockMachineFace::SignalInput => Some("signal_input"),
@@ -1023,7 +1023,7 @@ impl ExternalScriptByteCode for MachineInstrution {
 
 #[derive(Deserialize)]
 pub enum BlockMachineFace {
-    InventoryAccess(InventoryView),
+    Inventory(InventoryView),
     LogicInput,
     LogicOutput,
     SignalInput,
@@ -1560,7 +1560,7 @@ pub struct LootTablePool {
     pub rolls: LootModifierNumber,
 }
 fn default_loot_modifier_weight() -> LootModifierNumber {
-    LootModifierNumber::Constant(1.)
+    LootModifierNumber::Num(1.)
 }
 #[derive(Deserialize)]
 pub struct LootTableEntry {
@@ -1578,7 +1578,7 @@ pub enum LootItemModifier {
 }
 #[derive(Deserialize)]
 pub enum LootModifierNumber {
-    Constant(f32),
+    Num(f32),
     Add(Box<LootModifierNumber>, Box<LootModifierNumber>),
     Mul(Box<LootModifierNumber>, Box<LootModifierNumber>),
     Var(InternString),
@@ -1681,8 +1681,10 @@ impl RegistryConfigLoadable for TranslationLanguageData {
 }
 #[derive(Deserialize)]
 pub struct RecipeData {
-    pub inputs: HashMap<ItemKey, u16>,
+    pub inputs: Vec<(KeyGroup<ItemData>, u16)>,
     pub outputs: OwnOrKey<LootTableData>,
+    #[serde(default)]
+    pub catalysts: Vec<(KeyGroup<ItemData>, u16, InternString)>,
     #[serde(default)]
     pub craft_time: f32,
     #[serde(default)]

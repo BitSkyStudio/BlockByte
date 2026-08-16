@@ -9,7 +9,7 @@
                         item: "arrow",
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),

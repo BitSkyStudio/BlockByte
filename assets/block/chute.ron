@@ -9,7 +9,7 @@
                         item: "chute",
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),
@@ -25,11 +25,11 @@
             [(slot:0)]
         ],
         faces: (
-            back: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
-            front: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
-            left: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
-            right: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
-            up: InventoryAccess([(slot:0, stack_size_override:1, mode: Input)]),
+            back: Inventory([(slot:0, stack_size_override:1, mode: Input)]),
+            front: Inventory([(slot:0, stack_size_override:1, mode: Input)]),
+            left: Inventory([(slot:0, stack_size_override:1, mode: Input)]),
+            right: Inventory([(slot:0, stack_size_override:1, mode: Input)]),
+            up: Inventory([(slot:0, stack_size_override:1, mode: Input)]),
         )
     )),
 )

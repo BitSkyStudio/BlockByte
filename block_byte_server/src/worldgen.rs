@@ -736,7 +736,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                             if let Some(loot_table) = &entry.loot_table {
                                 for item in generate_loot_table(
                                     loot_table.data(),
-                                    &mut LootGenerationContext::new(rng.next_u64()),
+                                    LootGenerationContext::new(rng.next_u64()),
                                 ) {
                                     machine
                                         .inventory
@@ -757,12 +757,11 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     return;
                 }
                 let mut entity = Entity::new(entry.entity, entity_position);
-                if let Some(loot) = &entry.loot {
-                    for item in generate_loot_table(
-                        loot.0.data(),
-                        &mut LootGenerationContext::new(rng.next_u64()),
-                    ) {
-                        entity.inventory.add_item(&loot.1, item);
+                if let Some((loot, view)) = &entry.loot {
+                    for item in
+                        generate_loot_table(loot.data(), LootGenerationContext::new(rng.next_u64()))
+                    {
+                        entity.inventory.add_item(view, item);
                     }
                 }
                 chunk

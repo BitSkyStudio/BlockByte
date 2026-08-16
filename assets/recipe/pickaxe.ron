@@ -1,8 +1,8 @@
 (
-    inputs: {
-        "rock.limestone.stone": 1,
-        "wood.oak.stick": 1,
-    },
+    inputs: [
+        ("rock.limestone.stone", 1),
+        ("wood.oak.stick", 1),
+    ],
     outputs: Own((
         pools: [
             (
@@ -11,7 +11,7 @@
                         item: "pickaxe",
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),

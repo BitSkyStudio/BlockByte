@@ -583,7 +583,7 @@ fn render_element(
                                     text += format!(
                                         "\n-{}x{}",
                                         *input_count,
-                                        language().translate_key(*input_item)
+                                        language().translate_group(*input_item)
                                     )
                                     .as_str();
                                 }

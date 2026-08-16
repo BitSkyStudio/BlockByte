@@ -19,8 +19,7 @@ use block_byte_common::{
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, EntityInteractAction, EntityKey,
-        ItemAction, ItemKey, KeyGroup, PrefabBlockEntry, PrefabData, PrefabKey, air_block,
-        load_registries,
+        ItemAction, KeyGroup, PrefabBlockEntry, PrefabData, PrefabKey, air_block, load_registries,
     },
     rotation::BlockRotation,
     time_to_ticks,
@@ -37,7 +36,9 @@ use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::{
-    inventory::{Inventory, ItemCount, ItemStack, LootGenerationContext, generate_loot_table},
+    inventory::{
+        Inventory, ItemCount, ItemMatcher, ItemStack, LootGenerationContext, generate_loot_table,
+    },
     registry::Key,
     world::{
         BlockMachine, Chunk, ChunkBlocks, ChunkSaveData, Entity, WorldAccess, WorldAccessCell,
@@ -753,13 +754,13 @@ impl User {
                 }
                 Some(item)
             }
-            fn count_item(&self, item: ItemKey) -> ItemCount {
+            fn count_item(&self, item: impl ItemMatcher) -> ItemCount {
                 self.0
                     .iter()
                     .map(|(inventory, view)| inventory.count_removeable_items(view, item))
                     .sum()
             }
-            fn remove_item(&mut self, item: ItemKey, mut count: ItemCount) -> ItemCount {
+            fn remove_item(&mut self, item: impl ItemMatcher, mut count: ItemCount) -> ItemCount {
                 for (inv, view) in &mut self.0 {
                     count = inv.remove_item(view, item, count);
                     if count == 0 {
@@ -1358,10 +1359,13 @@ impl User {
                         assert_eq!(list.remove_item(*input_item, *input_count * count), 0);
                     }
                     for _ in 0..count {
-                        for item in generate_loot_table(
-                            recipe.outputs.data(),
-                            &mut LootGenerationContext::new(rand::random()),
-                        ) {
+                        let mut loot_context = LootGenerationContext::new(rand::random());
+                        for (catalyst, max_count, variable) in &recipe.catalysts {
+                            let not_removed = list.remove_item(*catalyst, *max_count);
+                            *loot_context.variables.entry(*variable).or_default() +=
+                                (*max_count - not_removed) as f32;
+                        }
+                        for item in generate_loot_table(recipe.outputs.data(), loot_context) {
                             if let Some(overflow_item) = list.add_item(item) {
                                 world.drop_items(
                                     std::iter::once(overflow_item),

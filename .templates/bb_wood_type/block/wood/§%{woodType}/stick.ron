@@ -13,7 +13,7 @@
                         item: "wood.§%{woodType}.stick",
                     ),
                 ],
-                rolls: Constant(1),
+                rolls: Num(1),
             )
         ]
     )),
