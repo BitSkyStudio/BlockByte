@@ -266,6 +266,7 @@ pub struct BlockTickList {
     pub tick_mask: Vec<u64>,
     pub ticking_count: usize,
     pub wakeup_timer: PriorityQueue<ChunkOffset, u64>,
+    pub wakeup_counter: u64,
 }
 impl BlockTickList {
     pub fn set_ticking(&mut self, id: usize, ticking: bool) {
@@ -305,12 +306,13 @@ impl BlockTickList {
         }
         self.set_ticking(last_index, false);
     }
-    pub fn process_timer(&mut self, current_ticks_passed: u64, tree: &BlockComponentTree) {
+    pub fn process_timer(&mut self, tree: &BlockComponentTree) {
+        self.wakeup_counter += 1;
         loop {
             let Some(head_timer) = self.wakeup_timer.peek().map(|(_, t)| *t) else {
                 return;
             };
-            if head_timer <= current_ticks_passed {
+            if head_timer <= self.wakeup_counter {
                 let (block, _) = self.wakeup_timer.pop().unwrap();
                 self.set_ticking(tree.get(block).unwrap() as usize, true);
             } else {
@@ -321,8 +323,9 @@ impl BlockTickList {
     pub fn has_wakeup_scheduled(&self, block: ChunkOffset) -> bool {
         self.wakeup_timer.contains(&block)
     }
-    pub fn schedule_wakeup(&mut self, block: ChunkOffset, at: u64) {
-        self.wakeup_timer.push(block, at);
+    pub fn schedule_wakeup(&mut self, block: ChunkOffset, time: u32) {
+        self.wakeup_timer
+            .push(block, self.wakeup_counter + time as u64);
     }
     pub fn get_scheduled_wakeup_in(&self, block: ChunkOffset) -> Option<u64> {
         self.wakeup_timer.get_priority(&block).cloned()

@@ -515,7 +515,7 @@ pub fn tick_chunk(world: &WorldAccess) {
             .components
             .machine;
         let mut tick_list = machine_components.tick_list.lock().unwrap();
-        tick_list.process_timer(world.ticks_passed, &machine_components.tree);
+        tick_list.process_timer(&machine_components.tree);
         let mut iteration_index = tick_list.start_index();
         while let Some(index) = tick_list.next_index(&mut iteration_index) {
             let mut machine = world.get_center_block_component_by_id::<BlockMachine>(index);
@@ -529,10 +529,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                 }
                 MachineRunResult::Sleep(time) => {
                     tick_list.set_ticking(index, false);
-                    tick_list.schedule_wakeup(
-                        block_position.to_chunk_offset(),
-                        world.ticks_passed + time as u64,
-                    );
+                    tick_list.schedule_wakeup(block_position.to_chunk_offset(), time);
                 }
             }
             if machine.animation_start_time == world.ticks_passed {
