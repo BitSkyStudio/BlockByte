@@ -630,7 +630,7 @@ impl Model {
                                     .values()
                                     .map(|face| {
                                         let texture = &model.textures[face.texture];
-                                        let vertices = face
+                                        let mut vertices = face
                                             .vertices
                                             .iter()
                                             .map(|vertex| {
@@ -646,6 +646,7 @@ impl Model {
                                                 )
                                             })
                                             .collect::<Vec<_>>();
+                                        vertices.reverse();
                                         assert_eq!(vertices.len(), 4);
                                         MeshFace {
                                             vertices,

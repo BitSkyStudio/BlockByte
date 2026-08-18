@@ -966,34 +966,36 @@ impl Entity {
                         .unwrap_or(&ToolData::HAND);
                     let reach_distance = tool.reach * 0.6;
                     //todo: eye height
-                    if target.last_seen_position.distance(entity_eye_position) <= reach_distance {
-                        if let Some(timer) = &mut brain.hit_timer {
-                            if timer.is_finished() {
-                                brain.hit_timer = None;
-                            } else if timer.tick(SERVER_DT) {
-                                let (damage_table, knockback) = compute_tool_damage_and_knockback(
-                                    hand_item,
-                                    &self.current_stats,
-                                );
-                                if let Some(mut target) = world.get_entity(target.id) {
-                                    target.damage(damage_table, Some(self), world);
-                                    target.character_controller.velocity +=
+                    if let Some(mut target_entity) = world.get_entity(target.id) {
+                        if target_entity.position.distance(entity_eye_position) <= reach_distance {
+                            if let Some(timer) = &mut brain.hit_timer {
+                                if timer.is_finished() {
+                                    brain.hit_timer = None;
+                                } else if timer.tick(SERVER_DT) {
+                                    let (damage_table, knockback) = compute_tool_damage_and_knockback(
+                                        hand_item,
+                                        &self.current_stats,
+                                    );
+                                    target_entity.damage(damage_table, Some(self), world);
+                                    target_entity.character_controller.velocity +=
                                         (self.direction.make_front() + Pos::Y * 0.5) * knockback;
                                 }
+                            } else {
+                                world.send_viewers(
+                                    self.position.to_chunk_pos(),
+                                    NetworkMessageS2C::EntityAction {
+                                        entity: self.uuid,
+                                        action: EntityAction::Attack,
+                                    },
+                                );
+                                brain.hit_timer = Some(HitTimer {
+                                    current_time: 0.,
+                                    swing_time: tool.swing_time * 1.4,
+                                });
                             }
-                        } else {
-                            world.send_viewers(
-                                self.position.to_chunk_pos(),
-                                NetworkMessageS2C::EntityAction {
-                                    entity: self.uuid,
-                                    action: EntityAction::Attack,
-                                },
-                            );
-                            brain.hit_timer = Some(HitTimer {
-                                current_time: 0.,
-                                swing_time: tool.swing_time * 1.4,
-                            });
                         }
+                    } else {
+                        brain.target = None;
                     }
                 } else {
                     brain.goal = None;
