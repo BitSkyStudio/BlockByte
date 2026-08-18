@@ -1,0 +1,11 @@
+(
+    inventory_size: 0,
+    hitbox_size: 0.3,
+    hitbox_height: 1.2,
+    eye_height: 0.8,
+    model: "fungloid",
+    damage_table: (),
+    loot_table: Key("empty"),
+    ai: (
+    ),
+)

@@ -1,5 +1,5 @@
 (
-    action: SpawnEntity("pocong"),//Place([(block:"arrow")]),
+    action: SpawnEntity("fungloid"),//Place([(block:"arrow")]),
     model: Block("arrow"),
     stack_size: 20,
 )
