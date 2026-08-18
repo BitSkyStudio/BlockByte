@@ -1,4 +1,4 @@
-use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, SquareMatrix, Vector3, VectorSpace, Zero};
+use cgmath::{Deg, InnerSpace, Matrix4, One, Quaternion, SquareMatrix, Vector3, VectorSpace, Zero};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -93,6 +93,8 @@ struct BBGroup {
     uuid: String,
     name: String,
     origin: [f32; 3],
+    #[serde(default)]
+    rotation: [f32; 3],
     #[allow(unused)]
     children: Vec<String>,
 }
@@ -171,6 +173,7 @@ impl BBVec3 {
 
 pub struct Bone {
     pub origin: Vector3<f32>,
+    pub rotation: Quaternion<f32>,
     pub elements: Vec<Element>,
     pub children: Vec<Bone>,
     pub animators: Vec<BoneAnimation>,
@@ -210,7 +213,10 @@ impl Bone {
         geometry_consumer: &mut impl FnMut(ModelGeometry),
         binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
     ) {
-        let world = parent * self.animation_transform(animations);
+        let o = Matrix4::from_translation(self.origin);
+        let io = Matrix4::from_translation(-self.origin);
+        let world =
+            parent * o * Matrix4::from(self.rotation) * io * self.animation_transform(animations);
 
         for v in [world.x, world.y, world.z] {
             if v.truncate().magnitude2() <= 0.1 {
@@ -227,8 +233,8 @@ impl Bone {
                     origin,
                     rotation,
                 } => {
-                    let o = Matrix4::from_translation(Vector3::from(origin.into_array()));
-                    let io = Matrix4::from_translation(-Vector3::from(origin.into_array()));
+                    let o = Matrix4::from_translation(*origin);
+                    let io = Matrix4::from_translation(-*origin);
                     let world = world * o * Matrix4::from(*rotation) * io;
                     for face in Face::all() {
                         let (uv, rotation, texture) = *uvs.by_face(face);
@@ -256,9 +262,7 @@ impl Bone {
                     name,
                 } => {
                     binding_consumer(
-                        world
-                            * Matrix4::from_translation(Vector3::from(position.into_array()))
-                            * Matrix4::from(*rotation),
+                        world * Matrix4::from_translation(*position) * Matrix4::from(*rotation),
                         name.as_str(),
                     );
                 }
@@ -267,7 +271,7 @@ impl Bone {
                     rotation,
                     faces,
                 } => {
-                    let o = Matrix4::from_translation(Vector3::from(origin.into_array()));
+                    let o = Matrix4::from_translation(*origin);
                     let world = world * o * Matrix4::from(*rotation);
                     for face in faces {
                         geometry_consumer(ModelGeometry::Quad(
@@ -306,7 +310,7 @@ impl Bone {
                     if name == anchor {
                         return Some(
                             transform
-                                * Matrix4::from_translation(Vector3::from(position.into_array()))
+                                * Matrix4::from_translation(*position)
                                 * Matrix4::from(*rotation),
                         );
                     }
@@ -328,17 +332,17 @@ pub enum Element {
     Cube {
         from: Pos,
         to: Pos,
-        origin: Pos,
+        origin: Vector3<f32>,
         rotation: Quaternion<f32>,
         uvs: FaceMap<(TexCoords, u8, usize)>,
     },
     Locator {
         name: String,
-        position: Pos,
+        position: Vector3<f32>,
         rotation: Quaternion<f32>,
     },
     Mesh {
-        origin: Pos,
+        origin: Vector3<f32>,
         rotation: Quaternion<f32>,
         faces: Vec<MeshFace>,
     },
@@ -492,6 +496,9 @@ impl Model {
             origin: group
                 .map(|group| Vector3::from(group.origin) / BLOCKBENCH_SIZE)
                 .unwrap_or(Vector3::zero()),
+            rotation: group
+                .map(|group| make_rotation(group.rotation[0], group.rotation[1], group.rotation[2]))
+                .unwrap_or(Quaternion::one()),
             elements: Vec::new(),
             children: Vec::new(),
             animators: model
@@ -576,7 +583,7 @@ impl Model {
                             bone.elements.push(Element::Cube {
                                 from: Pos::from_array(*from) / BLOCKBENCH_SIZE,
                                 to: Pos::from_array(*to) / BLOCKBENCH_SIZE,
-                                origin: Pos::from_array(*origin) / BLOCKBENCH_SIZE,
+                                origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,
                                 rotation: make_rotation(rotation[0], rotation[1], rotation[2]),
                                 uvs: FaceMap::init(|face| {
                                     let face = match face {
@@ -610,7 +617,7 @@ impl Model {
                             visibility: _,
                         } => {
                             bone.elements.push(Element::Locator {
-                                position: Pos::from_array(*position) / BLOCKBENCH_SIZE,
+                                position: Vector3::from(*position) / BLOCKBENCH_SIZE,
                                 rotation: make_rotation(rotation[0], rotation[1], rotation[2]),
                                 name: name.clone(),
                             });
@@ -624,7 +631,7 @@ impl Model {
                             visibility: _,
                         } => {
                             bone.elements.push(Element::Mesh {
-                                origin: Pos::from_array(*origin) / BLOCKBENCH_SIZE,
+                                origin: Vector3::from(*origin) / BLOCKBENCH_SIZE,
                                 rotation: make_rotation(rotation[0], rotation[1], rotation[2]),
                                 faces: faces
                                     .values()

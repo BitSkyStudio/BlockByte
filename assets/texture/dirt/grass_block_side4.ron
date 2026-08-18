@@ -1,0 +1,4 @@
+Overlay(
+    base: Image("dirt.dirt4"),
+    overlay: Image("dirt.grass_block_side_overlay!"),
+)

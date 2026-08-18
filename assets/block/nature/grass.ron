@@ -1,10 +1,10 @@
 (
     render_data: Full(
         faces: (
-            front: "dirt.grass_block_side",
-            back: "dirt.grass_block_side",
-            left: "dirt.grass_block_side",
-            right: "dirt.grass_block_side",
+            front: "#dirt.grass_block_side",
+            back: "#dirt.grass_block_side",
+            left: "#dirt.grass_block_side",
+            right: "#dirt.grass_block_side",
             down: "#dirt.dirt",
             up: "dirt.grass",
         ),
