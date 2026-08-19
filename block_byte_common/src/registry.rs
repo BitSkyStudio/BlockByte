@@ -1381,6 +1381,8 @@ pub struct EntityData {
     pickup_view_cache: Option<InventoryView>,
     #[serde(skip_deserializing, default)]
     screen_view_cache: Option<InventoryView>,
+    #[serde(default)]
+    pub hit_particle_texture: Option<TextureKey>,
 }
 impl EntityData {
     pub fn pickup_view<'a>(&'a self) -> &'a InventoryView {

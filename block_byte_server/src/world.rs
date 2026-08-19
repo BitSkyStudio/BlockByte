@@ -906,6 +906,11 @@ impl Entity {
                                 score,
                             })
                         } else {
+                            if let Some(current_target) = &brain.target {
+                                if current_target.id == target.uuid {
+                                    brain.target = None;
+                                }
+                            }
                             None
                         }
                     })
@@ -972,10 +977,11 @@ impl Entity {
                                 if timer.is_finished() {
                                     brain.hit_timer = None;
                                 } else if timer.tick(SERVER_DT) {
-                                    let (damage_table, knockback) = compute_tool_damage_and_knockback(
-                                        hand_item,
-                                        &self.current_stats,
-                                    );
+                                    let (damage_table, knockback) =
+                                        compute_tool_damage_and_knockback(
+                                            hand_item,
+                                            &self.current_stats,
+                                        );
                                     target_entity.damage(damage_table, Some(self), world);
                                     target_entity.character_controller.velocity +=
                                         (self.direction.make_front() + Pos::Y * 0.5) * knockback;

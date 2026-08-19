@@ -8,4 +8,5 @@
     loot_table: Key("empty"),
     ai: (
     ),
+    hit_particle_texture: "fungloid_texture",
 )

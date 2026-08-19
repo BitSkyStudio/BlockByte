@@ -613,45 +613,61 @@ impl GameScreen for ClientGame {
         });
         if let Some(hit_timer) = &mut self.hit_timer {
             if hit_timer.tick(dt) {
+                fn spawn_hit_particles(
+                    game: &mut ClientGame,
+                    texture: TextureKey,
+                    hit_position: Pos,
+                    face: Face,
+                ) {
+                    for _ in 0..5 {
+                        let mut cc = CharacterController::new();
+                        cc.velocity = face.get_offset();
+                        for i in [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z] {
+                            if *i == 0. {
+                                *i = rng().random::<f32>() * 2. - 1.;
+                            }
+                        }
+
+                        let (width, height) = {
+                            let raw_texture = &texture.data().texture;
+                            (raw_texture.width(), raw_texture.height())
+                        };
+                        cc.velocity = cc.velocity.normalize() * 5.;
+                        let tx = rng().next_u32() % (width - 1);
+                        let ty = rng().next_u32() % (height - 1);
+                        game.particles.push(Particle {
+                            position: hit_position + face.get_offset() * 0.1,
+                            controller: cc,
+                            size: UIPos {
+                                x: 2. / width as f32,
+                                y: 2. / height as f32,
+                            },
+                            texture: texture.tex_coords().map_sub(TexCoords {
+                                u1: tx as f32 / width as f32,
+                                v1: ty as f32 / height as f32,
+                                u2: (tx + 2) as f32 / width as f32,
+                                v2: (ty + 2) as f32 / height as f32,
+                            }),
+                            lifetime: 0.2,
+                        });
+                    }
+                }
                 match self.camera.raycast(self, true) {
                     RayCastResult::Block(position, face, hit_position) => {
                         let block = self.get_block(position).unwrap();
                         let block = block.block.data();
                         if let Some(texture) = &block.break_particle_texture {
-                            for _ in 0..5 {
-                                let mut cc = CharacterController::new();
-                                cc.velocity = face.get_offset();
-                                for i in
-                                    [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z]
-                                {
-                                    if *i == 0. {
-                                        *i = rng().random::<f32>() * 2. - 1.;
-                                    }
-                                }
-                                cc.velocity = cc.velocity.normalize() * 5.;
-                                let tx = rng().next_u32() % 15;
-                                let ty = rng().next_u32() % 15;
-                                self.particles.push(Particle {
-                                    position: hit_position + face.get_offset() * 0.1,
-                                    controller: cc,
-                                    size: UIPos {
-                                        x: 2. / 16.,
-                                        y: 2. / 16.,
-                                    },
-                                    texture: texture.tex_coords().map_sub(TexCoords {
-                                        u1: tx as f32 / 16.,
-                                        v1: ty as f32 / 16.,
-                                        u2: (tx + 2) as f32 / 16.,
-                                        v2: (ty + 2) as f32 / 16.,
-                                    }),
-                                    lifetime: 0.2,
-                                });
-                            }
+                            spawn_hit_particles(self, *texture, hit_position, face);
                         }
                         self.send_message(NetworkMessageC2S::AttackBlock { position, face });
                     }
-                    RayCastResult::Entity(entity, _) => {
-                        self.send_message(NetworkMessageC2S::AttackEntity { entity });
+                    RayCastResult::Entity(id, hit_position) => {
+                        let entity = self.entities.get(&id).unwrap();
+                        let entity = entity.key.data();
+                        if let Some(texture) = &entity.hit_particle_texture {
+                            spawn_hit_particles(self, *texture, hit_position, Face::Up);
+                        }
+                        self.send_message(NetworkMessageC2S::AttackEntity { entity: id });
                     }
                     RayCastResult::Empty => {}
                     RayCastResult::Plant(_position, _index) => {

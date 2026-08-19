@@ -329,7 +329,7 @@ impl GameScreen for ConnectionScreen {
             }
         }
     }
-    fn exit(&mut self, renderer: &mut RenderState) {
+    fn exit(&mut self, _renderer: &mut RenderState) {
         if let Some(connection) = &self.connection {
             *connection.state.lock() = ClientConnectionState::Disconnect;
         }
