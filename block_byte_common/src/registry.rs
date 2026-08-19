@@ -652,7 +652,7 @@ impl RegistryRonConfigLoadable for BlockData {
             } => {
                 if let Some(machine) = self.machine.as_mut() {
                     for face in Face::all() {
-                        let connector = match machine.faces.by_face(face) {
+                        let connector = match machine.faces[face] {
                             BlockMachineFace::Inventory(_) => Some("inventory"),
                             BlockMachineFace::LogicInput => Some("logic_input"),
                             BlockMachineFace::LogicOutput => Some("logic_output"),
@@ -661,9 +661,7 @@ impl RegistryRonConfigLoadable for BlockData {
                             BlockMachineFace::Empty => None,
                         };
                         if let Some(connector) = connector {
-                            render_connectors
-                                .by_face_mut(face)
-                                .insert(InternString::intern(connector));
+                            render_connectors[face].insert(InternString::intern(connector));
                         }
                     }
                 }
@@ -1085,7 +1083,7 @@ impl BlockEntry {
     pub fn supports(&self, world_face: Face) -> bool {
         let block_data = self.block.data();
         let face = self.rotation.inverse_rotate_face(world_face);
-        *block_data.supporting.by_face(face)
+        block_data.supporting[face]
     }
 }
 pub fn skip_if_default<T: Default + PartialEq>(value: &T) -> bool {

@@ -670,17 +670,12 @@ impl<T> FaceMap<T> {
             down: initializer(Face::Down),
         }
     }
-    pub fn by_face(&self, face: Face) -> &T {
-        match face {
-            Face::Front => &self.front,
-            Face::Back => &self.back,
-            Face::Left => &self.left,
-            Face::Right => &self.right,
-            Face::Up => &self.up,
-            Face::Down => &self.down,
-        }
+    pub fn map<'a, U>(&'a self, mut mapper: impl FnMut(&'a T) -> U) -> FaceMap<U> {
+        FaceMap::init(|face| mapper(&self[face]))
     }
-    pub fn by_face_mut(&mut self, face: Face) -> &mut T {
+}
+impl<T> std::ops::IndexMut<Face> for FaceMap<T> {
+    fn index_mut(&mut self, face: Face) -> &mut Self::Output {
         match face {
             Face::Front => &mut self.front,
             Face::Back => &mut self.back,
@@ -690,8 +685,18 @@ impl<T> FaceMap<T> {
             Face::Down => &mut self.down,
         }
     }
-    pub fn map<'a, U>(&'a self, mut mapper: impl FnMut(&'a T) -> U) -> FaceMap<U> {
-        FaceMap::init(|face| mapper(self.by_face(face)))
+}
+impl<T> std::ops::Index<Face> for FaceMap<T> {
+    type Output = T;
+    fn index(&self, face: Face) -> &Self::Output {
+        match face {
+            Face::Front => &self.front,
+            Face::Back => &self.back,
+            Face::Left => &self.left,
+            Face::Right => &self.right,
+            Face::Up => &self.up,
+            Face::Down => &self.down,
+        }
     }
 }
 impl<T: Default> Default for FaceMap<T> {

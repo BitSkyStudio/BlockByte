@@ -1525,7 +1525,7 @@ pub fn draw_block_model(
         BlockRenderData::Full { faces, .. } => {
             for face in Face::all() {
                 vertex_consumer.add_quad(
-                    face.get_vertices(faces.by_face(face).tex_coords(face as usize), 0)
+                    face.get_vertices(faces[face].tex_coords(face as usize), 0)
                         .map(|(position, uv)| {
                             let position = position
                                 - Pos {

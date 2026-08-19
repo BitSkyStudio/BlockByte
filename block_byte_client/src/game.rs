@@ -2106,7 +2106,7 @@ impl ClientChunk {
                                 }
                                 let (vertices, local_face) =
                                     get_block_rotation_face_vertices(block.rotation, face);
-                                let face_texture = faces.by_face(*local_face);
+                                let face_texture = &faces[*local_face];
                                 let tex_index = if face_texture.variant_count() > 1 {
                                     let hash = (base_position.x as i32 * 94839)
                                         ^ (base_position.y as i32 * 532)
@@ -2175,11 +2175,9 @@ impl ClientChunk {
                                                 render_connectors, ..
                                             } => render_connectors,
                                         };
-                                        let connectors = connectors.by_face(
-                                            neighbor_block.rotation.inverse_rotate_face(
-                                                rotated_offset_face.opposite(),
-                                            ),
-                                        );
+                                        let connectors = &connectors[neighbor_block
+                                            .rotation
+                                            .inverse_rotate_face(rotated_offset_face.opposite())];
                                         if connection.contain.is_subset(connectors)
                                             && connection.deny.is_disjoint(connectors)
                                         {

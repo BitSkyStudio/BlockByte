@@ -150,12 +150,12 @@ pub fn tick_chunk(world: &WorldAccess) {
                         .get_block_component::<BlockMachine>(block_position)
                         .unwrap();
                     let own_face = block.rotation.inverse_rotate_face(world_face);
-                    match machine_data.faces.by_face(own_face) {
+                    match &machine_data.faces[own_face] {
                         BlockMachineFace::SignalInput => {
                             world
                                 .wakeup_component::<BlockMachine>(block_position)
                                 .unwrap();
-                            *machine.logic_state.by_face_mut(own_face) = Some(value);
+                            machine.logic_state[own_face] = Some(value);
                         }
                         _ => {}
                     }
@@ -176,12 +176,12 @@ pub fn tick_chunk(world: &WorldAccess) {
                         .get_block_component::<BlockMachine>(block_position)
                         .unwrap();
                     let own_face = block.rotation.inverse_rotate_face(world_face);
-                    match machine_data.faces.by_face(own_face) {
+                    match &machine_data.faces[own_face] {
                         BlockMachineFace::LogicInput => {
                             world
                                 .wakeup_component::<BlockMachine>(block_position)
                                 .unwrap();
-                            *machine.logic_state.by_face_mut(own_face) = Some(value);
+                            machine.logic_state[own_face] = Some(value);
                         }
                         _ => {}
                     }
@@ -204,12 +204,12 @@ pub fn tick_chunk(world: &WorldAccess) {
                     }
                 }
                 if let Some(machine_data) = &block_data.machine {
-                    match machine_data.faces.by_face(face) {
+                    match &machine_data.faces[face] {
                         BlockMachineFace::LogicInput => {
                             let mut machine = world
                                 .get_block_component::<BlockMachine>(block_position)
                                 .unwrap();
-                            *machine.logic_state.by_face_mut(face) = None;
+                            machine.logic_state[face] = None;
                             world
                                 .wakeup_component::<BlockMachine>(block_position)
                                 .unwrap();
@@ -581,7 +581,7 @@ pub fn tick_chunk(world: &WorldAccess) {
             .get_block_component::<BlockMachine>(added_machine)
             .unwrap();
         for face in Face::all() {
-            match machine_data.faces.by_face(face) {
+            match &machine_data.faces[face] {
                 BlockMachineFace::LogicInput => {
                     let world_face = block_entry.rotation.rotate_face(face);
                     let other_position = added_machine + world_face.get_block_offset();
@@ -593,10 +593,9 @@ pub fn tick_chunk(world: &WorldAccess) {
                     let other_face = other_block
                         .rotation
                         .inverse_rotate_face(world_face.opposite());
-                    match other_machine_data.faces.by_face(other_face) {
+                    match &other_machine_data.faces[other_face] {
                         BlockMachineFace::LogicOutput => {
-                            *machine.logic_state.by_face_mut(face) =
-                                *other_machine.logic_state.by_face(other_face);
+                            machine.logic_state[face] = other_machine.logic_state[other_face];
                         }
                         _ => {}
                     }
@@ -1217,7 +1216,7 @@ impl BlockMachine {
         BlockMachine {
             inventory: Inventory::new(machine_data.inventory_size),
             script_state: ScriptState::new(&machine_data.script),
-            logic_state: FaceMap::init(|face| match machine_data.faces.by_face(face) {
+            logic_state: FaceMap::init(|face| match &machine_data.faces[face] {
                 BlockMachineFace::LogicOutput => Some(0),
                 _ => None,
             }),
@@ -1268,7 +1267,7 @@ impl BlockMachine {
                         let face_rotated = target_block
                             .rotation
                             .inverse_rotate_face(block.rotation.rotate_face(other_face));
-                        let face_data = target_machine_data.faces.by_face(face_rotated);
+                        let face_data = &target_machine_data.faces[face_rotated];
                         match face_data {
                             BlockMachineFace::Inventory(other_view) => {
                                 let mut first_inventory = &mut self.inventory;
@@ -1322,7 +1321,7 @@ impl BlockMachine {
                     face,
                     register,
                     result,
-                } => match self.logic_state.by_face_mut(*face).take() {
+                } => match self.logic_state[*face].take() {
                     Some(value) => {
                         state.registers[*register] = value;
                         result.succeed()
@@ -1343,9 +1342,9 @@ impl BlockMachine {
                     face,
                     register,
                     result,
-                } => match self.logic_state.by_face(*face) {
+                } => match self.logic_state[*face] {
                     Some(value) => {
-                        state.registers[*register] = *value;
+                        state.registers[*register] = value;
                         result.succeed()
                     }
                     None => result.fail(),
@@ -1369,7 +1368,7 @@ impl BlockMachine {
                 }
                 MachineInstrution::WriteLogic { face, value } => {
                     let value = state.resolve_value(value);
-                    let logic_state = self.logic_state.by_face_mut(*face);
+                    let logic_state = &mut self.logic_state[*face];
                     if let Some(previous) = logic_state {
                         if *previous == value {
                             return CallbackResult::Continue;
