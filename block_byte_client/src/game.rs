@@ -240,6 +240,78 @@ impl PartialOrd for ModifiedChunkEntry {
         Some(self.cmp(other))
     }
 }
+#[derive(Default)]
+pub struct ParticleManager {
+    particles: Vec<Particle>,
+}
+impl ParticleManager {
+    pub fn emit(&mut self, position: Pos, count: u32, texture: TextureKey) {
+        for _ in 0..count {
+            let mut cc = CharacterController::new();
+            cc.velocity = Pos::all(0.);
+            for i in [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z] {
+                if *i == 0. || true {
+                    *i = rng().random::<f32>() * 2. - 1.;
+                }
+            }
+
+            let (width, height) = {
+                let raw_texture = &texture.data().texture;
+                (raw_texture.width(), raw_texture.height())
+            };
+            let texture_size = 2;
+            cc.velocity = cc.velocity.normalize() * 5.;
+            let tx = rng().next_u32() % (width - 1);
+            let ty = rng().next_u32() % (height - 1);
+            let delay = rng().random::<f32>() / 20.;
+            self.particles.push(Particle {
+                position,
+                controller: cc,
+                size: UIPos {
+                    x: texture_size as f32 / width as f32,
+                    y: texture_size as f32 / height as f32,
+                },
+                texture: texture.tex_coords().map_sub(TexCoords {
+                    u1: tx as f32 / width as f32,
+                    v1: ty as f32 / height as f32,
+                    u2: (tx + texture_size) as f32 / width as f32,
+                    v2: (ty + texture_size) as f32 / height as f32,
+                }),
+                lifetime: 0.2 + delay,
+                delay,
+            });
+        }
+    }
+    pub fn tick(&mut self, dt: f32, chunks: &AHashMap<ChunkPos, ClientChunk>) {
+        self.particles.retain_mut(|particle| {
+            particle.lifetime -= dt;
+            particle.delay -= dt;
+            particle.controller.tick(
+                &mut particle.position,
+                dt,
+                |block| {
+                    let (chunk, offset) = block.to_chunk_pos_offset();
+                    Some(
+                        *chunks
+                            .get(&chunk)?
+                            .mesh_build_data
+                            .blocks
+                            .read()
+                            .get(offset.index())
+                            .unwrap(),
+                    )
+                },
+                Pos::all(0.),
+                MoveMode::Normal,
+                AABB::new(Pos::all(0.), Pos::all(0.1)),
+                0.,
+                0.,
+                false,
+            );
+            particle.lifetime > 0.
+        });
+    }
+}
 pub struct ClientGame {
     pub player_stats: EntityStats,
     pub player_position: Pos,
@@ -273,7 +345,7 @@ pub struct ClientGame {
     pub teleport_id: u32,
     pub mspt: f32,
     pub delta_time_average: f32,
-    pub particles: Vec<Particle>,
+    pub particles: ParticleManager,
 }
 impl GameScreen for ClientGame {
     fn start(&mut self, renderer: &mut RenderState) {
@@ -613,51 +685,16 @@ impl GameScreen for ClientGame {
         });
         if let Some(hit_timer) = &mut self.hit_timer {
             if hit_timer.tick(dt) {
-                fn spawn_hit_particles(
-                    game: &mut ClientGame,
-                    texture: TextureKey,
-                    hit_position: Pos,
-                    face: Face,
-                ) {
-                    for _ in 0..5 {
-                        let mut cc = CharacterController::new();
-                        cc.velocity = face.get_offset();
-                        for i in [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z] {
-                            if *i == 0. {
-                                *i = rng().random::<f32>() * 2. - 1.;
-                            }
-                        }
-
-                        let (width, height) = {
-                            let raw_texture = &texture.data().texture;
-                            (raw_texture.width(), raw_texture.height())
-                        };
-                        cc.velocity = cc.velocity.normalize() * 5.;
-                        let tx = rng().next_u32() % (width - 1);
-                        let ty = rng().next_u32() % (height - 1);
-                        game.particles.push(Particle {
-                            position: hit_position + face.get_offset() * 0.1,
-                            controller: cc,
-                            size: UIPos {
-                                x: 2. / width as f32,
-                                y: 2. / height as f32,
-                            },
-                            texture: texture.tex_coords().map_sub(TexCoords {
-                                u1: tx as f32 / width as f32,
-                                v1: ty as f32 / height as f32,
-                                u2: (tx + 2) as f32 / width as f32,
-                                v2: (ty + 2) as f32 / height as f32,
-                            }),
-                            lifetime: 0.2,
-                        });
-                    }
-                }
                 match self.camera.raycast(self, true) {
                     RayCastResult::Block(position, face, hit_position) => {
                         let block = self.get_block(position).unwrap();
                         let block = block.block.data();
                         if let Some(texture) = &block.break_particle_texture {
-                            spawn_hit_particles(self, *texture, hit_position, face);
+                            self.particles.emit(
+                                hit_position + face.get_offset() * 0.1,
+                                10,
+                                *texture,
+                            );
                         }
                         self.send_message(NetworkMessageC2S::AttackBlock { position, face });
                     }
@@ -665,7 +702,7 @@ impl GameScreen for ClientGame {
                         let entity = self.entities.get(&id).unwrap();
                         let entity = entity.key.data();
                         if let Some(texture) = &entity.hit_particle_texture {
-                            spawn_hit_particles(self, *texture, hit_position, Face::Up);
+                            self.particles.emit(hit_position, 5, *texture);
                         }
                         self.send_message(NetworkMessageC2S::AttackEntity { entity: id });
                     }
@@ -698,33 +735,7 @@ impl GameScreen for ClientGame {
             renderer.animation_time,
             input,
         );
-        self.particles.retain_mut(|particle| {
-            particle.lifetime -= dt;
-            particle.controller.tick(
-                &mut particle.position,
-                dt,
-                |block| {
-                    let (chunk, offset) = block.to_chunk_pos_offset();
-                    Some(
-                        *self
-                            .chunks
-                            .get(&chunk)?
-                            .mesh_build_data
-                            .blocks
-                            .read()
-                            .get(offset.index())
-                            .unwrap(),
-                    )
-                },
-                Pos::all(0.),
-                MoveMode::Normal,
-                AABB::new(Pos::all(0.), Pos::all(0.1)),
-                0.,
-                0.,
-                false,
-            );
-            particle.lifetime > 0.
-        });
+        self.particles.tick(dt, &self.chunks);
         let ps = profiler::profiler_scope("render");
         match renderer.render(
             self,
@@ -734,12 +745,18 @@ impl GameScreen for ClientGame {
             viewmodel_mesh,
             damage_mesh,
             self.particles
+                .particles
                 .iter()
-                .map(|particle| GPUParticleInstance {
-                    position: particle.position.into_array(),
-                    size: [particle.size.x, particle.size.y],
-                    uv1: [particle.texture.u1, particle.texture.v1],
-                    uv2: [particle.texture.u2, particle.texture.v2],
+                .filter_map(|particle| {
+                    if particle.delay > 0. {
+                        return None;
+                    }
+                    Some(GPUParticleInstance {
+                        position: particle.position.into_array(),
+                        size: [particle.size.x, particle.size.y],
+                        uv1: [particle.texture.u1, particle.texture.v1],
+                        uv2: [particle.texture.u2, particle.texture.v2],
+                    })
                 })
                 .collect(),
             &frustum,
@@ -1293,7 +1310,7 @@ impl ClientGame {
             mspt: 0.,
             teleport_id: 0,
             player_inventory: Vec::new(),
-            particles: Vec::new(),
+            particles: ParticleManager::default(),
         }
     }
     pub fn mark_modified(&mut self, chunk_position: ChunkPos) {
@@ -1367,9 +1384,22 @@ impl ClientGame {
             } else {
                 "idle"
             };
+            let is_animation_idle_or_run = animation == "idle" || animation == "running";
             if let Some(action) = self.current_local_action {
-                self.viewmodel_player
-                    .play_animation(action.animation(), 0.1);
+                let mut cancel = false;
+                if let EntityAction::Equip = action {
+                    if time <= animation_length / 0.5 && !is_animation_idle_or_run {
+                        cancel = true;
+                    }
+                }
+                if !cancel {
+                    self.viewmodel_player
+                        .play_animation(action.animation(), 0.1);
+                }
+                match (action, self.viewmodel_player.get_animation().0) {
+                    (EntityAction::Equip, "place") => {}
+                    _ => {}
+                }
             }
             match animation {
                 "hit" => {
@@ -1384,8 +1414,7 @@ impl ClientGame {
                 }
                 _ => {
                     if time >= animation_length
-                        || ((animation == "idle" || animation == "running")
-                            && animation != idle_or_run)
+                        || (is_animation_idle_or_run && animation != idle_or_run)
                     {
                         self.viewmodel_player.play_animation(idle_or_run, 0.1);
                     }
@@ -2503,4 +2532,5 @@ pub struct Particle {
     pub size: UIPos,
     pub texture: TexCoords,
     pub lifetime: f32,
+    pub delay: f32,
 }

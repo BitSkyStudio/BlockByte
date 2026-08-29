@@ -1407,6 +1407,7 @@ impl RegistryRonConfigLoadable for EntityData {
             for equipment_slot in &self.equipment_view.slots {
                 if slot.slot == equipment_slot.slot {
                     *slot = equipment_slot.clone();
+                    break;
                 }
             }
         }
