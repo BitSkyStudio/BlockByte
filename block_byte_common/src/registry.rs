@@ -1753,6 +1753,10 @@ pub struct PrefabEntityEntry {
     pub chance: f32,
     #[serde(default, skip_serializing)]
     pub loot: Option<(OwnOrKey<LootTableData>, InventoryView)>,
+    #[serde(default, skip_serializing)]
+    pub placed: Option<InternString>,
+    #[serde(default, skip_serializing)]
+    pub place_check: Option<InternString>,
 }
 #[derive(Serialize, Deserialize, Default)]
 pub struct PrefabData {
@@ -1820,6 +1824,11 @@ impl PrefabData {
             }
         }
         for entry in &self.entities {
+            if let Some(place_check) = entry.place_check {
+                if !placed_set.contains(&place_check) {
+                    continue;
+                }
+            }
             if !random.random_bool(entry.chance as f64) {
                 continue;
             }
@@ -1833,6 +1842,9 @@ impl PrefabData {
                 entry,
                 &mut random,
             );
+            if let Some(placed) = entry.placed {
+                placed_set.insert(placed);
+            }
         }
     }
 }

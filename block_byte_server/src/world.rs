@@ -707,8 +707,12 @@ impl MobBrain {
                                 Some(block) => block.block.data().collision.is_empty(),
                                 None => false,
                             };
+                            let can_fit_in = |block: BlockPos| {
+                                (0..eye_height.ceil() as i32)
+                                    .all(|i| is_block_empty(block + BlockPos::Y * i))
+                            };
                             if !is_block_empty(block_position) {
-                                if is_block_empty(block_position + BlockPos::Y) {
+                                if can_fit_in(block_position + BlockPos::Y) {
                                     return Some((block_position + BlockPos::Y, OrderedFloat(1.)));
                                 }
                             } else {
@@ -720,7 +724,9 @@ impl MobBrain {
                                         ));
                                     }
                                 } else {
-                                    return Some((block_position, OrderedFloat(1.)));
+                                    if can_fit_in(block_position) {
+                                        return Some((block_position, OrderedFloat(1.)));
+                                    }
                                 }
                             }
                             None
@@ -748,7 +754,7 @@ impl MobBrain {
                         .collect();
                     self.path[0].x = goal.x;
                     self.path[0].z = goal.z;
-                    let mut i = 0;
+                    /*let mut i = 0;
                     while i + 2 < self.path.len() {
                         let first = self.path[i]
                             + Pos {
@@ -767,7 +773,7 @@ impl MobBrain {
                         } else {
                             i += 1;
                         }
-                    }
+                    }*/
                 }
             }
         }
@@ -889,6 +895,11 @@ impl Entity {
                         if distance > 32. {
                             return None;
                         }
+                        let guard_distance =
+                            target.get_eye().distance(brain.guard_position.to_pos());
+                        if guard_distance > 28. {
+                            return None;
+                        }
                         let received_damage = brain
                             .received_attacks
                             .get(&target.uuid)
@@ -962,6 +973,12 @@ impl Entity {
                         }
                     }
                 }
+                if let Some(target) = &mut brain.target {
+                    target.score -= 5. * SERVER_DT;
+                    if target.score < 0. {
+                        brain.target = None;
+                    }
+                }
                 if let Some(target) = &brain.target {
                     brain.goal = Some(target.last_seen_position);
                     let hand_item = self.inventory.get_slot_raw(self.hand_slot);
@@ -1003,8 +1020,7 @@ impl Entity {
                         brain.target = None;
                     }
                 } else {
-                    brain.goal = None;
-                    brain.path.clear();
+                    brain.goal = Some(brain.guard_position.to_pos());
                     brain.hit_timer = None;
                 }
             }

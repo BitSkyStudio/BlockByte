@@ -757,6 +757,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     return;
                 }
                 let mut entity = Entity::new(entry.entity, entity_position);
+                entity.direction.yaw = rng.random::<f32>() * 2. * std::f32::consts::PI;
                 if let Some((loot, view)) = &entry.loot {
                     for item in
                         generate_loot_table(loot.data(), LootGenerationContext::new(rng.next_u64()))
