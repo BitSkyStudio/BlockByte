@@ -303,7 +303,7 @@ impl ParticleManager {
                 },
                 Pos::all(0.),
                 MoveMode::Normal,
-                AABB::new(Pos::all(0.), Pos::all(0.1)),
+                AABB::new(Pos::all(0.), Pos::all(0.01)),
                 0.,
                 0.,
                 false,
@@ -327,7 +327,7 @@ pub struct ClientGame {
     pub item_variation: HashMap<ItemKey, usize>,
     pub viewmodel_player: AnimationPlayer,
     pub current_local_action: Option<EntityAction>,
-    pub swap_hand_item: Option<(ItemKey, usize)>,
+    pub swap_hand_item: Option<(ItemKey, u16, usize)>,
     pub chunk_mesh_channels: (
         std::sync::mpsc::Sender<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
         std::sync::mpsc::Receiver<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
@@ -1423,8 +1423,12 @@ impl ClientGame {
             if time >= animation_length / 2. {
                 self.swap_hand_item = match self.held_item() {
                     Some(item) => {
-                        let item = item.item;
-                        Some((item, self.item_variation.get(&item).cloned().unwrap_or(0)))
+                        let item_key = item.item;
+                        Some((
+                            item_key,
+                            item.count,
+                            self.item_variation.get(&item_key).cloned().unwrap_or(0),
+                        ))
                     }
                     None => None,
                 };
@@ -1460,7 +1464,7 @@ impl ClientGame {
                 &viewmodel_animations[..],
                 |binding, vc| match binding {
                     "hand" => {
-                        let (item, variant) = match self.swap_hand_item.as_ref() {
+                        let (item, count, variant) = match self.swap_hand_item.as_ref() {
                             Some(item) => item,
                             None => return None,
                         };
@@ -1468,15 +1472,13 @@ impl ClientGame {
                         match &item_data.action {
                             ItemAction::Place(item_block_placements) => {
                                 let placement = &item_block_placements[*variant]; //todo: flash red when not enough items
-                                if let Some(held_item) = self.held_item() {
-                                    if held_item.count < placement.use_count {
-                                        vc.color = Color {
-                                            r: 255,
-                                            g: 200,
-                                            b: 200,
-                                            a: 255,
-                                        };
-                                    }
+                                if *count < placement.use_count && self.hud.time % 2. < 1. {
+                                    vc.color = Color {
+                                        r: 255,
+                                        g: 200,
+                                        b: 200,
+                                        a: 255,
+                                    };
                                 }
                                 Some(Cow::Owned(ItemModel::Block(placement.block)))
                             }
@@ -1858,8 +1860,6 @@ impl ClientGame {
                                     && self.hit_timer.is_none()
                                 {
                                     self.current_local_action = Some(EntityAction::Place);
-                                    self.viewmodel_player
-                                        .play_animation(EntityAction::Place.animation(), 0.1);
                                     self.send_message(NetworkMessageC2S::ItemInteraction {
                                         target: ItemInteractTarget::Block { position, face },
                                         variant: variant_id,
