@@ -235,9 +235,10 @@ impl<T> Default for InputContainer<T> {
 }
 impl<T: Hash + Eq + Copy> InputContainer<T> {
     pub fn press(&mut self, input: T) {
-        self.down.insert(input);
-        self.just_down.insert(input);
-        self.held_for.insert(input, 0.);
+        if self.down.insert(input) {
+            self.just_down.insert(input);
+            self.held_for.insert(input, 0.);
+        }
     }
     pub fn release(&mut self, input: T) {
         self.down.remove(&input);

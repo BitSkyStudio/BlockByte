@@ -1457,7 +1457,9 @@ impl ClientGame {
             render::draw_model(
                 viewmodel,
                 Matrix4::from_translation(Vector3::from(
-                    self.camera.get_eye(self.get_player_data()).into_array(),
+                    (self.camera.get_eye(self.get_player_data())
+                        + (self.camera.controller.velocity * -0.005))
+                        .into_array(),
                 )) * Matrix4::from_angle_y(Rad(-self.camera.direction.yaw))
                     * Matrix4::from_angle_x(Rad(self.camera.direction.pitch)),
                 &mut viewmodel_mesh.consumer(Color::WHITE),

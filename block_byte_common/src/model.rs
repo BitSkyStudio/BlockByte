@@ -26,6 +26,17 @@ struct BBTexture {
 fn default_true() -> bool {
     true
 }
+#[derive(Deserialize, Copy, Clone, Debug)]
+enum InterpolationMode {
+    #[serde(rename = "linear")]
+    Linear,
+    #[serde(rename = "catmullrom")]
+    Smooth,
+    //#[serde(rename = "bezier")]
+    //Bezier,
+    #[serde(rename = "step")]
+    Step,
+}
 #[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
 enum BBElement {
@@ -125,6 +136,14 @@ pub enum LoopMode {
     #[serde(rename = "loop")]
     Loop,
 }
+impl LoopMode {
+    pub fn is_loop(self) -> bool {
+        match self {
+            LoopMode::Loop => true,
+            _ => false,
+        }
+    }
+}
 #[derive(Copy, Clone)]
 pub struct AnimationPlayInfo {
     pub loop_mode: LoopMode,
@@ -142,6 +161,7 @@ struct BBKeyframe {
     channel: AnimatorChannel,
     time: f32,
     data_points: Vec<BBVec3>,
+    interpolation: InterpolationMode,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -192,7 +212,10 @@ impl Bone {
                 let io = Matrix4::from_translation(-self.origin);
                 transform = transform
                     * o
-                    * Matrix4::from(Quaternion::zero().slerp(value, animation.weight))
+                    * Matrix4::from(
+                        Quaternion::zero()
+                            .slerp(make_rotation(value.x, value.y, value.z), animation.weight),
+                    )
                     * io;
             }
             if let Some(value) = BoneAnimation::sample(&animator.scale, animation.time) {
@@ -516,14 +539,16 @@ impl Model {
                                         let keyframe = Keyframe {
                                             data: bb_keyframe.data_points[0].to_vec(),
                                             time: bb_keyframe.time,
+                                            interpolation: bb_keyframe.interpolation,
                                         };
                                         bone_animation.position.push(keyframe)
                                     }
                                     AnimatorChannel::Rotation => {
                                         let r = bb_keyframe.data_points[0].to_vec();
                                         let keyframe = Keyframe {
-                                            data: make_rotation(r.x, r.y, r.z),
+                                            data: r,
                                             time: bb_keyframe.time,
+                                            interpolation: bb_keyframe.interpolation,
                                         };
                                         bone_animation.rotation.push(keyframe)
                                     }
@@ -531,6 +556,7 @@ impl Model {
                                         let keyframe = Keyframe {
                                             data: bb_keyframe.data_points[0].to_vec(),
                                             time: bb_keyframe.time,
+                                            interpolation: bb_keyframe.interpolation,
                                         };
                                         bone_animation.scale.push(keyframe)
                                     }
@@ -538,12 +564,36 @@ impl Model {
                             }
                         }
                     }
-                    fn sort_channel<T>(channel: &mut Vec<Keyframe<T>>) {
+                    for channel in [
+                        &mut bone_animation.position,
+                        &mut bone_animation.rotation,
+                        &mut bone_animation.scale,
+                    ] {
                         channel.sort_by(|a, b| a.time.total_cmp(&b.time));
                     }
-                    sort_channel(&mut bone_animation.position);
-                    sort_channel(&mut bone_animation.rotation);
-                    sort_channel(&mut bone_animation.scale);
+                    if animation.loop_mode.is_loop() && false {
+                        for channel in [
+                            &mut bone_animation.position,
+                            &mut bone_animation.rotation,
+                            &mut bone_animation.scale,
+                        ] {
+                            if channel.len() < 2 {
+                                continue;
+                            }
+                            let mut end = channel[0];
+                            let mut start = channel[channel.len() - 1];
+                            if end.time == 0. {
+                                end = channel[1];
+                            }
+                            if start.time == animation.length {
+                                start = channel[channel.len() - 2];
+                            }
+                            end.time += animation.length;
+                            channel.push(end);
+                            start.time -= animation.length;
+                            channel.insert(0, start);
+                        }
+                    }
                     bone_animation
                 })
                 .collect(),
@@ -679,47 +729,71 @@ impl<'de> Deserialize<'de> for Model {
         Ok(Model::from_bbmodel(bbmodel))
     }
 }
-#[derive(Debug)]
-pub struct Keyframe<T> {
+#[derive(Copy, Clone, Debug)]
+pub struct Keyframe {
     time: f32,
-    data: T,
+    data: Vector3<f32>,
+    interpolation: InterpolationMode,
 }
 #[derive(Default)]
 pub struct BoneAnimation {
-    position: Vec<Keyframe<Vector3<f32>>>,
-    rotation: Vec<Keyframe<Quaternion<f32>>>,
-    scale: Vec<Keyframe<Vector3<f32>>>,
+    position: Vec<Keyframe>,
+    rotation: Vec<Keyframe>,
+    scale: Vec<Keyframe>,
 }
 impl BoneAnimation {
-    pub fn sample<T: AnimationLerpable + Copy>(frames: &Vec<Keyframe<T>>, time: f32) -> Option<T> {
+    pub fn sample(frames: &Vec<Keyframe>, time: f32) -> Option<Vector3<f32>> {
         if frames.is_empty() {
             return None;
         }
         if time <= frames[0].time {
             return Some(frames[0].data);
         }
-        for w in frames.windows(2) {
-            let a = &w[0];
-            let b = &w[1];
+        //todo: use partition_point in future, for now it is small enough
+        for i in 0..(frames.len() - 1) {
+            let a = &frames[i];
+            let b = &frames[i + 1];
             if time >= a.time && time <= b.time {
-                let t = (time - a.time) / (b.time - a.time);
-                return Some(a.data.animation_lerp(b.data, t));
+                return Some(match a.interpolation {
+                    InterpolationMode::Linear => Self::interpolate_linear(a, b, time),
+                    InterpolationMode::Smooth => {
+                        if i == 0 || i == frames.len() - 2 {
+                            Self::interpolate_linear(a, b, time)
+                        } else {
+                            Self::interpolate_smooth(&frames[i - 1], a, b, &frames[i + 2], time)
+                        }
+                    }
+                    InterpolationMode::Step => a.data,
+                });
             }
         }
         Some(frames.last().unwrap().data)
     }
-}
-pub trait AnimationLerpable {
-    fn animation_lerp(&self, other: Self, t: f32) -> Self;
-}
-impl AnimationLerpable for Vector3<f32> {
-    fn animation_lerp(&self, other: Self, t: f32) -> Self {
-        self.lerp(other, t)
+    fn interpolate_linear(a: &Keyframe, b: &Keyframe, time: f32) -> Vector3<f32> {
+        let t = (time - a.time) / (b.time - a.time);
+        a.data.lerp(b.data, t)
     }
-}
-impl AnimationLerpable for Quaternion<f32> {
-    fn animation_lerp(&self, other: Self, t: f32) -> Self {
-        self.slerp(other, t)
+    fn interpolate_smooth(
+        a: &Keyframe,
+        b: &Keyframe,
+        c: &Keyframe,
+        d: &Keyframe,
+        time: f32,
+    ) -> Vector3<f32> {
+        let d1 = b.time - a.time;
+        let d2 = c.time - b.time;
+        let d3 = d.time - c.time;
+        let d4 = c.time - a.time;
+        let d5 = d.time - b.time;
+
+        let k1 = ((b.time - time) / d1) * a.data + ((time - a.time) / d1) * b.data;
+        let k2 = ((c.time - time) / d2) * b.data + ((time - b.time) / d2) * c.data;
+        let k3 = ((d.time - time) / d3) * c.data + ((time - c.time) / d3) * d.data;
+
+        let m1 = ((c.time - time) / d4) * k1 + ((time - a.time) / d4) * k2;
+        let m2 = ((d.time - time) / d5) * k2 + ((time - b.time) / d5) * k3;
+
+        ((c.time - time) / d2) * m1 + ((time - b.time) / d2) * m2
     }
 }
 
