@@ -571,7 +571,7 @@ impl Model {
                     ] {
                         channel.sort_by(|a, b| a.time.total_cmp(&b.time));
                     }
-                    if animation.loop_mode.is_loop() && false {
+                    if animation.loop_mode.is_loop() {
                         for channel in [
                             &mut bone_animation.position,
                             &mut bone_animation.rotation,

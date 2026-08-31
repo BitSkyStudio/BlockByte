@@ -1416,7 +1416,10 @@ impl ClientGame {
                     if time >= animation_length
                         || (is_animation_idle_or_run && animation != idle_or_run)
                     {
-                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
+                        self.viewmodel_player.play_animation(
+                            idle_or_run,
+                            if animation == idle_or_run { 0. } else { 0.1 },
+                        );
                     }
                 }
             }
@@ -1458,7 +1461,7 @@ impl ClientGame {
                 viewmodel,
                 Matrix4::from_translation(Vector3::from(
                     (self.camera.get_eye(self.get_player_data())
-                        + (self.camera.controller.velocity * -0.005))
+                        + (self.camera.controller.velocity * /*-0.005*/0.))
                         .into_array(),
                 )) * Matrix4::from_angle_y(Rad(-self.camera.direction.yaw))
                     * Matrix4::from_angle_x(Rad(self.camera.direction.pitch)),
