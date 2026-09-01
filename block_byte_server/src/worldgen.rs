@@ -29,11 +29,10 @@ use smallvec::SmallVec;
 use splines::{Interpolation, Spline};
 
 use crate::{
+    entity::Entity,
     inventory::{LootGenerationContext, generate_loot_table},
-    world::{
-        BlockMachine, BlockPlants, Chunk, ChunkBlockComponents, ChunkBlocks, Entity,
-        WorldAccessCell,
-    },
+    machine::BlockMachine,
+    world::{BlockPlants, Chunk, ChunkBlockComponents, ChunkBlocks, WorldAccessCell},
 };
 
 pub struct RegionGeneration {

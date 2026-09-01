@@ -36,18 +36,22 @@ use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::{
+    entity::Entity,
     inventory::{
         Inventory, ItemCount, ItemMatcher, ItemStack, LootGenerationContext, generate_loot_table,
     },
+    machine::BlockMachine,
     registry::Key,
     world::{
-        BlockMachine, Chunk, ChunkBlocks, ChunkSaveData, Entity, WorldAccess, WorldAccessCell,
-        WorldAccessRef, WorldEvent, compute_tool_damage_and_knockback, tick_chunk,
+        Chunk, ChunkBlocks, ChunkSaveData, WorldAccess, WorldAccessCell, WorldAccessRef,
+        WorldEvent, compute_tool_damage_and_knockback, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
 
+mod entity;
 mod inventory;
+mod machine;
 mod world;
 mod worldgen;
 

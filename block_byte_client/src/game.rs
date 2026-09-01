@@ -1534,15 +1534,21 @@ impl ClientGame {
         for (id, entity) in &mut self.entities {
             let mut animations: SmallVec<[DrawAnimation<'static>; 8]> = SmallVec::new();
             entity.action_player.tick(dt, &mut animations);
-            match entity.action_player.get_animation() {
-                ("empty", _) => {}
-                (_, time) => {
-                    if time > 1. {
+            let model = &entity.key.data().model;
+            let (action_animation, action_time) = entity.action_player.get_animation();
+            match model
+                .model
+                .data()
+                .model
+                .get_animation_info(action_animation)
+            {
+                Some(info) => {
+                    if action_time >= info.length {
                         entity.action_player.play_animation("empty", 0.1);
                     }
                 }
+                None => {}
             }
-            let model = &entity.key.data().model;
             let (pose_animation, pose_time) = entity.pose_player.get_animation();
             match model.model.data().model.get_animation_info(pose_animation) {
                 Some(info) => {
