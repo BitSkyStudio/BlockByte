@@ -1,17 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use block_byte_common::{
-    ActiveEffect, CharacterController, DamageTable,
-    EntityAction, EntityPose, EntityResearchProgress, EntityStats, HitTimer,
-    LookDirection, NORMAL_SPEED, PassiveAbility, SERVER_DT, SERVER_TPS,
-    coord::{
-        self, AABB, BlockPos,
-        HorizontalFace, Pos,
-    },
+    ActiveEffect, CharacterController, DamageTable, EntityAction, EntityPose,
+    EntityResearchProgress, EntityStats, HitTimer, LookDirection, NORMAL_SPEED, PassiveAbility,
+    SERVER_DT, SERVER_TPS,
+    coord::{self, AABB, BlockPos, HorizontalFace, Pos},
     net::NetworkMessageS2C,
-    registry::{
-        EffectKey, EntityKey, ToolData,
-    },
+    registry::{EffectKey, EntityKey, ToolData},
 };
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -19,10 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     UserIndex,
-    inventory::{
-        Inventory, ItemStack,
-        LootGenerationContext, generate_loot_table,
-    },
+    inventory::{Inventory, ItemStack, LootGenerationContext, generate_loot_table},
     world::{WorldAccess, compute_tool_damage_and_knockback},
 };
 
@@ -367,12 +359,20 @@ impl Entity {
                         brain.target = None;
                     }
                 }
+                if move_vector.length_squared() > 0. {
+                    self.direction.yaw = -move_vector.x.atan2(move_vector.z) + std::f32::consts::PI;
+                } else {
+                    if let Some(target) = &brain.target {
+                        let offset = target.last_seen_position - entity_eye_position;
+                        self.direction.yaw = -offset.x.atan2(offset.z) + std::f32::consts::PI;
+                    }
+                }
                 if let Some(target) = &brain.target {
                     brain.goal = Some(target.last_seen_position);
                     let hand_item = self.inventory.get_slot_raw(self.hand_slot);
                     let tool = hand_item
                         .and_then(|item| item.item.data().tool.as_ref())
-                        .unwrap_or(&ToolData::HAND);
+                        .unwrap_or(ToolData::hand());
                     let reach_distance = tool.reach * 0.6;
                     //todo: eye height
                     if let Some(mut target_entity) = world.get_entity(target.id) {
@@ -395,7 +395,7 @@ impl Entity {
                                     self.position.to_chunk_pos(),
                                     NetworkMessageS2C::EntityAction {
                                         entity: self.uuid,
-                                        action: EntityAction::Attack,
+                                        action: EntityAction::Attack(tool.hit_animation),
                                     },
                                 );
                                 brain.hit_timer = Some(HitTimer {
@@ -413,9 +413,6 @@ impl Entity {
                 }
             }
             None => {}
-        }
-        if move_vector.length_squared() > 0. {
-            self.direction.yaw = -move_vector.x.atan2(move_vector.z) + std::f32::consts::PI;
         }
     }
 }

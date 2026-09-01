@@ -1,14 +1,8 @@
-
 use block_byte_common::{
     InternString,
-    coord::{
-        BlockPos, FaceMap, FaceSet,
-    },
+    coord::{BlockPos, FaceMap, FaceSet},
     net::PropertyModifyMode,
-    registry::{
-        BlockEntry, BlockMachineData, BlockMachineFace,
-        MachineInstrution,
-    },
+    registry::{BlockEntry, BlockMachineData, BlockMachineFace, MachineInstrution},
     scripts::{CallbackResult, RunResult, ScriptState, ScriptValue},
     time_to_ticks,
     world::ClientBlockMachine,
@@ -16,10 +10,7 @@ use block_byte_common::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inventory::{
-        Inventory,
-        LootGenerationContext, generate_loot_table,
-    },
+    inventory::{Inventory, LootGenerationContext, generate_loot_table},
     world::{WorldAccess, WorldEvent},
 };
 

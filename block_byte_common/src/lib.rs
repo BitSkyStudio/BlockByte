@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Debug,
     hash::Hash,
     sync::OnceLock,
 };
@@ -159,7 +160,7 @@ impl Into<[u8; 4]> for Color {
         [self.r, self.g, self.b, self.a]
     }
 }
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct LookDirection {
     pub pitch: f32,
     pub yaw: f32,
@@ -668,8 +669,9 @@ pub enum EntityPose {
     Knocked,
 }
 impl EntityPose {
-    pub fn base_animation(&self) -> &'static str {
-        match self {
+    //todo: cache interning
+    pub fn base_animation(&self) -> InternString {
+        InternString::intern(match self {
             EntityPose::Stand => "idle",
             EntityPose::Walk => "walk",
             EntityPose::Run => "run",
@@ -683,24 +685,15 @@ impl EntityPose {
             EntityPose::Mantle => "mantle",
             EntityPose::Jump => "jump",
             EntityPose::Knocked => "knocked",
-        }
+        })
     }
-    pub fn upper_animation(&self) -> Option<&'static str> {
-        match self {
-            EntityPose::Walk => Some("upper_walk"),
-            EntityPose::Run => Some("upper_run"),
-            EntityPose::CrouchWalk => Some("upper_walk"),
-            EntityPose::Stand => None,
-            EntityPose::Crouch => None,
-            EntityPose::Slide => None,
-            EntityPose::Levitate => None,
-            EntityPose::Fly => None,
-            EntityPose::Fall => None,
-            EntityPose::Sleeping => None,
-            EntityPose::Mantle => None,
-            EntityPose::Jump => None,
-            EntityPose::Knocked => None,
-        }
+    pub fn upper_animation(&self) -> Option<InternString> {
+        Some(InternString::intern(match self {
+            EntityPose::Walk => "upper_walk",
+            EntityPose::Run => "upper_run",
+            EntityPose::CrouchWalk => "upper_walk",
+            _ => return None,
+        }))
     }
     pub fn disables_upper_animation(&self) -> bool {
         match self {
@@ -732,19 +725,20 @@ impl EntityPose {
 }
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum EntityAction {
-    Attack,
+    Attack(InternString),
     Place,
     Interact,
     Equip,
 }
 impl EntityAction {
-    pub fn animation(&self) -> &'static str {
-        match self {
-            EntityAction::Attack => "hit",
+    pub fn animation(&self) -> InternString {
+        //todo: properly cache
+        InternString::intern(match self {
+            EntityAction::Attack(hit) => return *hit,
             EntityAction::Place => "place",
             EntityAction::Interact => "place",
             EntityAction::Equip => "equip",
-        }
+        })
     }
 }
 pub trait WeightProvider<W> {
@@ -826,6 +820,9 @@ static STRING_INTERN_TABLE: OnceLock<OnceMap<&'static str, InternString>> = Once
 #[derive(Copy, Clone)]
 pub struct InternString(&'static str);
 impl InternString {
+    pub fn empty() -> InternString {
+        InternString::intern("")
+    }
     pub fn intern(input: &str) -> InternString {
         STRING_INTERN_TABLE
             .get_or_init(OnceMap::new)
@@ -854,6 +851,11 @@ impl InternString {
     }
     fn addr(&self) -> usize {
         (self.0 as *const str).addr()
+    }
+}
+impl Debug for InternString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 impl Hash for InternString {

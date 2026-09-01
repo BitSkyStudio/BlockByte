@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::{
-    TexCoords,
+    InternString, TexCoords,
     coord::{Face, FaceMap, Pos},
     registry::TextureKey,
 };
@@ -234,7 +234,7 @@ impl Bone {
         parent: Matrix4<f32>,
         animations: &[ResolvedAnimation],
         geometry_consumer: &mut impl FnMut(ModelGeometry),
-        binding_consumer: &mut impl FnMut(Matrix4<f32>, &str),
+        binding_consumer: &mut impl FnMut(Matrix4<f32>, InternString),
     ) {
         let o = Matrix4::from_translation(self.origin);
         let io = Matrix4::from_translation(-self.origin);
@@ -286,7 +286,7 @@ impl Bone {
                 } => {
                     binding_consumer(
                         world * Matrix4::from_translation(*position) * Matrix4::from(*rotation),
-                        name.as_str(),
+                        *name,
                     );
                 }
                 Element::Mesh {
@@ -318,7 +318,7 @@ impl Bone {
     }
     fn anchor(
         &self,
-        anchor: &str,
+        anchor: InternString,
         matrix: Matrix4<f32>,
         animations: &[ResolvedAnimation],
     ) -> Option<Matrix4<f32>> {
@@ -330,7 +330,7 @@ impl Bone {
                     position,
                     rotation,
                 } => {
-                    if name == anchor {
+                    if *name == anchor {
                         return Some(
                             transform
                                 * Matrix4::from_translation(*position)
@@ -360,7 +360,7 @@ pub enum Element {
         uvs: FaceMap<(TexCoords, u8, usize)>,
     },
     Locator {
-        name: String,
+        name: InternString,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     },
@@ -374,8 +374,9 @@ pub struct MeshFace {
     vertices: Vec<(Pos, [f32; 2])>,
     texture: usize,
 }
-pub struct DrawAnimation<'a> {
-    pub animation: &'a str,
+#[derive(Debug)]
+pub struct DrawAnimation {
+    pub animation: InternString,
     pub time: f32,
     pub weight: f32,
 }
@@ -386,7 +387,8 @@ struct ResolvedAnimation {
 }
 pub struct Model {
     root_bone: Bone,
-    animations: HashMap<String, (usize, AnimationPlayInfo)>,
+    animations: HashMap<InternString, (usize, AnimationPlayInfo)>,
+    animation_lists: HashMap<InternString, Vec<InternString>>,
     pub textures: Vec<(ModelTexture, f32, f32)>,
 }
 pub enum ModelTexture {
@@ -404,21 +406,21 @@ pub enum ModelGeometry {
     Triangle([ModelVertex; 3], usize),
 }
 impl Model {
-    pub fn get_animation_info(&self, animation: &str) -> Option<AnimationPlayInfo> {
-        self.animations.get(animation).map(|(_, info)| *info)
+    pub fn get_animation_info(&self, animation: InternString) -> Option<AnimationPlayInfo> {
+        self.animations.get(&animation).map(|(_, info)| *info)
     }
     pub fn draw(
         &self,
         matrix: Matrix4<f32>,
         animations: &[DrawAnimation],
         mut geometry_consumer: impl FnMut(ModelGeometry),
-        mut binding_consumer: impl FnMut(Matrix4<f32>, &str),
+        mut binding_consumer: impl FnMut(Matrix4<f32>, InternString),
     ) {
         let animations = animations
             .iter()
             .filter_map(|animation| {
                 Some(ResolvedAnimation {
-                    animation: self.animations.get(animation.animation)?.0,
+                    animation: self.animations.get(&animation.animation)?.0,
                     time: animation.time,
                     weight: animation.weight,
                 })
@@ -433,7 +435,7 @@ impl Model {
     }
     pub fn anchor(
         &self,
-        name: &str,
+        name: InternString,
         matrix: Matrix4<f32>,
         animations: &[DrawAnimation],
     ) -> Option<Matrix4<f32>> {
@@ -441,13 +443,17 @@ impl Model {
             .iter()
             .filter_map(|animation| {
                 Some(ResolvedAnimation {
-                    animation: self.animations.get(animation.animation)?.0,
+                    animation: self.animations.get(&animation.animation)?.0,
                     time: animation.time,
                     weight: animation.weight,
                 })
             })
             .collect::<Vec<_>>();
         self.root_bone.anchor(name, matrix, &animations[..])
+    }
+    pub fn random_animation_from_list(&self, list: InternString, i: usize) -> Option<InternString> {
+        let list = self.animation_lists.get(&list)?;
+        Some(*list.get(i % list.len()).unwrap())
     }
     fn from_bbmodel(bbmodel: BBModel) -> Model {
         let element_map: HashMap<_, _> = bbmodel
@@ -465,26 +471,35 @@ impl Model {
         let root_bone =
             Self::build_bone(&bbmodel.outliner, None, &element_map, &group_map, &bbmodel);
         let mut embed_texture_id = 0;
+
+        let animations: HashMap<InternString, (usize, AnimationPlayInfo)> = bbmodel
+            .animations
+            .unwrap_or(Vec::new())
+            .into_iter()
+            .enumerate()
+            .map(|(i, animation)| {
+                (
+                    InternString::intern(&animation.name),
+                    (
+                        i,
+                        AnimationPlayInfo {
+                            loop_mode: animation.loop_mode,
+                            length: animation.length,
+                        },
+                    ),
+                )
+            })
+            .collect();
+        let mut animation_lists: HashMap<InternString, Vec<InternString>> = HashMap::new();
+        for (animation, _) in &animations {
+            let list_id = InternString::intern(animation.as_str().split("@").next().unwrap());
+            animation_lists.entry(list_id).or_default().push(*animation);
+        }
+
         Model {
             root_bone,
-            animations: bbmodel
-                .animations
-                .unwrap_or(Vec::new())
-                .into_iter()
-                .enumerate()
-                .map(|(i, animation)| {
-                    (
-                        animation.name,
-                        (
-                            i,
-                            AnimationPlayInfo {
-                                loop_mode: animation.loop_mode,
-                                length: animation.length,
-                            },
-                        ),
-                    )
-                })
-                .collect(),
+            animations,
+            animation_lists,
             textures: bbmodel
                 .textures
                 .into_iter()
@@ -669,7 +684,7 @@ impl Model {
                             bone.elements.push(Element::Locator {
                                 position: Vector3::from(*position) / BLOCKBENCH_SIZE,
                                 rotation: make_rotation(rotation[0], rotation[1], rotation[2]),
-                                name: name.clone(),
+                                name: InternString::intern(name),
                             });
                         }
                         BBElement::Mesh {

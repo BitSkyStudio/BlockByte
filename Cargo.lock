@@ -229,6 +229,7 @@ dependencies = [
  "cgmath",
  "image",
  "include_dir",
+ "lazy_static",
  "lz4_flex",
  "parking_lot",
  "pollster",

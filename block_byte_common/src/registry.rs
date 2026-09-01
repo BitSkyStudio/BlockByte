@@ -567,18 +567,27 @@ pub struct ToolData {
     pub reach: f32,
     pub knockback: f32,
     pub stamina: f32,
+    #[serde(default = "default_tool_hit_animation")]
+    pub hit_animation: InternString,
 }
+fn default_tool_hit_animation() -> InternString {
+    InternString::intern("hit")
+}
+static TOOL_HAND: OnceLock<ToolData> = OnceLock::new();
 impl ToolData {
-    pub const HAND: ToolData = ToolData {
-        damage_table: DamageTable {
-            Blunt: Some(1.),
-            ..DamageTable::empty()
-        },
-        swing_time: 0.5,
-        reach: 5.,
-        knockback: 8.,
-        stamina: 10.,
-    };
+    pub fn hand() -> &'static ToolData {
+        TOOL_HAND.get_or_init(|| ToolData {
+            damage_table: DamageTable {
+                Blunt: Some(1.),
+                ..DamageTable::empty()
+            },
+            swing_time: 0.5,
+            reach: 5.,
+            knockback: 8.,
+            stamina: 10.,
+            hit_animation: InternString::intern("hit"),
+        })
+    }
 }
 pub type ItemKey = Key<ItemData>;
 
@@ -837,7 +846,7 @@ pub struct BlockMachineData {
     #[serde(default)]
     pub model: Option<ModelInstance>,
     #[serde(default)]
-    pub model_animations: Vec<String>,
+    pub model_animations: Vec<InternString>,
 }
 pub enum MachineInstrution {
     Yield,
@@ -888,7 +897,7 @@ pub enum MachineInstrution {
         result: FallibleInstructionResult,
     },
     PlayAnimation {
-        animation: String,
+        animation: InternString,
     },
     WaitForItems {
         view: usize,
@@ -1006,7 +1015,7 @@ impl ExternalScriptByteCode for MachineInstrution {
             "play_animation" => {
                 expect_argument_count(parse_context, arguments, 1)?;
                 MachineInstrution::PlayAnimation {
-                    animation: arguments[0].to_string(),
+                    animation: InternString::intern(&arguments[0]),
                 }
             }
             _ => {

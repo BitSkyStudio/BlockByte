@@ -4,7 +4,7 @@ use block_byte_common::registry::{
     BlockColor, BlockData, BlockKey, BlockRenderData, EntityData, ItemModel, ModelInstance,
 };
 use block_byte_common::rotation::BlockRotation;
-use block_byte_common::{Color, TexCoords};
+use block_byte_common::{Color, InternString, TexCoords};
 use bytemuck::{NoUninit, Pod};
 use cgmath::{InnerSpace, Matrix4, Point3, SquareMatrix, Transform, Vector3};
 use image::RgbaImage;
@@ -121,7 +121,7 @@ impl RenderState {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -1553,7 +1553,7 @@ pub fn draw_model<C: MeshVertexConsumer>(
     matrix: Matrix4<f32>,
     vertex_consumer: &mut C,
     animations: &[DrawAnimation],
-    binding_query: impl Fn(&str, &mut C) -> Option<Cow<'static, ItemModel>>,
+    binding_query: impl Fn(InternString, &mut C) -> Option<Cow<'static, ItemModel>>,
 ) {
     let model_data = &model.model.data().model;
     let embed_textures = &TEXTURE_ATLAS.get().unwrap().models[model.model.numeric_id()];
@@ -1577,11 +1577,11 @@ pub fn draw_model<C: MeshVertexConsumer>(
             ModelGeometry::Triangle(_vertices, _texture) => todo!(),
         },
         |matrix, binding| {
-            item_models.push((matrix, binding.to_string()));
+            item_models.push((matrix, binding));
         },
     );
     for (matrix, binding) in item_models {
-        if let Some(model) = binding_query(&binding, vertex_consumer) {
+        if let Some(model) = binding_query(binding, vertex_consumer) {
             let anchor = match &*model {
                 ItemModel::Block(block) => match &block.data().render_data {
                     BlockRenderData::Air => Matrix4::identity(),
@@ -1590,11 +1590,7 @@ pub fn draw_model<C: MeshVertexConsumer>(
                         .model
                         .data()
                         .model
-                        .anchor(
-                            binding.as_str(),
-                            Matrix4::from_scale(block.data().item_scale),
-                            &[],
-                        )
+                        .anchor(binding, Matrix4::from_scale(block.data().item_scale), &[])
                         .map(|matrix| {
                             Matrix4::from_scale(block.data().item_scale) * matrix.invert().unwrap()
                         })
@@ -1604,7 +1600,7 @@ pub fn draw_model<C: MeshVertexConsumer>(
                     .model
                     .data()
                     .model
-                    .anchor(binding.as_str(), Matrix4::identity(), &[])
+                    .anchor(binding, Matrix4::identity(), &[])
                     .map(|matrix| matrix.invert().unwrap())
                     .unwrap_or(Matrix4::identity()),
             };
@@ -1646,11 +1642,12 @@ pub fn item_model_icon_view(model: &ItemModel) -> Matrix4<f32> {
         }
     }
     fn model_icon_view(model: &ModelInstance) -> Matrix4<f32> {
+        //todo: cache intern string
         model
             .model
             .data()
             .model
-            .anchor("icon", Matrix4::identity(), &[])
+            .anchor(InternString::intern("icon"), Matrix4::identity(), &[])
             .map(|m| m.invert().unwrap())
             .unwrap_or_else(default_view)
     }

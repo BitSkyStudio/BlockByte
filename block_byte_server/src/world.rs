@@ -6,11 +6,9 @@ use std::{
 };
 
 use block_byte_common::{
-    ACCELERATION_COEFFICIENT, DamageTable, DamageType,
-    EntityAction, EntityPose, EntityStats, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
-    coord::{
-        self, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos,
-    },
+    ACCELERATION_COEFFICIENT, DamageTable, DamageType, EntityAction, EntityPose, EntityStats,
+    MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
+    coord::{self, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::NetworkMessageS2C,
     registry::{
         BlockEntry, BlockMachineFace, BlockPalette, EntityKey, PlantKey, ToolData, air_block,
@@ -18,8 +16,8 @@ use block_byte_common::{
     scripts::ScriptValue,
     ui::PropertyMap,
     world::{
-        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage,
-        ClientBlockPlants, ClientChunkBlockComponents, ComponentTypeAccess,
+        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
+        ClientChunkBlockComponents, ComponentTypeAccess,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -459,6 +457,7 @@ pub fn tick_chunk(world: &WorldAccess) {
             }
         } else {
             let mut move_vector = Pos::ZERO;
+            let old_direction = entity.direction;
             entity.tick(&mut move_vector, world);
             entity.pose = if move_vector.length_squared() > 0. {
                 EntityPose::Walk
@@ -479,6 +478,8 @@ pub fn tick_chunk(world: &WorldAccess) {
             );
             if new_position != entity.position {
                 world.teleport_entity(entity, new_position).unwrap();
+            } else if old_direction != entity.direction {
+                world.send_viewers(entity.position.to_chunk_pos(), entity.create_move_message());
             }
         }
         {
@@ -1461,7 +1462,7 @@ pub fn compute_tool_damage_and_knockback(
     let tool = item
         .as_ref()
         .and_then(|item| item.item.data().tool.as_ref())
-        .unwrap_or(&ToolData::HAND);
+        .unwrap_or(ToolData::hand());
     let quality_multiplier = match item {
         Some(item) => item
             .components

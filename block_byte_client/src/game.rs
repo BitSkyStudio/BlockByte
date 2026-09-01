@@ -15,7 +15,7 @@ use block_byte_common::{
     EntityPose, EntityResearchProgress, EntityStats, HitTimer, InternString, LookDirection,
     MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
-    model::{DrawAnimation, LoopMode, ModelGeometry},
+    model::{DrawAnimation, LoopMode, Model, ModelGeometry},
     net::{
         ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, ScreenSlot,
         make_connection_config,
@@ -655,13 +655,15 @@ impl GameScreen for ClientGame {
         }
         if self.is_attack_queued && self.hit_timer.is_none() {
             self.is_attack_queued = false;
-            let stamina_cost = self.active_tool().stamina;
+            let tool = self.active_tool();
+            let swing_time = tool.swing_time;
+            let stamina_cost = tool.stamina;
             if self.stamina >= stamina_cost {
+                self.current_local_action = Some(EntityAction::Attack(tool.hit_animation));
                 self.stamina -= stamina_cost;
-                self.current_local_action = Some(EntityAction::Attack);
                 self.hit_timer = Some(HitTimer {
                     current_time: 0.,
-                    swing_time: self.active_tool().swing_time / (self.player_stats.haste() / 100.),
+                    swing_time: swing_time / (self.player_stats.haste() / 100.),
                 });
             }
         }
@@ -1013,7 +1015,7 @@ impl ClientGame {
                             hand_item,
                             pose,
                             pose_player: AnimationPlayer::new(pose.base_animation()),
-                            action_player: AnimationPlayer::new("empty"),
+                            action_player: AnimationPlayer::new(InternString::empty()),
                             effects,
                         },
                     );
@@ -1032,9 +1034,10 @@ impl ClientGame {
                         entity.direction = direction;
                         if entity.pose != pose {
                             entity.pose = pose;
+                            let model = &entity.key.data().model.model.data().model;
                             entity
                                 .pose_player
-                                .play_animation(pose.base_animation(), 0.1);
+                                .play_animation(pose.base_animation(), 0.1, model);
                         }
                     }
                 }
@@ -1145,7 +1148,10 @@ impl ClientGame {
                 }
                 NetworkMessageS2C::EntityAction { entity, action } => {
                     if let Some(entity) = self.entities.get_mut(&entity) {
-                        entity.action_player.play_animation(action.animation(), 0.1);
+                        let model = &entity.key.data().model.model.data().model;
+                        entity
+                            .action_player
+                            .play_animation(action.animation(), 0.1, model);
                     }
                 }
                 NetworkMessageS2C::EntityAddEffect {
@@ -1270,6 +1276,10 @@ impl ChunkBufferPool {
         }
     }
 }
+lazy_static::lazy_static! {
+    static ref IDLE_STRING: InternString = InternString::intern("idle");
+    static ref RUNNING_STRING: InternString = InternString::intern("running");
+}
 impl ClientGame {
     pub fn new(connection: ClientConnection) -> ClientGame {
         Self {
@@ -1293,7 +1303,7 @@ impl ClientGame {
             hotbar_slot: 0,
             item_variation: HashMap::new(),
             chunk_mesh_channels: std::sync::mpsc::channel(),
-            viewmodel_player: AnimationPlayer::new("idle"),
+            viewmodel_player: AnimationPlayer::new(InternString::intern("idle")),
             swap_hand_item: None,
             research: EntityResearchProgress::default(),
             stamina: 0.,
@@ -1337,7 +1347,7 @@ impl ClientGame {
     pub fn active_tool(&self) -> &ToolData {
         self.held_item()
             .and_then(|item| item.item.data().tool.as_ref())
-            .unwrap_or(&ToolData::HAND)
+            .unwrap_or(ToolData::hand())
     }
     pub fn get_block(&self, position: BlockPos) -> Option<BlockEntry> {
         let (chunk, offset) = position.to_chunk_pos_offset();
@@ -1352,6 +1362,7 @@ impl ClientGame {
                 .unwrap(),
         )
     }
+
     pub fn tick_client(
         &mut self,
         _device: &Device,
@@ -1370,21 +1381,17 @@ impl ClientGame {
             .get_player_data()
             .and_then(|data| data.viewmodel.as_ref())
         {
-            let mut viewmodel_animations: Vec<DrawAnimation<'static>> = Vec::new();
-            let (animation, time) = self.viewmodel_player.get_animation();
-            let animation_length = viewmodel
-                .model
-                .data()
-                .model
-                .get_animation_info(animation)
-                .unwrap()
-                .length;
+            let model = &viewmodel.model.data().model;
+            let mut viewmodel_animations: Vec<DrawAnimation> = Vec::new();
+            let (animation, animation_list, mut time) = self.viewmodel_player.get_animation();
+            let animation_length = model.get_animation_info(animation).unwrap().length;
             let idle_or_run = if self.camera.running {
-                "running"
+                *RUNNING_STRING
             } else {
-                "idle"
+                *IDLE_STRING
             };
-            let is_animation_idle_or_run = animation == "idle" || animation == "running";
+            let is_animation_idle_or_run =
+                animation_list == *IDLE_STRING || animation_list == *RUNNING_STRING;
             if let Some(action) = self.current_local_action {
                 let mut cancel = false;
                 if let EntityAction::Equip = action {
@@ -1394,31 +1401,37 @@ impl ClientGame {
                 }
                 if !cancel {
                     self.viewmodel_player
-                        .play_animation(action.animation(), 0.1);
-                }
-                match (action, self.viewmodel_player.get_animation().0) {
-                    (EntityAction::Equip, "place") => {}
-                    _ => {}
+                        .play_animation(action.animation(), 0.1, model);
+                    if let EntityAction::Attack(_) = &action {
+                        let hit_length = model
+                            .get_animation_info(self.viewmodel_player.current.animation)
+                            .unwrap()
+                            .length;
+                        self.viewmodel_player.current.time_scaling =
+                            hit_length / self.hit_timer.as_ref().unwrap().swing_time;
+                    }
+                    time = 0.;
                 }
             }
-            match animation {
-                "hit" => {
-                    let swing_time = self
-                        .hit_timer
-                        .as_ref()
-                        .map(|hit_timer| hit_timer.swing_time)
-                        .unwrap_or(0.);
-                    if time >= swing_time {
-                        self.viewmodel_player.play_animation(idle_or_run, 0.1);
+            match &self.hit_timer {
+                Some(hit_timer) => {
+                    if time >= hit_timer.swing_time {
+                        self.viewmodel_player
+                            .play_animation(idle_or_run, 0.1, model);
                     }
                 }
-                _ => {
+                None => {
                     if time >= animation_length
-                        || (is_animation_idle_or_run && animation != idle_or_run)
+                        || (is_animation_idle_or_run && animation_list != idle_or_run)
                     {
                         self.viewmodel_player.play_animation(
                             idle_or_run,
-                            if animation == idle_or_run { 0. } else { 0.1 },
+                            if animation_list == idle_or_run {
+                                0.
+                            } else {
+                                0.1
+                            },
+                            model,
                         );
                     }
                 }
@@ -1437,23 +1450,6 @@ impl ClientGame {
                 };
             }
             self.current_local_action = None;
-            for entry in &mut viewmodel_animations {
-                if entry.animation == "hit" {
-                    let swing_time = self
-                        .hit_timer
-                        .as_ref()
-                        .map(|hit_timer| hit_timer.swing_time)
-                        .unwrap_or(1.);
-                    let hit_length = viewmodel
-                        .model
-                        .data()
-                        .model
-                        .get_animation_info("hit")
-                        .unwrap()
-                        .length;
-                    entry.time = entry.time / swing_time * hit_length;
-                }
-            }
 
             self.viewmodel_player.tick(dt, &mut viewmodel_animations);
 
@@ -1467,7 +1463,7 @@ impl ClientGame {
                     * Matrix4::from_angle_x(Rad(self.camera.direction.pitch)),
                 &mut viewmodel_mesh.consumer(Color::WHITE),
                 &viewmodel_animations[..],
-                |binding, vc| match binding {
+                |binding, vc| match binding.as_str() {
                     "hand" => {
                         let (item, count, variant) = match self.swap_hand_item.as_ref() {
                             Some(item) => item,
@@ -1532,25 +1528,23 @@ impl ClientGame {
         }
         ps.end();
         for (id, entity) in &mut self.entities {
-            let mut animations: SmallVec<[DrawAnimation<'static>; 8]> = SmallVec::new();
+            let mut animations: SmallVec<[DrawAnimation; 8]> = SmallVec::new();
             entity.action_player.tick(dt, &mut animations);
-            let model = &entity.key.data().model;
-            let (action_animation, action_time) = entity.action_player.get_animation();
-            match model
-                .model
-                .data()
-                .model
-                .get_animation_info(action_animation)
-            {
+            let model_instance = &entity.key.data().model;
+            let (action_animation, _, action_time) = entity.action_player.get_animation();
+            let model = &model_instance.model.data().model;
+            match model.get_animation_info(action_animation) {
                 Some(info) => {
                     if action_time >= info.length {
-                        entity.action_player.play_animation("empty", 0.1);
+                        entity
+                            .action_player
+                            .play_animation(InternString::empty(), 0.1, model);
                     }
                 }
                 None => {}
             }
-            let (pose_animation, pose_time) = entity.pose_player.get_animation();
-            match model.model.data().model.get_animation_info(pose_animation) {
+            let (pose_animation, _, pose_time) = entity.pose_player.get_animation();
+            match model.get_animation_info(pose_animation) {
                 Some(info) => {
                     if pose_time >= info.length {
                         entity.pose_player.restart_animation();
@@ -1586,7 +1580,7 @@ impl ClientGame {
                     lerp_time,
                 );
                 render::draw_model(
-                    model,
+                    model_instance,
                     Matrix4::from_translation(Vector3::new(position.x, position.y, position.z))
                         * Matrix4::from_angle_y(Rad(rotation)),
                     &mut entity_mesh.consumer(Color::WHITE),
@@ -1718,9 +1712,8 @@ impl ClientGame {
                             let animation = match machine_data.model_animations.is_empty() {
                                 true => None,
                                 false => {
-                                    let mut animation = machine_data.model_animations
-                                        [machine.animation as usize]
-                                        .as_str();
+                                    let mut animation =
+                                        machine_data.model_animations[machine.animation as usize];
                                     let mut time = animation_time;
                                     let model_data = &machine_model.model.data().model;
                                     let animation_info =
@@ -1729,8 +1722,7 @@ impl ClientGame {
                                     if time > animation_info.length {
                                         match animation_info.loop_mode {
                                             LoopMode::Once => {
-                                                animation =
-                                                    machine_data.model_animations[0].as_str();
+                                                animation = machine_data.model_animations[0];
                                                 time -= animation_info.length;
                                                 time %= model_data
                                                     .get_animation_info(animation)
@@ -2470,11 +2462,14 @@ pub struct AnimationPlayer {
     current: AnimationPlayerEntry,
     previous_animations: Vec<AnimationPlayerEntry>,
 }
+#[derive(Debug)]
 struct AnimationPlayerEntry {
-    animation: &'static str,
+    animation: InternString,
+    list: InternString,
     animation_time: f32,
     interpolation_time: f32,
     total_interpolation_time: f32,
+    time_scaling: f32,
 }
 impl AnimationPlayerEntry {
     pub fn interpolation_progress(&self) -> f32 {
@@ -2486,22 +2481,30 @@ impl AnimationPlayerEntry {
     }
 }
 impl AnimationPlayer {
-    pub fn new(current_animation: &'static str) -> AnimationPlayer {
+    pub fn new(current_animation: InternString) -> AnimationPlayer {
         AnimationPlayer {
             current: AnimationPlayerEntry {
                 animation: current_animation,
+                list: current_animation,
                 animation_time: 0.,
                 interpolation_time: 0.,
                 total_interpolation_time: 0.,
+                time_scaling: 1.,
             },
             previous_animations: Vec::new(),
         }
     }
-    pub fn play_animation(&mut self, animation: &'static str, interpolation_time: f32) {
+    pub fn play_animation(&mut self, list: InternString, interpolation_time: f32, model: &Model) {
+        let animation = match model.random_animation_from_list(list, rng().next_u32() as usize) {
+            Some(animation) => animation,
+            None => InternString::empty(),
+        };
         let mut new_entry = AnimationPlayerEntry {
             animation,
+            list,
             animation_time: 0.,
             interpolation_time: 0.,
+            time_scaling: 1.,
             total_interpolation_time: interpolation_time,
         };
         std::mem::swap(&mut new_entry, &mut self.current);
@@ -2511,13 +2514,17 @@ impl AnimationPlayer {
 
         self.previous_animations.push(new_entry);
     }
-    pub fn get_animation(&self) -> (&'static str, f32) {
-        (self.current.animation, self.current.animation_time)
+    pub fn get_animation(&self) -> (InternString, InternString, f32) {
+        (
+            self.current.animation,
+            self.current.list,
+            self.current.animation_time,
+        )
     }
     pub fn restart_animation(&mut self) {
         self.current.animation_time = 0.;
     }
-    pub fn tick(&mut self, dt: f32, output: &mut impl Extend<DrawAnimation<'static>>) {
+    pub fn tick(&mut self, dt: f32, output: &mut impl Extend<DrawAnimation>) {
         self.current.animation_time += dt;
         self.current.interpolation_time =
             (self.current.interpolation_time + dt).min(self.current.total_interpolation_time);
@@ -2531,7 +2538,7 @@ impl AnimationPlayer {
                 .chain(self.previous_animations.iter())
                 .map(|entry| DrawAnimation {
                     animation: entry.animation,
-                    time: entry.animation_time,
+                    time: entry.animation_time * entry.time_scaling,
                     weight: entry.interpolation_progress(),
                 }),
         );
