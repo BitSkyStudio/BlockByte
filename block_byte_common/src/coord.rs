@@ -1019,140 +1019,20 @@ pub struct AABBRaycastResult {
 }
 impl Face {
     pub fn get_vertices(self, coords: TexCoords, rotation: u8) -> [(Pos, [f32; 2]); 4] {
-        let (first, second, third, fourth) = match self {
-            Face::Front => (
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 0.,
-                },
-            ),
-            Face::Back => (
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 1.,
-                },
-            ),
-            Face::Up => (
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 1.,
-                },
-            ),
-            Face::Down => (
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 1.,
-                },
-            ),
-            Face::Left => (
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 0.,
-                    y: 0.,
-                    z: 0.,
-                },
-            ),
-            Face::Right => (
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 1.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 1.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 0.,
-                },
-                Pos {
-                    x: 1.,
-                    y: 0.,
-                    z: 1.,
-                },
-            ),
-        };
+        let vertices: [_; 8] = std::array::from_fn(|i| Pos {
+            x: if i & 0x1 != 0 { 1. } else { 0. },
+            y: if i & 0x2 != 0 { 1. } else { 0. },
+            z: if i & 0x4 != 0 { 1. } else { 0. },
+        });
+        let [first, second, third, fourth] = match self {
+            Face::Front => [3, 2, 0, 1],
+            Face::Back => [6, 7, 5, 4],
+            Face::Up => [2, 3, 7, 6],
+            Face::Down => [1, 0, 4, 5],
+            Face::Left => [2, 6, 4, 0],
+            Face::Right => [7, 3, 1, 5],
+        }
+        .map(|i| vertices[i]);
         let get_uv = |id: u8| match (id + rotation) % 4 {
             0 => [coords.u1, coords.v1],
             1 => [coords.u2, coords.v1],
