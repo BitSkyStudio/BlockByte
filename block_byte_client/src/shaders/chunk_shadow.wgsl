@@ -6,6 +6,11 @@ var<uniform> shadow_camera: CameraUniform;
 @group(2) @binding(0)
 var<uniform> time: f32;
 
+@group(0) @binding(0)
+var t_diffuse: texture_2d<f32>;
+@group(0)@binding(1)
+var s_diffuse: sampler;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -35,11 +40,6 @@ fn vs_main(
     out.clip_position = vec4(shadow_distort_position(projected.xy), projected.z, 1.);
     return out;
 }
-
-@group(0) @binding(0)
-var t_diffuse: texture_2d<f32>;
-@group(0)@binding(1)
-var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {

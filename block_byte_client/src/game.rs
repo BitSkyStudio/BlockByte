@@ -26,6 +26,7 @@ use block_byte_common::{
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key,
         TextureKey, ToolData, TranslationLanguageData, air_block,
     },
+    rotation::BlockRotation,
     ui::PropertyMap,
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
@@ -42,12 +43,12 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 
 use crate::{
     InputManager,
-    atlas::{TexCoordsExt, TexCoordsIndexExt},
+    atlas::{TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt},
     game::clipping::Frustum,
     render::{
-        self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUMesh, GPUParticleInstance,
-        GUIMesh, Mesh, MeshVertex, MeshVertexConsumer, RenderState, SurfaceError, draw_model,
-        get_block_matrix, get_block_rotation_face_vertices,
+        self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUBlockFace, GPUMesh,
+        GPUParticleInstance, GUIMesh, GridChunkMesh, Mesh, MeshVertex, MeshVertexConsumer,
+        RenderState, SurfaceError, draw_model, get_block_matrix, get_block_rotation_face_vertices,
     },
     ui::{GameData, ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
 };
@@ -329,8 +330,8 @@ pub struct ClientGame {
     pub current_local_action: Option<EntityAction>,
     pub swap_hand_item: Option<(ItemKey, u16, usize)>,
     pub chunk_mesh_channels: (
-        std::sync::mpsc::Sender<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
-        std::sync::mpsc::Receiver<(ChunkPos, ChunkMesh, ChunkMesh, u64)>,
+        std::sync::mpsc::Sender<(ChunkPos, GridChunkMesh, ChunkMesh, u64, usize)>,
+        std::sync::mpsc::Receiver<(ChunkPos, GridChunkMesh, ChunkMesh, u64, usize)>,
     ),
     pub research: EntityResearchProgress,
     pub stamina: f32,
@@ -940,11 +941,15 @@ impl ClientGame {
                                 components: RwLock::new(components),
                                 version: AtomicU64::new(0),
                             }),
-                            gpu_mesh: GPUMesh::empty(),
-                            gpu_mesh_high_res: GPUMesh::empty(),
+                            gpu_mesh_grid: GPUMesh::empty(),
+                            grid_count: 0,
+                            gpu_mesh_detail: GPUMesh::empty(),
                             position,
                             modified: false,
                             scheduled: false,
+                            lod_only_faces: 0,
+                            detail_mesh: None,
+                            last_visible: false,
                         },
                     );
                     self.mark_modified(position);
@@ -954,8 +959,8 @@ impl ClientGame {
                 }
                 NetworkMessageS2C::UnloadChunk { position } => {
                     if let Some(chunk) = self.chunks.remove(&position) {
-                        self.chunk_buffer_pool.reclaim(chunk.gpu_mesh);
-                        self.chunk_buffer_pool.reclaim(chunk.gpu_mesh_high_res);
+                        self.chunk_buffer_pool.reclaim(chunk.gpu_mesh_grid);
+                        self.chunk_buffer_pool.reclaim(chunk.gpu_mesh_detail);
                     }
                 }
                 NetworkMessageS2C::SetBlock { position, block } => {
@@ -1510,12 +1515,13 @@ impl ClientGame {
                         )
                     });
                     rayon::spawn(move || {
-                        let (mesh, mesh_high_res, version) = ClientChunk::build_chunk_mesh(
-                            modified_chunk,
-                            build_data,
-                            neighbor_chunks,
-                        );
-                        tx.send((modified_chunk, mesh, mesh_high_res, version))
+                        let (mesh, mesh_high_res, version, lod_only_faces) =
+                            ClientChunk::build_chunk_mesh(
+                                modified_chunk,
+                                build_data,
+                                neighbor_chunks,
+                            );
+                        tx.send((modified_chunk, mesh, mesh_high_res, version, lod_only_faces))
                             .unwrap();
                     });
                     self.chunk_mesh_queue_size += 1;
@@ -1955,10 +1961,14 @@ pub struct ChunkMeshBuildData {
 pub struct ClientChunk {
     pub position: ChunkPos,
     pub mesh_build_data: Arc<ChunkMeshBuildData>,
-    pub gpu_mesh: GPUMesh,
-    pub gpu_mesh_high_res: GPUMesh,
+    pub gpu_mesh_grid: GPUMesh,
+    pub grid_count: usize,
+    pub gpu_mesh_detail: GPUMesh,
+    pub detail_mesh: Option<ChunkMesh>,
     pub modified: bool,
     pub scheduled: bool,
+    pub lod_only_faces: usize,
+    pub last_visible: bool,
 }
 
 impl ClientChunk {
@@ -1966,9 +1976,9 @@ impl ClientChunk {
         position: ChunkPos,
         chunk_data: Arc<ChunkMeshBuildData>,
         neighbor_chunks: FaceMap<Option<Arc<ChunkMeshBuildData>>>,
-    ) -> (ChunkMesh, ChunkMesh, u64) {
-        let mut mesh = ChunkMesh::default();
-        let mut mesh_high_res = ChunkMesh::default();
+    ) -> (GridChunkMesh, ChunkMesh, u64, usize) {
+        let mut mesh_grid = GridChunkMesh::default();
+        let mut mesh_detail = ChunkMesh::default();
         let chunk_blocks = chunk_data.blocks.read();
         let chunk_components = chunk_data.components.read();
         let neighbor_chunks =
@@ -1976,7 +1986,7 @@ impl ClientChunk {
 
         for (offset, plants) in chunk_components.plant.iter() {
             let base_position = (position.to_block_pos() + offset.xyz()).to_pos();
-            let mut mesh_vertex_consumer = mesh_high_res.consumer(BlockColor::default(), 0);
+            let mut mesh_vertex_consumer = mesh_detail.consumer(BlockColor::default(), 0);
             for (plant, stage) in &plants.plants {
                 let plant = plant.data();
                 let position = base_position
@@ -2063,13 +2073,16 @@ impl ClientChunk {
 
         if chunk_blocks.unique_values() == 1 && chunk_blocks.get(0).unwrap().block == air_block() {
             return (
-                mesh,
-                mesh_high_res,
+                mesh_grid,
+                mesh_detail,
                 chunk_data
                     .version
                     .load(std::sync::atomic::Ordering::Relaxed),
+                0,
             );
         }
+
+        let mut lod_only_faces = Vec::new();
 
         for x in 0..CHUNK_SIZE as u8 {
             for y in 0..CHUNK_SIZE as u8 {
@@ -2115,7 +2128,6 @@ impl ClientChunk {
                     match &block_data.render_data {
                         BlockRenderData::Air => {}
                         BlockRenderData::Full { faces, .. } => {
-                            let mut mesh_consumer = mesh.consumer(block.color, 0);
                             let base_position = Pos {
                                 x: (position.x as f32 * CHUNK_SIZE as f32) + x as f32,
                                 y: (position.y as f32 * CHUNK_SIZE as f32) + y as f32,
@@ -2139,6 +2151,7 @@ impl ClientChunk {
                                 let (vertices, local_face) =
                                     get_block_rotation_face_vertices(block.rotation, face);
                                 let face_texture = &faces[*local_face];
+                                let textures = face_texture.list();
                                 let tex_index = if face_texture.variant_count() > 1 {
                                     let hash = (base_position.x as i32 * 94839)
                                         ^ (base_position.y as i32 * 532)
@@ -2148,21 +2161,69 @@ impl ClientChunk {
                                 } else {
                                     0
                                 };
-                                let texture = face_texture.tex_coords(tex_index);
-                                mesh_consumer.add_quad(vertices.map(|vertex| MeshVertex {
-                                    position: vertex.position + base_position,
-                                    normal: vertex.normal,
-                                    uv: texture.map(vertex.uv),
-                                }));
+                                if block.rotation != BlockRotation::default()
+                                    || block.color != BlockColor::default()
+                                {
+                                    //todo: actually include these in grid mesh
+                                    let mut mesh_consumer = mesh_detail.consumer(block.color, 0);
+                                    let texture = face_texture.tex_coords(tex_index);
+                                    mesh_consumer.add_quad(vertices.map(|vertex| MeshVertex {
+                                        position: vertex.position + base_position,
+                                        normal: vertex.normal,
+                                        uv: texture.map(vertex.uv),
+                                    }));
+                                } else {
+                                    let texture = TEXTURE_ATLAS.get().unwrap().atlas_ids
+                                        [textures[tex_index % textures.len()].numeric_id()]
+                                    .unwrap();
+                                    mesh_grid.add_vertex(GPUBlockFace {
+                                        block: ChunkOffset::new(x, y, z).index() as u16,
+                                        texture: texture,
+                                        face: face as u8,
+                                        _pad: Default::default(),
+                                    });
+                                }
                             }
                         }
                         BlockRenderData::Model {
                             model,
-                            lod_hidden,
                             render_flags,
                             render_connections,
+                            lod,
                             ..
                         } => {
+                            if let Some(lod) = lod {
+                                for face in Face::all() {
+                                    let neighbor_position = BlockPos {
+                                        x: x as i32,
+                                        y: y as i32,
+                                        z: z as i32,
+                                    } + face.get_block_offset();
+                                    if let Some(neighbor_block) = get_neighbor(neighbor_position) {
+                                        let neighbor_block_data = neighbor_block.block.data();
+                                        match &neighbor_block_data.render_data {
+                                            BlockRenderData::Air => {}
+                                            BlockRenderData::Model { lod, .. } => {
+                                                if lod.is_none() {
+                                                    continue;
+                                                }
+                                            }
+                                            BlockRenderData::Full { .. } => {
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    let texture = TEXTURE_ATLAS.get().unwrap().atlas_ids
+                                        [lod.numeric_id()]
+                                    .unwrap();
+                                    lod_only_faces.push(GPUBlockFace {
+                                        block: ChunkOffset::new(x, y, z).index() as u16,
+                                        texture,
+                                        face: face as u8,
+                                        _pad: Default::default(),
+                                    });
+                                }
+                            }
                             render::draw_model(
                                 model,
                                 get_block_matrix(
@@ -2174,14 +2235,7 @@ impl ClientChunk {
                                         },
                                     block.rotation,
                                 ),
-                                &mut {
-                                    if *lod_hidden {
-                                        &mut mesh_high_res
-                                    } else {
-                                        &mut mesh
-                                    }
-                                    .consumer(block.color, *render_flags)
-                                },
+                                &mut { mesh_detail.consumer(block.color, *render_flags) },
                                 &[],
                                 |_, _| None,
                             );
@@ -2224,14 +2278,7 @@ impl ClientChunk {
                                                         },
                                                     final_rotation,
                                                 ),
-                                                &mut {
-                                                    if connection.lod_hidden {
-                                                        &mut mesh_high_res
-                                                    } else {
-                                                        &mut mesh
-                                                    }
-                                                    .consumer(block.color, 0)
-                                                },
+                                                &mut { mesh_detail.consumer(block.color, 0) },
                                                 &[],
                                                 |_, _| None,
                                             );
@@ -2245,12 +2292,17 @@ impl ClientChunk {
             }
         }
 
+        for face in &lod_only_faces {
+            mesh_grid.add_vertex(*face);
+        }
+
         (
-            mesh,
-            mesh_high_res,
+            mesh_grid,
+            mesh_detail,
             chunk_data
                 .version
                 .load(std::sync::atomic::Ordering::Relaxed),
+            lod_only_faces.len(),
         )
     }
 }

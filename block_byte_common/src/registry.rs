@@ -1056,11 +1056,11 @@ pub enum BlockRenderData {
         #[serde(default)]
         render_flags: u8,
         #[serde(default)]
-        lod_hidden: bool,
-        #[serde(default)]
         render_connectors: FaceMap<HashSet<InternString>>,
         #[serde(default)]
         render_connections: Vec<BlockRenderConnection>,
+        #[serde(default)]
+        lod: Option<TextureKey>,
     },
 }
 

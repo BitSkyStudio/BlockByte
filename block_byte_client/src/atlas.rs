@@ -7,7 +7,8 @@ use block_byte_common::{
     model::ModelTexture,
     registry::{KeyGroup, ModelKey, TextureAnimationData, TextureData, TextureKey},
 };
-use image::{DynamicImage, GenericImage, RgbaImage};
+use image::{DynamicImage, GenericImage, Rgba, RgbaImage};
+use texture_packer::exporter::BackgroundColorSettings;
 
 use crate::ui::TextRenderer;
 
@@ -19,6 +20,8 @@ pub struct TextureAtlas {
     pub texture_material: RgbaImage,
     pub animation_data: Vec<AnimatedCell>,
     pub dimension: u32,
+    pub atlas_ids: Vec<Option<u16>>,
+    pub atlas_size: u32,
 }
 
 #[derive(bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,7 +29,8 @@ pub struct TextureAtlas {
 #[derive(Debug, Copy, Clone)]
 pub struct AnimatedCell {
     pub time: f32,
-    pub shift: f32,
+    pub w: f32,
+    pub h: f32,
     pub frames: u32,
 }
 pub const TEXTURE_CELL_SIZE: u32 = 16;
@@ -45,7 +49,8 @@ impl TextureAtlas {
             || AnimatedCell {
                 frames: 1,
                 time: 1.,
-                shift: 0.,
+                w: 0.,
+                h: 0.,
             },
         );
         let mut packer =
@@ -180,7 +185,15 @@ impl TextureAtlas {
         };
         use texture_packer::exporter::ImageExporter;
         use texture_packer::texture::Texture;
-        let exporter: DynamicImage = ImageExporter::export(&packer, None).unwrap();
+        let exporter: DynamicImage = ImageExporter::export(
+            &packer,
+            Some(BackgroundColorSettings {
+                color: Rgba([255, 0, 0, 255]),
+                discard_own_alpha_on_threshold_test: false,
+                region_transparency_threshold: None,
+            }),
+        )
+        .unwrap();
         if false {
             exporter.save(Path::new("textureatlasdump.png")).unwrap();
         }
@@ -243,18 +256,26 @@ impl TextureAtlas {
                         }
                     };
                 add_material_texture(tex_coords, texture_data);
+                let (frames, frame_time) = match &texture_data.animation {
+                    Some(animation) => (
+                        animation.succesive_frames.len() as u32,
+                        animation.frame_time,
+                    ),
+                    None => (0, 0.),
+                };
+                let cell_x = (tex_coords.u1 * texture_dimensions as f32) as u32 / TEXTURE_CELL_SIZE;
+                let cell_y = (tex_coords.v1 * texture_dimensions as f32) as u32 / TEXTURE_CELL_SIZE;
+                animation_data
+                    [(cell_x + cell_y * (texture_dimensions / TEXTURE_CELL_SIZE)) as usize] =
+                    AnimatedCell {
+                        frames: 1 + frames,
+                        time: frame_time,
+                        w: get_nearest_texture_multiple(texture_data.texture.width()) as f32
+                            / texture_dimensions as f32,
+                        h: get_nearest_texture_multiple(texture_data.texture.height()) as f32
+                            / texture_dimensions as f32,
+                    };
                 if let Some(animation) = &texture_data.animation {
-                    let cell_x =
-                        (tex_coords.u1 * texture_dimensions as f32) as u32 / TEXTURE_CELL_SIZE;
-                    let cell_y =
-                        (tex_coords.v1 * texture_dimensions as f32) as u32 / TEXTURE_CELL_SIZE;
-                    animation_data
-                        [(cell_x + cell_y * (texture_dimensions / TEXTURE_CELL_SIZE)) as usize] =
-                        AnimatedCell {
-                            frames: 1 + animation.succesive_frames.len() as u32,
-                            time: animation.frame_time,
-                            shift: tex_coords.u2 - tex_coords.u1, //todo: this is not correct, should be rounded up to cell size
-                        };
                     for (i, frame) in animation.succesive_frames.iter().enumerate() {
                         let shift = (tex_coords.u2 - tex_coords.u1) * (1 + i) as f32;
                         add_material_texture(
@@ -270,7 +291,7 @@ impl TextureAtlas {
                 }
             }
         }
-
+        let atlas_size = texture_dimensions / TEXTURE_CELL_SIZE;
         TextureAtlas {
             textures: TextureKey::entries()
                 .map(|texture| get_texture(TextureAtlasKey::Texture(texture.numeric_id())))
@@ -305,6 +326,15 @@ impl TextureAtlas {
             texture_mips: texture_atlas_mips,
             animation_data,
             dimension: texture_dimensions,
+            atlas_size,
+            atlas_ids: TextureKey::entries()
+                .map(|texture| {
+                    let texture = get_texture(TextureAtlasKey::Texture(texture.numeric_id()))?;
+                    let x = (texture.u1 * atlas_size as f32) as u32;
+                    let y = (texture.v1 * atlas_size as f32) as u32;
+                    Some((x + y * atlas_size) as u16)
+                })
+                .collect(),
         }
     }
 }

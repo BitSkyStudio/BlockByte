@@ -33,6 +33,7 @@ pub struct RenderState {
     window: Arc<Window>,
     base_render_pipeline: GPURenderPipeline,
     chunk_render_pipeline: GPURenderPipeline,
+    chunk_grid_render_pipeline: GPURenderPipeline,
     gui_render_pipeline: GPURenderPipeline,
     damage_render_pipeline: GPURenderPipeline,
     skybox_render_pipeline: GPURenderPipeline,
@@ -49,6 +50,7 @@ pub struct RenderState {
     blur_render_pipeline: GPURenderPipeline,
     shadow_texture: GPUTexture,
     shadow_camera: GPUUniform<CameraUniform>,
+    shadow_chunk_grid_render_pipeline: GPURenderPipeline,
     shadow_chunk_render_pipeline: GPURenderPipeline,
     shadow_base_render_pipeline: GPURenderPipeline,
     time_uniform: GPUUniform<f32>,
@@ -98,10 +100,11 @@ impl RenderState {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::empty().union(wgpu::Features::IMMEDIATES),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 required_limits: wgpu::Limits {
                     max_bind_groups: 8,
+                    max_immediate_size: 64,
                     ..Default::default()
                 },
                 memory_hints: Default::default(),
@@ -156,7 +159,7 @@ impl RenderState {
         );
         skybox_texture.write_image(&skybox, 0, &queue);
 
-        let atlas_size = TEXTURE_ATLAS.get().unwrap().dimension / TEXTURE_CELL_SIZE;
+        let atlas_size = TEXTURE_ATLAS.get().unwrap().atlas_size;
         let animation_data_buffer = device.create_buffer(&BufferDescriptor {
             label: None,
             mapped_at_creation: false,
@@ -226,6 +229,7 @@ impl RenderState {
             Some(wgpu::Face::Back),
             Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
+            0,
         );
 
         let chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex, ()>(
@@ -244,6 +248,25 @@ impl RenderState {
             Some(wgpu::Face::Back),
             Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
+            0,
+        );
+        let chunk_grid_render_pipeline = GPURenderPipeline::new::<BillboardVertex, GPUBlockFace>(
+            &device,
+            "chunk_grid",
+            &[
+                Some(&texture_atlas.bind_group_layout),
+                Some(&camera_uniform.bind_group_layout),
+                Some(&shadow_camera.bind_group_layout),
+                Some(&shadow_texture.bind_group_layout),
+                Some(&time_uniform.bind_group_layout),
+                Some(&material_texture.bind_group_layout),
+                Some(&animation_data_uniform.bind_group_layout),
+            ],
+            Some(BlendState::REPLACE),
+            Some(wgpu::Face::Back),
+            Some(hdr_texture.format),
+            Some(TextureFormat::Depth32Float),
+            4 * 3,
         );
 
         let gui_render_pipeline = GPURenderPipeline::new::<GUIVertex, ()>(
@@ -257,6 +280,7 @@ impl RenderState {
             Some(wgpu::Face::Back),
             Some(config.format),
             None,
+            0,
         );
 
         let damage_render_pipeline = GPURenderPipeline::new::<DamageVertex, ()>(
@@ -267,6 +291,7 @@ impl RenderState {
             Some(wgpu::Face::Back),
             Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
+            0,
         );
 
         let skybox_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
@@ -280,6 +305,7 @@ impl RenderState {
             None,
             Some(config.format),
             None,
+            0,
         );
 
         let blur_render_pipeline = GPURenderPipeline::new::<(), ()>(
@@ -293,6 +319,7 @@ impl RenderState {
             None,
             Some(hdr_texture.format),
             None,
+            0,
         );
 
         let hdr_render_pipeline = GPURenderPipeline::new::<(), ()>(
@@ -306,6 +333,7 @@ impl RenderState {
             None,
             Some(config.format),
             None,
+            0,
         );
         let shadow_chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex, ()>(
             &device,
@@ -319,7 +347,23 @@ impl RenderState {
             Some(wgpu::Face::Back),
             None,
             Some(TextureFormat::Depth32Float),
+            0,
         );
+        let shadow_chunk_grid_render_pipeline =
+            GPURenderPipeline::new::<BillboardVertex, GPUBlockFace>(
+                &device,
+                "chunk_grid_shadow",
+                &[
+                    Some(&texture_atlas.bind_group_layout),
+                    Some(&shadow_camera.bind_group_layout),
+                    Some(&time_uniform.bind_group_layout),
+                ],
+                None,
+                Some(wgpu::Face::Back),
+                None,
+                Some(TextureFormat::Depth32Float),
+                4 * 3,
+            );
 
         let shadow_base_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
             &device,
@@ -332,6 +376,7 @@ impl RenderState {
             Some(wgpu::Face::Back),
             None,
             Some(TextureFormat::Depth32Float),
+            0,
         );
 
         let particle_render_pipeline = GPURenderPipeline::new::<BillboardVertex, GPUParticleInstance>(
@@ -347,6 +392,7 @@ impl RenderState {
             None,
             Some(hdr_texture.format),
             Some(TextureFormat::Depth32Float),
+            0,
         );
 
         let mut skybox_mesh: Mesh<Vertex> = Mesh::default();
@@ -387,13 +433,14 @@ impl RenderState {
             billboard_mesh.add_vertex(BillboardVertex { position: [1., 0.] });
             billboard_mesh.add_vertex(BillboardVertex { position: [1., 1.] });
             billboard_mesh.add_vertex(BillboardVertex { position: [0., 1.] });
-            billboard_mesh.add_index(0);
+            billboard_mesh.add_index(2);
             billboard_mesh.add_index(1);
-            billboard_mesh.add_index(2);
-            billboard_mesh.add_index(2);
-            billboard_mesh.add_index(3);
             billboard_mesh.add_index(0);
+            billboard_mesh.add_index(0);
+            billboard_mesh.add_index(3);
+            billboard_mesh.add_index(2);
         }
+
         Self {
             staging_belt: StagingBelt::new(device.clone(), 4 * 1024 * 1024),
             skybox_mesh: GPUMesh::allocate(&skybox_mesh, 0, &device),
@@ -405,6 +452,7 @@ impl RenderState {
             size,
             base_render_pipeline,
             chunk_render_pipeline,
+            chunk_grid_render_pipeline,
             gui_render_pipeline,
             hdr_render_pipeline,
             texture_atlas,
@@ -423,6 +471,7 @@ impl RenderState {
             shadow_texture,
             shadow_chunk_render_pipeline,
             shadow_base_render_pipeline,
+            shadow_chunk_grid_render_pipeline,
             animation_time: 0.,
             material_texture,
             time_uniform,
@@ -559,34 +608,30 @@ impl RenderState {
         );
         let ps2 = profiler::profiler_scope("chunk download");
         let mut frame_load_limit = 0;
-        while let Ok((position, buffer, buffer_high_res, version)) =
+        while let Ok((position, buffer, buffer_high_res, version, lod_only_faces)) =
             game.chunk_mesh_channels.1.try_recv()
         {
             game.chunk_mesh_queue_size -= 1;
             if let Some(chunk) = game.chunks.get_mut(&position) {
+                chunk.lod_only_faces = lod_only_faces;
                 chunk.scheduled = false;
 
-                chunk.gpu_mesh = game.chunk_buffer_pool.allocate_or_reuse(
+                chunk.grid_count = buffer.vertices.len();
+                chunk.gpu_mesh_grid = game.chunk_buffer_pool.allocate_or_reuse(
                     &buffer,
-                    chunk.gpu_mesh.take(),
+                    chunk.gpu_mesh_grid.take(),
                     &mut self.staging_belt,
                     &mut encoder,
                     &self.device,
                 );
-                chunk.gpu_mesh_high_res = game.chunk_buffer_pool.allocate_or_reuse(
-                    &buffer_high_res,
-                    chunk.gpu_mesh_high_res.take(),
-                    &mut self.staging_belt,
-                    &mut encoder,
-                    &self.device,
-                );
+                chunk.detail_mesh = Some(buffer_high_res);
 
-                if let Some(render_data) = &chunk.gpu_mesh.render_data {
+                if let Some(render_data) = &chunk.gpu_mesh_grid.render_data {
                     frame_load_limit += render_data.memory_size();
                 }
-                if let Some(render_data) = &chunk.gpu_mesh_high_res.render_data {
+                /*if let Some(render_data) = &chunk.gpu_mesh_detail.render_data {
                     frame_load_limit += render_data.memory_size();
-                }
+                }*/
 
                 if version
                     < chunk
@@ -607,11 +652,34 @@ impl RenderState {
                         });
                     }
                 }
-                if frame_load_limit > (1. * 1024. * 1024.) as usize && false {
+                if frame_load_limit > (0.25 * 1024. * 1024.) as usize && true {
                     break;
                 }
             }
         }
+        let camera_chunk_position = game.camera.position.to_chunk_pos();
+        for (chunk_position, chunk) in &mut game.chunks {
+            /*if frustum.intersects_aabb(
+                &AABB {
+                    min: Pos::all(0.),
+                    max: Pos::all(CHUNK_SIZE as f32),
+                }
+                .offset(chunk.position.to_block_pos().to_pos()),
+            ) {*/
+            if chunk_position.distance_squared(camera_chunk_position) <= 5_i16.pow(2)
+                && chunk.detail_mesh.is_some()
+            {
+                chunk.gpu_mesh_detail = game.chunk_buffer_pool.allocate_or_reuse(
+                    &chunk.detail_mesh.take().unwrap(),
+                    chunk.gpu_mesh_detail.take(),
+                    &mut self.staging_belt,
+                    &mut encoder,
+                    &self.device,
+                );
+            }
+            //}
+        }
+
         ps2.end();
         self.staging_belt.finish();
         self.queue.submit(iter::once(encoder.finish()));
@@ -648,7 +716,6 @@ impl RenderState {
             });
 
         let ps = profiler::profiler_scope("render shadow");
-        let camera_chunk_position = game.camera.position.to_chunk_pos();
         if should_update_shadowmap {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shadow Render Pass"),
@@ -677,9 +744,42 @@ impl RenderState {
             .offset(camera_chunk_position)
             {
                 if let Some(chunk) = game.chunks.get(&chunk_position) {
-                    chunk.gpu_mesh.draw(&mut render_pass);
-                    if chunk_position.distance_squared(camera_chunk_position) <= 2 {
-                        chunk.gpu_mesh_high_res.draw(&mut render_pass);
+                    //chunk.gpu_mesh_grid.draw(&mut render_pass);
+                    if chunk_position.distance_squared(camera_chunk_position) <= 4_i16.pow(2) {
+                        chunk.gpu_mesh_detail.draw(&mut render_pass);
+                    }
+                }
+            }
+            render_pass.set_pipeline(&self.shadow_chunk_grid_render_pipeline.render_pipeline);
+            self.billboard_mesh
+                .bind_vertex_index(&mut render_pass)
+                .unwrap();
+            for chunk_position in (AABB {
+                min: ChunkPos::all(-5),
+                max: ChunkPos::all(5),
+            })
+            .offset(camera_chunk_position)
+            {
+                if let Some(chunk) = game.chunks.get(&chunk_position) {
+                    if let Some(grid_buffer) = chunk.gpu_mesh_grid.buffer.as_ref() {
+                        let chunk_position = chunk.position.to_block_pos().to_pos().into_array();
+                        render_pass
+                            .set_immediates(0, bytemuck::cast_slice(chunk_position.as_slice()));
+                        render_pass.set_vertex_buffer(1, grid_buffer.slice(..));
+                        let render_count = chunk.grid_count as u32 - chunk.lod_only_faces as u32;
+                        if render_count == 0 {
+                            continue;
+                        }
+                        render_pass.draw_indexed(
+                            0..self
+                                .billboard_mesh
+                                .render_data
+                                .as_ref()
+                                .unwrap()
+                                .index_count,
+                            0,
+                            0..render_count,
+                        );
                     }
                 }
             }
@@ -751,18 +851,54 @@ impl RenderState {
             render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
             render_pass.set_bind_group(6, &self.animation_data_uniform.bind_group, &[]);
 
-            render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
-            for (chunk_position, chunk) in &game.chunks {
-                if frustum.intersects_aabb(
+            render_pass.set_pipeline(&self.chunk_grid_render_pipeline.render_pipeline);
+            self.billboard_mesh
+                .bind_vertex_index(&mut render_pass)
+                .unwrap();
+            for (chunk_position, chunk) in &mut game.chunks {
+                chunk.last_visible = frustum.intersects_aabb(
                     &AABB {
                         min: Pos::all(0.),
                         max: Pos::all(CHUNK_SIZE as f32),
                     }
                     .offset(chunk.position.to_block_pos().to_pos()),
-                ) {
-                    chunk.gpu_mesh.draw(&mut render_pass);
+                );
+                if chunk.last_visible {
+                    if let Some(grid_buffer) = chunk.gpu_mesh_grid.buffer.as_ref() {
+                        let is_near =
+                            chunk_position.distance_squared(camera_chunk_position) <= 5_i16.pow(2);
+                        let chunk_position = chunk.position.to_block_pos().to_pos().into_array();
+                        render_pass
+                            .set_immediates(0, bytemuck::cast_slice(chunk_position.as_slice()));
+                        render_pass.set_vertex_buffer(1, grid_buffer.slice(..));
+                        let render_count = chunk.grid_count as u32
+                            - if is_near {
+                                chunk.lod_only_faces as u32
+                            } else {
+                                0
+                            };
+                        if render_count == 0 {
+                            continue;
+                        }
+                        render_pass.draw_indexed(
+                            0..self
+                                .billboard_mesh
+                                .render_data
+                                .as_ref()
+                                .unwrap()
+                                .index_count,
+                            0,
+                            0..render_count,
+                        );
+                    }
+                }
+            }
+
+            render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
+            for (chunk_position, chunk) in &game.chunks {
+                if chunk.last_visible {
                     if chunk_position.distance_squared(camera_chunk_position) <= 5_i16.pow(2) {
-                        chunk.gpu_mesh_high_res.draw(&mut render_pass);
+                        chunk.gpu_mesh_detail.draw(&mut render_pass);
                     }
                 }
             }
@@ -1216,6 +1352,29 @@ impl VertexDescription for GPUParticleInstance {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GPUBlockFace {
+    pub block: u16,
+    pub texture: u16,
+    pub face: u8,
+    pub _pad: [u8; 3],
+}
+impl GPUBlockFace {
+    const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![1 => Uint16, 2 => Uint16, 3 => Uint8];
+}
+impl VertexDescription for GPUBlockFace {
+    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
+        use std::mem;
+        Some(wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBS,
+        })
+    }
+}
+
+#[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
     view_proj: [[f32; 4]; 4],
@@ -1321,9 +1480,7 @@ impl CameraUniform {
     );
 }
 
-use crate::atlas::{
-    AnimatedCell, TEXTURE_ATLAS, TEXTURE_CELL_SIZE, TexCoordsExt, TexCoordsIndexExt,
-};
+use crate::atlas::{AnimatedCell, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
 use crate::game::clipping::Frustum;
 use crate::game::{ClientGame, ClientPlayer, ModifiedChunkEntry, profiler};
 use crate::ui::{UIPos, UIRect};
@@ -1831,6 +1988,19 @@ impl GPUMesh {
             _ => {}
         }
     }
+    pub fn bind_vertex_index(&self, render_pass: &mut RenderPass<'_>) -> Result<(), ()> {
+        match (&self.buffer, &self.render_data) {
+            (Some(buffer), Some(render_data)) => {
+                render_pass.set_vertex_buffer(0, buffer.slice(..render_data.vertex_length));
+                render_pass.set_index_buffer(
+                    buffer.slice(render_data.vertex_length..),
+                    render_data.index_format,
+                );
+                Ok(())
+            }
+            _ => Err(()),
+        }
+    }
 }
 pub trait MeshVertexConsumer {
     fn add_vertex(&mut self, vertex: MeshVertex) -> u32;
@@ -1864,7 +2034,7 @@ impl<T> Mesh<T> {
             .extend(other_mesh.indices.into_iter().map(|i| i + vertex_count));
     }
     pub fn is_empty(&self) -> bool {
-        self.indices.is_empty()
+        self.indices.is_empty() && self.vertices.is_empty()
     }
     pub fn get_data_size(&self) -> (usize, usize, IndexFormat) {
         let index_format = if self.vertices.len() <= u16::MAX as usize {
@@ -1921,6 +2091,7 @@ impl MeshVertexConsumer for BaseMeshVertexConsumer<'_> {
         self.mesh.add_index(index);
     }
 }
+pub type GridChunkMesh = Mesh<GPUBlockFace>;
 pub type ChunkMesh = Mesh<ChunkVertex>;
 impl ChunkMesh {
     pub fn consumer<'a>(
@@ -2228,6 +2399,7 @@ impl GPURenderPipeline {
         face_cull: Option<wgpu::Face>,
         target_format: Option<wgpu::TextureFormat>,
         depth_format: Option<wgpu::TextureFormat>,
+        immediate_size: u32,
     ) -> GPURenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(shader),
@@ -2237,7 +2409,7 @@ impl GPURenderPipeline {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
                 bind_group_layouts,
-                immediate_size: 0,
+                immediate_size,
             });
         let targets = match target_format {
             Some(target_format) => Some(wgpu::ColorTargetState {
