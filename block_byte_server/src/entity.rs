@@ -49,7 +49,7 @@ pub struct MobBrainTarget {
 }
 #[derive(Serialize, Deserialize)]
 pub struct MobBrain {
-    pub goal: Option<Pos>,
+    pub goal: Option<(Pos, f32)>,
     pub path: Vec<Pos>,
     pub received_attacks: HashMap<Uuid, f32>,
     pub target: Option<MobBrainTarget>,
@@ -68,7 +68,7 @@ impl MobBrain {
         }
     }
     pub fn recalculate_path(&mut self, position: Pos, world: &WorldAccess, eye_height: f32) {
-        if let Some(goal) = self.goal {
+        if let Some((goal, _)) = self.goal {
             let goal_block = goal.to_block_pos();
             if goal_block != position.to_block_pos() {
                 let solution = pathfinding::directed::astar::astar(
@@ -76,8 +76,24 @@ impl MobBrain {
                     |node| {
                         let node = *node;
                         let entity_block_position = position.to_block_pos();
-                        HorizontalFace::all().into_iter().filter_map(move |face| {
-                            let block_position = node + face.get_block_offset();
+                        [
+                            (0, 1),
+                            (0, -1),
+                            (1, 0),
+                            (-1, 0),
+                            (1, 1),
+                            (1, -1),
+                            (-1, 1),
+                            (-1, -1),
+                        ]
+                        .into_iter()
+                        .filter_map(move |offset| {
+                            let block_position = node
+                                + BlockPos {
+                                    x: offset.0,
+                                    y: 0,
+                                    z: offset.1,
+                                };
                             if block_position.distance_squared(entity_block_position)
                                 > (24i32).pow(2)
                             {
@@ -344,7 +360,9 @@ impl Entity {
                             / 100.
                             * NORMAL_SPEED;
 
-                        if brain.path.first().unwrap().distance(self.position) < 1. {
+                        if brain.path.first().unwrap().distance(self.position)
+                            < brain.goal.as_ref().map(|goal| goal.1).unwrap_or(0.)
+                        {
                             *move_vector = Pos {
                                 x: 0.,
                                 y: 0.,
@@ -368,7 +386,7 @@ impl Entity {
                     }
                 }
                 if let Some(target) = &brain.target {
-                    brain.goal = Some(target.last_seen_position);
+                    brain.goal = Some((target.last_seen_position, 1.2));
                     let hand_item = self.inventory.get_slot_raw(self.hand_slot);
                     let tool = hand_item
                         .and_then(|item| item.item.data().tool.as_ref())
@@ -408,7 +426,7 @@ impl Entity {
                         brain.target = None;
                     }
                 } else {
-                    brain.goal = Some(brain.guard_position.to_pos());
+                    brain.goal = Some((brain.guard_position.to_pos(), 0.2));
                     brain.hit_timer = None;
                 }
             }
