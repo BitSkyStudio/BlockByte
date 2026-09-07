@@ -18,7 +18,8 @@ struct VertexInput {
 struct InstanceInput {
     @location(1) position: u32,
     @location(2) texture: u32,
-    @location(3) face: u32,
+    @location(3) color: u32,
+    @location(4) face: u32,
 }
 
 var<immediate> chunk_position: vec3<f32>;

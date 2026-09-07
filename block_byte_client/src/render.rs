@@ -1356,12 +1356,13 @@ impl VertexDescription for GPUParticleInstance {
 pub struct GPUBlockFace {
     pub block: u16,
     pub texture: u16,
+    pub color: u16,
     pub face: u8,
-    pub _pad: [u8; 3],
+    pub _pad: [u8; 1],
 }
 impl GPUBlockFace {
-    const ATTRIBS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![1 => Uint16, 2 => Uint16, 3 => Uint8];
+    const ATTRIBS: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![1 => Uint16, 2 => Uint16, 3 => Uint16, 4 => Uint8];
 }
 impl VertexDescription for GPUBlockFace {
     fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {

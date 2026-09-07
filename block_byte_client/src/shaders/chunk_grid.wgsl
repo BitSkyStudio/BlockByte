@@ -15,7 +15,8 @@ struct VertexInput {
 struct InstanceInput {
     @location(1) position: u32,
     @location(2) texture: u32,
-    @location(3) face: u32,
+    @location(3) color: u32,
+    @location(4) face: u32,
 }
 
 var<immediate> chunk_position: vec3<f32>;
@@ -69,7 +70,7 @@ fn vs_main(
     out.normal = FACE_NORMALS[instance.face];
     out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
     out.world_position = position;
-    out.color = vec3<f32>(1., 1., 1.);
+    out.color = convert_color(instance.color);
     return out;
 }
 

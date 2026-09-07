@@ -2161,9 +2161,7 @@ impl ClientChunk {
                                 } else {
                                     0
                                 };
-                                if block.rotation != BlockRotation::default()
-                                    || block.color != BlockColor::default()
-                                {
+                                if block.rotation != BlockRotation::default() {
                                     //todo: actually include these in grid mesh
                                     let mut mesh_consumer = mesh_detail.consumer(block.color, 0);
                                     let texture = face_texture.tex_coords(tex_index);
@@ -2180,6 +2178,7 @@ impl ClientChunk {
                                         block: ChunkOffset::new(x, y, z).index() as u16,
                                         texture: texture,
                                         face: face as u8,
+                                        color: block.color.0,
                                         _pad: Default::default(),
                                     });
                                 }
@@ -2220,6 +2219,7 @@ impl ClientChunk {
                                         block: ChunkOffset::new(x, y, z).index() as u16,
                                         texture,
                                         face: face as u8,
+                                        color: u16::MAX,
                                         _pad: Default::default(),
                                     });
                                 }

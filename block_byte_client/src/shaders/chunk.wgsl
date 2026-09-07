@@ -39,11 +39,7 @@ fn vs_main(
     }
     out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
     out.world_position = position;
-    let normal_shading = normal_shading(model.normal);
-    let color_r = f32(model.color&31)/31.;
-    let color_g = f32((model.color>>5)&31)/31.;
-    let color_b = f32((model.color>>10)&31)/31.;
-    out.color = vec3<f32>(color_r, color_g, color_b);
+    out.color = convert_color(model.color);
     return out;
 }
 

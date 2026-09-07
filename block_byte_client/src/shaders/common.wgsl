@@ -12,3 +12,10 @@ struct CameraUniform {
     view: mat4x4<f32>,
     direction: vec3<f32>,
 };
+
+fn convert_color(color: u32) -> vec3<f32>{
+    let color_r = f32(color&31)/31.;
+    let color_g = f32((color>>5)&31)/31.;
+    let color_b = f32((color>>10)&31)/31.;
+    return vec3<f32>(color_r, color_g, color_b);
+}
