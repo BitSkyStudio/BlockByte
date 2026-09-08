@@ -472,7 +472,9 @@ pub fn tick_chunk(world: &WorldAccess) {
                 move_vector,
                 MoveMode::Normal,
                 entity_data.hitbox(entity.pose),
-                ACCELERATION_COEFFICIENT * entity_data.base_stats.speed() / 100. * NORMAL_SPEED,
+                ACCELERATION_COEFFICIENT * entity_data.base_stats.speed() / 100.
+                    * NORMAL_SPEED
+                    * 2.,
                 0.5,
                 false,
             );

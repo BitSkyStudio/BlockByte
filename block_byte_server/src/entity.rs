@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet, hash_map::Entry};
 
 use block_byte_common::{
     ActiveEffect, CharacterController, DamageTable, EntityAction, EntityPose,
     EntityResearchProgress, EntityStats, HitTimer, LookDirection, NORMAL_SPEED, PassiveAbility,
     SERVER_DT, SERVER_TPS,
-    coord::{self, AABB, BlockPos, HorizontalFace, Pos},
+    coord::{self, AABB, BlockPos, Pos},
     net::NetworkMessageS2C,
     registry::{EffectKey, EntityKey, ToolData},
 };
@@ -71,105 +71,63 @@ impl MobBrain {
         if let Some((goal, _)) = self.goal {
             let goal_block = goal.to_block_pos();
             if goal_block != position.to_block_pos() {
-                let solution = pathfinding::directed::astar::astar(
-                    &position.to_block_pos(),
-                    |node| {
-                        let node = *node;
-                        let entity_block_position = position.to_block_pos();
-                        [
-                            (0, 1),
-                            (0, -1),
-                            (1, 0),
-                            (-1, 0),
-                            (1, 1),
-                            (1, -1),
-                            (-1, 1),
-                            (-1, -1),
-                        ]
-                        .into_iter()
-                        .filter_map(move |offset| {
-                            let block_position = node
-                                + BlockPos {
-                                    x: offset.0,
-                                    y: 0,
-                                    z: offset.1,
-                                };
-                            if block_position.distance_squared(entity_block_position)
-                                > (24i32).pow(2)
-                            {
-                                return None;
+                let solution = astar_block_closest(position.to_block_pos(), goal_block, |node| {
+                    let entity_block_position = position.to_block_pos();
+                    [
+                        (0, 1),
+                        (0, -1),
+                        (1, 0),
+                        (-1, 0),
+                        (1, 1),
+                        (1, -1),
+                        (-1, 1),
+                        (-1, -1),
+                    ]
+                    .into_iter()
+                    .filter_map(move |offset| {
+                        let block_position = node
+                            + BlockPos {
+                                x: offset.0,
+                                y: 0,
+                                z: offset.1,
+                            };
+                        if block_position.distance_squared(entity_block_position) > (24i32).pow(2) {
+                            return None;
+                        }
+                        let is_block_empty = |block: BlockPos| match world.get_block(block) {
+                            Some(block) => block.block.data().collision.is_empty(),
+                            None => false,
+                        };
+                        let can_fit_in = |block: BlockPos| {
+                            (0..eye_height.ceil() as i32)
+                                .all(|i| is_block_empty(block + BlockPos::Y * i))
+                        };
+                        if !is_block_empty(block_position) {
+                            if can_fit_in(block_position + BlockPos::Y) {
+                                return Some(block_position + BlockPos::Y);
                             }
-                            let is_block_empty = |block: BlockPos| match world.get_block(block) {
-                                Some(block) => block.block.data().collision.is_empty(),
-                                None => false,
-                            };
-                            let can_fit_in = |block: BlockPos| {
-                                (0..eye_height.ceil() as i32)
-                                    .all(|i| is_block_empty(block + BlockPos::Y * i))
-                            };
-                            if !is_block_empty(block_position) {
-                                if can_fit_in(block_position + BlockPos::Y) {
-                                    return Some((block_position + BlockPos::Y, OrderedFloat(1.)));
+                        } else {
+                            if is_block_empty(block_position - BlockPos::Y) {
+                                if !is_block_empty(block_position - BlockPos::Y * 2) {
+                                    return Some(block_position - BlockPos::Y);
                                 }
                             } else {
-                                if is_block_empty(block_position - BlockPos::Y) {
-                                    if !is_block_empty(block_position - BlockPos::Y * 2) {
-                                        return Some((
-                                            block_position - BlockPos::Y,
-                                            OrderedFloat(1.),
-                                        ));
-                                    }
-                                } else {
-                                    if can_fit_in(block_position) {
-                                        return Some((block_position, OrderedFloat(1.)));
-                                    }
+                                if can_fit_in(block_position) {
+                                    return Some(block_position);
                                 }
                             }
-                            None
-                        })
-                    },
-                    |node| OrderedFloat(1.3 * node.distance(goal_block)),
-                    |node| {
-                        node.x == goal_block.x
-                            && node.z == goal_block.z
-                            && (node.y - goal_block.y).abs() <= 1
-                    },
-                );
-                if let Some((solution, _)) = solution {
-                    self.path = solution
-                        .into_iter()
-                        .rev()
-                        .map(|p| {
-                            p.to_pos()
-                                + Pos {
-                                    x: 0.5,
-                                    y: 0.,
-                                    z: 0.5,
-                                }
-                        })
-                        .collect();
+                        }
+                        None
+                    })
+                });
+                self.path = solution
+                    .into_iter()
+                    .rev()
+                    .map(|p| p.to_pos() + Pos::XZ_HALF)
+                    .collect();
+                if !self.path.is_empty() && self.path[0].to_block_pos() == goal_block {
                     self.path[0].x = goal.x;
                     self.path[0].z = goal.z;
-                    /*let mut i = 0;
-                    while i + 2 < self.path.len() {
-                        let first = self.path[i]
-                            + Pos {
-                                x: 0.,
-                                y: eye_height,
-                                z: 0.,
-                            };
-                        let third = self.path[i + 2]
-                            + Pos {
-                                x: 0.,
-                                y: eye_height,
-                                z: 0.,
-                            };
-                        if !world.block_ray_test(Ray::new_line(first, third)) {
-                            self.path.remove(i + 1);
-                        } else {
-                            i += 1;
-                        }
-                    }*/
                 }
             }
         }
@@ -460,4 +418,79 @@ impl Entity {
     pub fn create_remove_message(&self) -> NetworkMessageS2C {
         NetworkMessageS2C::RemoveEntity { uuid: self.uuid }
     }
+}
+
+fn astar_block_closest<F: Fn(BlockPos) -> I, I: Iterator<Item = BlockPos>>(
+    start: BlockPos,
+    end: BlockPos,
+    neighbors: F,
+) -> Vec<BlockPos> {
+    let mut queue = BinaryHeap::new();
+    let mut came_from = HashMap::new();
+    let mut lowest_score = HashMap::new();
+    let mut closest_yet = start;
+    #[derive(PartialEq)]
+    struct QueueEntry {
+        position: BlockPos,
+        real_cost: f32,
+        heuristic: f32,
+    }
+    impl Eq for QueueEntry {}
+    impl PartialOrd for QueueEntry {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(
+                (self.real_cost + self.heuristic)
+                    .total_cmp(&(other.real_cost + other.heuristic))
+                    .reverse(),
+            )
+        }
+    }
+    impl Ord for QueueEntry {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.partial_cmp(other).unwrap()
+        }
+    }
+    lowest_score.insert(start, 0.0);
+    queue.push(QueueEntry {
+        position: start,
+        real_cost: 0.,
+        heuristic: 0.,
+    });
+    while let Some(entry) = queue.pop() {
+        if entry.position.distance_squared(end) < closest_yet.distance_squared(end) {
+            closest_yet = entry.position;
+        }
+        if entry.position == end {
+            break;
+        }
+        for succesor in neighbors(entry.position) {
+            let next_entry = QueueEntry {
+                position: succesor,
+                real_cost: entry.real_cost + entry.position.distance(succesor),
+                heuristic: succesor.distance(end),
+            };
+            match lowest_score.entry(succesor) {
+                Entry::Occupied(mut lowest) => {
+                    if *lowest.get() > next_entry.real_cost {
+                        lowest.insert(next_entry.real_cost);
+                    } else {
+                        continue;
+                    }
+                }
+                Entry::Vacant(lowest) => {
+                    lowest.insert(next_entry.real_cost);
+                }
+            }
+            came_from.insert(succesor, entry.position);
+            queue.push(next_entry);
+        }
+    }
+    let mut path = Vec::new();
+    path.push(closest_yet);
+    while let Some(next) = came_from.get(&closest_yet) {
+        path.push(*next);
+        closest_yet = *next;
+    }
+    path.reverse();
+    path
 }

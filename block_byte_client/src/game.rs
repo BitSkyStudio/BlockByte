@@ -174,14 +174,7 @@ impl ClientPlayer {
                                     z: plant_data.size / 2.,
                                 },
                             }
-                            .offset(
-                                block_position.to_pos()
-                                    + Pos {
-                                        x: 0.5,
-                                        y: 1.,
-                                        z: 0.5,
-                                    },
-                            );
+                            .offset(block_position.to_pos() + Pos::XZ_HALF + Pos::Y);
                             if let Some(result) = ray.aabb_raycast(aabb) {
                                 let distance = result.position.distance(ray.position);
                                 if distance < min_distance {
@@ -1989,12 +1982,7 @@ impl ClientChunk {
             let mut mesh_vertex_consumer = mesh_detail.consumer(BlockColor::default(), 0);
             for (plant, stage) in &plants.plants {
                 let plant = plant.data();
-                let position = base_position
-                    + Pos {
-                        x: 0.5,
-                        y: 1.,
-                        z: 0.5,
-                    };
+                let position = base_position + Pos::XZ_HALF + Pos::Y;
                 let texture = plant.stages[*stage as usize].tex_coords();
                 for blade in 0..plant.blades {
                     let first_angle =
@@ -2203,7 +2191,7 @@ impl ClientChunk {
                                         match &neighbor_block_data.render_data {
                                             BlockRenderData::Air => {}
                                             BlockRenderData::Model { lod, .. } => {
-                                                if lod.is_none() {
+                                                if lod.is_some() {
                                                     continue;
                                                 }
                                             }

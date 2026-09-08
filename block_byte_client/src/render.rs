@@ -1685,12 +1685,7 @@ pub fn draw_block_model(
                 vertex_consumer.add_quad(
                     face.get_vertices(faces[face].tex_coords(face as usize), 0)
                         .map(|(position, uv)| {
-                            let position = position
-                                - Pos {
-                                    x: 0.5,
-                                    y: 0.,
-                                    z: 0.5,
-                                };
+                            let position = position - Pos::XZ_HALF;
                             MeshVertex {
                                 position: position.multiply_point(matrix),
                                 normal: face.get_offset().multiply_vector(matrix).normalize(),

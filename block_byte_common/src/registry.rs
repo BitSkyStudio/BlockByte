@@ -1843,11 +1843,14 @@ impl PrefabData {
             }
             entity_callback(
                 position.to_pos()
-                    + rotation.rotate_pos(Pos {
-                        x: entry.x,
-                        y: entry.y,
-                        z: entry.z,
-                    }),
+                    + rotation.rotate_pos(
+                        Pos {
+                            x: entry.x,
+                            y: entry.y,
+                            z: entry.z,
+                        } - Pos::XZ_HALF,
+                    )
+                    + Pos::XZ_HALF,
                 entry,
                 &mut random,
             );

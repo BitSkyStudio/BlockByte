@@ -232,6 +232,11 @@ impl Pos {
         z: 1.,
     };
     pub const ZERO: Pos = Pos::all(0.);
+    pub const XZ_HALF: Pos = Pos {
+        x: 0.5,
+        y: 0.,
+        z: 0.5,
+    };
     pub const fn to_block_pos(self) -> BlockPos {
         BlockPos {
             x: self.x.floor() as i32,
