@@ -24,7 +24,7 @@ use block_byte_common::{
     registry::{
         BlockColor, BlockEntry, BlockInteractAction, BlockPalette, BlockRenderData, EffectKey,
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key,
-        TextureKey, ToolData, TranslationLanguageData, air_block,
+        PlantDataHarvestMode, TextureKey, ToolData, TranslationLanguageData, air_block,
     },
     rotation::BlockRotation,
     ui::PropertyMap,
@@ -157,9 +157,10 @@ impl ClientPlayer {
                 if let Some(chunk) = world.chunks.get(&chunk_position) {
                     for (offset, plants) in chunk.mesh_build_data.components.read().plant.iter() {
                         for (i, plant) in plants.plants.iter().enumerate() {
-                            let plant_data = plant.0.data();
-                            if i != plant_data.stages.len() - 1 {
-                                continue;
+                            let plant_data = plant.plant.data();
+                            match &plant_data.get_stage(plant.growth).harvest {
+                                PlantDataHarvestMode::None => continue,
+                                _ => {}
                             }
                             let block_position = chunk_position.to_block_pos() + offset.xyz();
                             let aabb = AABB {
@@ -428,6 +429,7 @@ impl GameScreen for ClientGame {
                         }
                     }
                     RayCastResult::Plant(position, index) => {
+                        self.current_local_action = Some(EntityAction::Interact);
                         self.send_message(NetworkMessageC2S::HarvestPlant { position, index });
                     }
                 }
@@ -1980,10 +1982,15 @@ impl ClientChunk {
         for (offset, plants) in chunk_components.plant.iter() {
             let base_position = (position.to_block_pos() + offset.xyz()).to_pos();
             let mut mesh_vertex_consumer = mesh_detail.consumer(BlockColor::default(), 0);
-            for (plant, stage) in &plants.plants {
-                let plant = plant.data();
-                let position = base_position + Pos::XZ_HALF + Pos::Y;
-                let texture = plant.stages[*stage as usize].tex_coords();
+            for plant_entry in &plants.plants {
+                let plant = plant_entry.plant.data();
+                let position = base_position
+                    + Pos {
+                        x: (plant_entry.position & 0xf) as f32 / 16. / 2. + 0.25,
+                        y: 1.,
+                        z: ((plant_entry.position >> 4) & 0xf) as f32 / 16. / 2. + 0.25,
+                    };
+                let texture = plant.get_stage(plant_entry.growth).texture.tex_coords();
                 for blade in 0..plant.blades {
                     let first_angle =
                         f32::consts::PI * 2. * (blade as f32 / plant.blades as f32 + 0.25);

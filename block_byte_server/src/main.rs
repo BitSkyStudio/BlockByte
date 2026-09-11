@@ -19,7 +19,8 @@ use block_byte_common::{
     net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, EntityInteractAction, EntityKey,
-        ItemAction, KeyGroup, PrefabBlockEntry, PrefabData, PrefabKey, air_block, load_registries,
+        ItemAction, KeyGroup, LootTableData, PlantDataHarvestMode, PrefabBlockEntry, PrefabData,
+        PrefabKey, air_block, load_registries,
     },
     rotation::BlockRotation,
     time_to_ticks,
@@ -43,8 +44,8 @@ use crate::{
     machine::BlockMachine,
     registry::Key,
     world::{
-        Chunk, ChunkBlocks, ChunkSaveData, WorldAccess, WorldAccessCell, WorldAccessRef,
-        WorldEvent, compute_tool_damage_and_knockback, tick_chunk,
+        BlockPlants, Chunk, ChunkBlocks, ChunkSaveData, WorldAccess, WorldAccessCell,
+        WorldAccessRef, WorldEvent, compute_tool_damage_and_knockback, tick_chunk,
     },
     worldgen::{WorldGenerator, generate_chunk},
 };
@@ -1386,10 +1387,38 @@ impl User {
                         Cow::Owned(InventoryView::from_range(0..0)),
                     );
                 }
-                NetworkMessageC2S::HarvestPlant {
-                    position: _,
-                    index: _,
-                } => todo!(),
+                NetworkMessageC2S::HarvestPlant { position, index } => {
+                    let Some(mut plants) = world.get_block_component::<BlockPlants>(position)
+                    else {
+                        continue;
+                    };
+                    let Some(plant) = plants.plants.get_mut(index) else {
+                        continue;
+                    };
+                    let plant_data = plant.plant.data();
+                    let mut drop_loot_table = |loot: &LootTableData| {
+                        for item in
+                            generate_loot_table(loot, LootGenerationContext::new(rand::random()))
+                        {
+                            entity.inventory.add_item(entity_data.pickup_view(), item);
+                            //todo: drop as item if it doesnt fit
+                        }
+                    };
+                    match &plant_data.get_stage(plant.growth).harvest {
+                        PlantDataHarvestMode::None => {}
+                        PlantDataHarvestMode::Reset { loot, reset_stage } => {
+                            drop_loot_table(loot.data());
+                            plant.growth = *reset_stage;
+                        }
+                        PlantDataHarvestMode::Destroy { loot } => {
+                            drop_loot_table(loot.data());
+                            plants.plants.remove(index);
+                            if plants.plants.is_empty() {
+                                world.remove_block_component(plants);
+                            }
+                        }
+                    }
+                }
                 NetworkMessageC2S::UIButtonPress {
                     property,
                     value,

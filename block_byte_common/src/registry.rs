@@ -1471,9 +1471,12 @@ impl EntityData {
 }
 pub type EntityKey = Key<EntityData>;
 
+fn default_empty_loot_table() -> OwnOrKey<LootTableData> {
+    OwnOrKey::Own(LootTableData { pools: Vec::new() })
+}
 #[derive(Deserialize)]
 pub struct PlantData {
-    pub stages: Vec<TextureKey>,
+    pub stages: Vec<PlantDataStage>,
     #[cfg(feature = "client")]
     pub size: f32,
     #[cfg(feature = "client")]
@@ -1482,12 +1485,50 @@ pub struct PlantData {
     pub blades: u32,
     #[cfg(feature = "client")]
     pub center_offset: f32,
-    pub growth_length: f32,
-    #[serde(default)]
-    pub harvest_reset: f32,
-    pub harvest_loot: OwnOrKey<LootTableData>,
+    pub stage_time: f32,
+    #[serde(default = "default_empty_loot_table")]
     pub break_loot: OwnOrKey<LootTableData>,
     pub allowed_soil: KeyGroup<BlockData>,
+}
+#[derive(Deserialize)]
+pub struct PlantDataStage {
+    pub texture: TextureKey,
+    pub length: u8,
+    #[serde(default)]
+    pub harvest: PlantDataHarvestMode,
+}
+#[derive(Deserialize)]
+pub enum PlantDataHarvestMode {
+    None,
+    Reset {
+        #[serde(default = "default_empty_loot_table")]
+        loot: OwnOrKey<LootTableData>,
+        reset_stage: u8,
+    },
+    Destroy {
+        #[serde(default = "default_empty_loot_table")]
+        loot: OwnOrKey<LootTableData>,
+    },
+}
+impl Default for PlantDataHarvestMode {
+    fn default() -> Self {
+        PlantDataHarvestMode::None
+    }
+}
+impl PlantData {
+    pub fn get_stage_count(&self) -> u8 {
+        self.stages.iter().map(|stage| stage.length).sum()
+    }
+    pub fn get_stage(&self, mut stage_num: u8) -> &PlantDataStage {
+        for stage in &self.stages {
+            if stage_num < stage.length {
+                return stage;
+            } else {
+                stage_num -= stage.length;
+            }
+        }
+        unreachable!()
+    }
 }
 impl RegistryRonConfigLoadable for PlantData {}
 pub type PlantKey = Key<PlantData>;

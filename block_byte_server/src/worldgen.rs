@@ -15,6 +15,7 @@ use block_byte_common::{
         WorldGenStructureRoom,
     },
     rotation::BlockRotation,
+    world::PlantEntry,
 };
 use fast_poisson::Poisson2D;
 use moka::sync::Cache;
@@ -939,10 +940,12 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                                     .filter_map(|spawner| {
                                         if rng.random_bool(spawner.chance as f64) {
                                             let plant_data = spawner.plant.data();
-                                            Some((
-                                                spawner.plant,
-                                                rng.random::<f32>() * plant_data.growth_length,
-                                            ))
+                                            Some(PlantEntry {
+                                                plant: spawner.plant,
+                                                growth: rng
+                                                    .random_range(0..plant_data.get_stage_count()),
+                                                position: rng.random::<u8>(),
+                                            })
                                         } else {
                                             None
                                         }

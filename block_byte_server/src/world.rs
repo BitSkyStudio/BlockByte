@@ -10,14 +10,12 @@ use block_byte_common::{
     MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
     coord::{self, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::NetworkMessageS2C,
-    registry::{
-        BlockEntry, BlockMachineFace, BlockPalette, EntityKey, PlantKey, ToolData, air_block,
-    },
+    registry::{BlockEntry, BlockMachineFace, BlockPalette, EntityKey, ToolData, air_block},
     scripts::ScriptValue,
     ui::PropertyMap,
     world::{
         BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
-        ClientChunkBlockComponents, ComponentTypeAccess,
+        ClientChunkBlockComponents, ComponentTypeAccess, PlantEntry,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -773,22 +771,12 @@ impl Into<ClientBlockDamage> for &BlockDamage {
 }
 #[derive(Serialize, Deserialize)]
 pub struct BlockPlants {
-    pub plants: SmallVec<[(PlantKey, f32); 1]>,
+    pub plants: SmallVec<[PlantEntry; 1]>,
 }
 impl Into<ClientBlockPlants> for &BlockPlants {
     fn into(self) -> ClientBlockPlants {
         ClientBlockPlants {
-            plants: self
-                .plants
-                .iter()
-                .map(|(plant, growth)| {
-                    let plant_data = plant.data();
-                    let stage = ((*growth / plant_data.growth_length)
-                        * (plant_data.stages.len() - 1) as f32)
-                        as usize;
-                    (*plant, stage as u8)
-                })
-                .collect(),
+            plants: self.plants.clone(),
         }
     }
 }

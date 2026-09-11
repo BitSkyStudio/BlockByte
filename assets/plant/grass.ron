@@ -1,11 +1,28 @@
 (
-    stages: ["plant.grass.0","plant.grass.1","plant.grass.2","plant.grass.3"],
+    stages: [
+        (texture: "plant.grass.0", length: 1),
+        (texture: "plant.grass.1", length: 1),
+        (texture: "plant.grass.2", length: 1),
+        (texture: "plant.grass.3", length: 1, harvest: Destroy(
+            loot: Own((
+                pools: [
+                    (
+                        entries: [
+                            (
+                                item: "dirt",
+                            ),
+                        ],
+                        rolls: Num(1),
+                    )
+                ]
+            ))
+        )),
+    ],
     size: 1.4,
     height: 1.,
     blades: 3,
     center_offset: 0.,
-    growth_length: 10.,
-    harvest_loot: Key("empty"),
+    stage_time: 500.,
     break_loot: Key("empty"),
     allowed_soil: "#soil",
 )

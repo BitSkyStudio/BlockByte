@@ -253,7 +253,13 @@ pub struct ClientBlockDamage {
 }
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockPlants {
-    pub plants: SmallVec<[(PlantKey, u8); 1]>,
+    pub plants: SmallVec<[PlantEntry; 1]>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PlantEntry {
+    pub plant: PlantKey,
+    pub growth: u8,
+    pub position: u8,
 }
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockMachine {
