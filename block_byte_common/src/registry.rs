@@ -1829,6 +1829,7 @@ pub struct PrefabChildEntry {
     pub prefab: OwnOrKey<PrefabData>,
     #[serde(default = "default_prefab_entry_true_chance", skip_serializing)]
     pub chance: f32,
+    pub else_child: Option<Box<PrefabChildEntry>>,
 }
 #[derive(Serialize, Deserialize, Default)]
 pub struct PrefabData {
@@ -1857,13 +1858,13 @@ impl PrefabData {
         position: BlockPos,
         rotation: HorizontalFace,
         seed: u64,
-        mut block_callback: &mut impl FnMut(
+        block_callback: &mut impl FnMut(
             BlockPos,
             BlockEntry,
             &PrefabBlockEntry,
             &mut Xoshiro256PlusPlus,
         ),
-        mut entity_callback: &mut impl FnMut(Pos, &PrefabEntityEntry, &mut Xoshiro256PlusPlus),
+        entity_callback: &mut impl FnMut(Pos, &PrefabEntityEntry, &mut Xoshiro256PlusPlus),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
@@ -1912,24 +1913,28 @@ impl PrefabData {
             );
         }
         for entry in &self.children {
-            if !random.random_bool(entry.chance as f64) {
-                continue;
+            let mut next_child = Some(entry);
+            while let Some(entry) = next_child {
+                if random.random_bool(entry.chance as f64) {
+                    entry.prefab.data().build(
+                        position
+                            + rotation.rotate_block_pos(BlockPos {
+                                x: entry.x,
+                                y: entry.y,
+                                z: entry.z,
+                            }),
+                        rotation
+                            .rotate_face(entry.rotation.face())
+                            .horizontal()
+                            .unwrap(),
+                        random.next_u64(),
+                        block_callback,
+                        entity_callback,
+                    );
+                } else {
+                    next_child = entry.else_child.as_deref();
+                }
             }
-            entry.prefab.data().build(
-                position
-                    + rotation.rotate_block_pos(BlockPos {
-                        x: entry.x,
-                        y: entry.y,
-                        z: entry.z,
-                    }),
-                rotation
-                    .rotate_face(entry.rotation.face())
-                    .horizontal()
-                    .unwrap(),
-                random.next_u64(),
-                block_callback,
-                entity_callback,
-            );
         }
     }
 }
