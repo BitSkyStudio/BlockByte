@@ -19,7 +19,7 @@ use block_byte_common::{
 };
 use fast_poisson::Poisson2D;
 use moka::sync::Cache;
-use noise::{NoiseFn, Perlin};
+use noise::{Fbm, NoiseFn, Perlin};
 use ordered_float::OrderedFloat;
 use pathfinding::num_traits::Euclid;
 use rand::{Rng, RngCore, SeedableRng};
@@ -504,7 +504,7 @@ impl WorldGenerator {
     }
     pub fn get_column_generation(&self, chunk_x: i16, chunk_z: i16) -> Arc<ChunkColumnGeneration> {
         self.chunk_column_cache.get_with((chunk_x, chunk_z), || {
-            let height_noise = Perlin::new(self.seed as u32);
+            let height_noise = Fbm::<Perlin>::new(self.seed as u32);
             let _density_noise = Perlin::new(self.seed as u32 ^ 583279234);
             let mut height_map = [[0; CHUNK_SIZE as usize]; CHUNK_SIZE as usize];
             let (biome_points, unique_biomes) =
@@ -545,7 +545,7 @@ impl WorldGenerator {
                         .clamp(-0.99, 0.99);
 
                     let small_noise = height_noise
-                        .get([block_x as f64 / 30., block_z as f64 / 30.])
+                        .get([block_x as f64 / 100., block_z as f64 / 100., 100.])
                         .clamp(-0.99, 0.99);
                     let height = mountain_spline.sample(mountain_height).unwrap()
                         + small_spline.sample(small_noise).unwrap();
@@ -722,7 +722,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             position,
             rotation,
             seed as u64,
-            |place_position, block, entry, rng| {
+            &mut |place_position, block, entry, rng| {
                 let (place_chunk, place_chunk_offset) = place_position.to_chunk_pos_offset();
                 if place_chunk == chunk_position {
                     if entry
@@ -752,7 +752,7 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                     }
                 }
             },
-            |entity_position, entry, rng| {
+            &mut |entity_position, entry, rng| {
                 if entity_position.to_chunk_pos() != chunk_position {
                     return;
                 }

@@ -368,8 +368,6 @@ fn main() {
                                                     rotation: block.rotation,
                                                     color: block.color,
                                                     loot_table: None,
-                                                    place_check: None,
-                                                    placed: None,
                                                 });
                                             }
                                         }
@@ -389,7 +387,7 @@ fn main() {
                         BlockPos { x: 0, y: 80, z: 0 },
                         HorizontalFace::Front,
                         0,
-                        |place_position, block, _entry, _| {
+                        &mut |place_position, block, _entry, _| {
                             let (place_chunk, place_chunk_offset) =
                                 place_position.to_chunk_pos_offset();
                             let Some(chunk) = server.chunks.get_mut(&place_chunk) else {
@@ -409,7 +407,7 @@ fn main() {
                                 );
                             }
                         },
-                        |_, _, _| {
+                        &mut |_, _, _| {
                             //todo
                         },
                     );
@@ -1565,7 +1563,7 @@ use serde_default_utils::*;
 pub struct ServerConfig {
     #[serde(default = "default_i16::<8>")]
     view_distance: i16,
-    #[serde(default = "default_i16::<12>")]
+    #[serde(default = "default_i16::<8>")]
     world_chunk_height: i16,
 }
 static SERVER_CONFIG_INSTANCE: OnceLock<ServerConfig> = OnceLock::new();

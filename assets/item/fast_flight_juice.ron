@@ -1,0 +1,9 @@
+(
+    model: Model("arrow"),
+    stack_size: 100,
+    action: Consume (
+        effect: "fast_flight",
+        level: 1,
+        duration: 10,
+    )
+)

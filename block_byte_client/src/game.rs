@@ -1180,31 +1180,8 @@ pub struct ChunkBufferPool {
     pub buffers: Vec<Vec<GPUMesh>>,
 }
 impl ChunkBufferPool {
-    const MIN_BUFFER_SIZE: usize = 64 * 1024;
-    pub fn tick(&mut self, device: &Device) {
-        let preallocated_buckets = [40, 40, 20, 4];
-        self.buffers
-            .resize_with(preallocated_buckets.len(), Vec::new);
-        /*println!(
-            "{}",
-            self.buffers
-                .iter()
-                .map(|b| b.len().to_string())
-                .collect::<Vec<String>>()
-                .join(",")
-        );*/
-        for (bucket_id, size) in preallocated_buckets.iter().enumerate() {
-            let bucket = &mut self.buffers[bucket_id];
-            if bucket.len() < *size {
-                bucket.push(GPUMesh::allocate(
-                    &BaseMesh::default(),
-                    Self::MIN_BUFFER_SIZE * 4_usize.pow(bucket_id as u32),
-                    device,
-                ));
-                return;
-            }
-        }
-    }
+    const MIN_BUFFER_SIZE: usize = 1024;
+    pub fn tick(&mut self, _device: &Device) {}
     pub fn reclaim(&mut self, mesh: GPUMesh) {
         if let Some(buffer) = &mesh.buffer {
             let bucket = Self::get_data_index(buffer.size() as usize).0;
@@ -1269,7 +1246,7 @@ impl ChunkBufferPool {
                 return (i, current_size);
             }
             i += 1;
-            current_size *= 4;
+            current_size *= 2;
             if i > 20 {
                 panic!("failsafe");
             }

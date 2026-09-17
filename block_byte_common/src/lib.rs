@@ -929,7 +929,7 @@ impl std::ops::Deref for InternString {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
 pub struct ActiveEffect(Vec<(f32, u32)>);
 impl ActiveEffect {
     pub fn add(&mut self, level: f32, duration: u32) {
@@ -953,10 +953,10 @@ impl ActiveEffect {
         self.0.retain_mut(|(_, duration)| {
             if *duration <= 1 {
                 changed = true;
-                true
+                false
             } else {
                 *duration -= 1;
-                false
+                true
             }
         });
         changed

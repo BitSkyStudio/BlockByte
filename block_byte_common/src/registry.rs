@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, num::NonZero};
@@ -11,6 +12,7 @@ use once_map::OnceMap;
 use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
+use rand::RngCore;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
 use serde::de::Visitor;
@@ -55,6 +57,24 @@ impl<T> Eq for Key<T> {}
 impl<T> Hash for Key<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
+    }
+}
+impl<T: 'static> Debug for Key<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.text_id())
+    }
+}
+impl<T: 'static> Display for Key<T>
+where
+    LoadRegistryStorage: LoadRegistryProvider<T>,
+    RegistryStorage: RegistryProvider<T>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.text_id())
     }
 }
 pub struct LoadRegistry<T> {
@@ -355,7 +375,7 @@ impl<T: RegistryRonConfigLoadable> RegistryConfigLoadable for T {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub enum OwnOrKey<T: 'static>
 where
     LoadRegistryStorage: LoadRegistryProvider<T>,
@@ -1788,10 +1808,6 @@ pub struct PrefabBlockEntry {
     pub color: BlockColor,
     #[serde(default, skip_serializing)]
     pub loot_table: Option<OwnOrKey<LootTableData>>,
-    #[serde(default, skip_serializing)]
-    pub placed: Option<InternString>,
-    #[serde(default, skip_serializing)]
-    pub place_check: Option<InternString>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct PrefabEntityEntry {
@@ -1803,16 +1819,24 @@ pub struct PrefabEntityEntry {
     pub chance: f32,
     #[serde(default, skip_serializing)]
     pub loot: Option<(OwnOrKey<LootTableData>, InventoryView)>,
-    #[serde(default, skip_serializing)]
-    pub placed: Option<InternString>,
-    #[serde(default, skip_serializing)]
-    pub place_check: Option<InternString>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct PrefabChildEntry {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub rotation: HorizontalFace,
+    pub prefab: OwnOrKey<PrefabData>,
+    #[serde(default = "default_prefab_entry_true_chance", skip_serializing)]
+    pub chance: f32,
 }
 #[derive(Serialize, Deserialize, Default)]
 pub struct PrefabData {
     pub blocks: Vec<PrefabBlockEntry>,
     #[serde(default)]
     pub entities: Vec<PrefabEntityEntry>,
+    #[serde(default)]
+    pub children: Vec<PrefabChildEntry>,
     #[serde(skip_deserializing, skip_serializing, default)]
     pub bb: OnceLock<AABB<i32>>,
 }
@@ -1833,20 +1857,19 @@ impl PrefabData {
         position: BlockPos,
         rotation: HorizontalFace,
         seed: u64,
-        mut block_callback: impl FnMut(BlockPos, BlockEntry, &PrefabBlockEntry, &mut Xoshiro256PlusPlus),
-        mut entity_callback: impl FnMut(Pos, &PrefabEntityEntry, &mut Xoshiro256PlusPlus),
+        mut block_callback: &mut impl FnMut(
+            BlockPos,
+            BlockEntry,
+            &PrefabBlockEntry,
+            &mut Xoshiro256PlusPlus,
+        ),
+        mut entity_callback: &mut impl FnMut(Pos, &PrefabEntityEntry, &mut Xoshiro256PlusPlus),
     ) {
         let rotation = BlockRotation::looking_to_horizontal(rotation);
         use rand::Rng;
         use rand::SeedableRng;
         let mut random = Xoshiro256PlusPlus::seed_from_u64(seed);
-        let mut placed_set = HashSet::new();
         for entry in &self.blocks {
-            if let Some(place_check) = entry.place_check {
-                if !placed_set.contains(&place_check) {
-                    continue;
-                }
-            }
             if !random.random_bool(entry.chance as f64) {
                 continue;
             }
@@ -1869,16 +1892,8 @@ impl PrefabData {
                 entry,
                 &mut random,
             );
-            if let Some(placed) = entry.placed {
-                placed_set.insert(placed);
-            }
         }
         for entry in &self.entities {
-            if let Some(place_check) = entry.place_check {
-                if !placed_set.contains(&place_check) {
-                    continue;
-                }
-            }
             if !random.random_bool(entry.chance as f64) {
                 continue;
             }
@@ -1895,9 +1910,26 @@ impl PrefabData {
                 entry,
                 &mut random,
             );
-            if let Some(placed) = entry.placed {
-                placed_set.insert(placed);
+        }
+        for entry in &self.children {
+            if !random.random_bool(entry.chance as f64) {
+                continue;
             }
+            entry.prefab.data().build(
+                position
+                    + rotation.rotate_block_pos(BlockPos {
+                        x: entry.x,
+                        y: entry.y,
+                        z: entry.z,
+                    }),
+                rotation
+                    .rotate_face(entry.rotation.face())
+                    .horizontal()
+                    .unwrap(),
+                random.next_u64(),
+                block_callback,
+                entity_callback,
+            );
         }
     }
 }

@@ -1,0 +1,6 @@
+(
+    stats: (
+        flight_add: 1,
+        speed_mul: 5,
+    )
+)
