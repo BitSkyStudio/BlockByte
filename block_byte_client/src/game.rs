@@ -164,16 +164,8 @@ impl ClientPlayer {
                             }
                             let block_position = chunk_position.to_block_pos() + offset.xyz();
                             let aabb = AABB {
-                                min: Pos {
-                                    x: -plant_data.size / 2.,
-                                    y: 0.,
-                                    z: -plant_data.size / 2.,
-                                },
-                                max: Pos {
-                                    x: plant_data.size / 2.,
-                                    y: plant_data.height,
-                                    z: plant_data.size / 2.,
-                                },
+                                min: -Pos::XZ_HALF * plant_data.size,
+                                max: Pos::XZ_HALF * plant_data.size + Pos::Y * plant_data.height,
                             }
                             .offset(block_position.to_pos() + Pos::XZ_HALF + Pos::Y);
                             if let Some(result) = ray.aabb_raycast(aabb) {

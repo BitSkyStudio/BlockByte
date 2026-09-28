@@ -10,7 +10,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    coord::{AABB, BlockPos, Pos},
+    coord::{AABB, Axis, BlockPos, Pos},
     registry::{BlockEntry, EntityData, ItemData, ItemKey, KeyGroup, ResearchKey},
 };
 
@@ -464,108 +464,48 @@ impl CharacterController {
         let total_move = self.velocity * delta_time;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
-                if Self::collides_at(
-                    *position
-                        + Pos {
-                            x: 0.,
-                            y: total_move.y,
-                            z: 0.,
-                        },
-                    &block_query,
-                    hitbox,
-                )
-                .is_none()
-                {
-                    position.y += total_move.y;
-                    self.on_ground = false;
-                } else {
-                    self.on_ground = self.velocity.y < 0.;
-                    self.velocity.y = 0.;
-                }
-                if let Some(highest_point) = Self::collides_at(
-                    *position
-                        + Pos {
-                            x: total_move.x,
-                            y: 0.,
-                            z: 0.,
-                        },
-                    &block_query,
-                    hitbox,
-                ) {
-                    let step_difference = highest_point - position.y;
-                    if step_difference <= step_height + 0.01 && self.on_ground {
-                        let snap = Pos {
-                            x: total_move.x,
-                            y: step_difference + 0.02,
-                            z: 0.,
-                        };
-                        if Self::collides_at(*position + snap, &block_query, hitbox).is_none() {
-                            *position += snap;
+                self.on_ground = false;
+                for axis in [Axis::Y, Axis::X, Axis::Z] {
+                    if let Some(highest_point) = Self::collides_at(
+                        *position,
+                        &block_query,
+                        hitbox.inflate(Pos::ZERO.with(axis, total_move.axis(axis))),
+                    ) {
+                        if axis == Axis::Y {
+                            self.on_ground = self.velocity.y < 0.;
                         } else {
-                            self.velocity.x = 0.;
+                            let step_difference = highest_point - position.y;
+                            if step_difference <= step_height + 0.01 && self.on_ground {
+                                let up = Pos::Y * (step_difference + 0.02);
+                                let side = Pos::ZERO.with(axis, total_move.axis(axis));
+                                if Self::collides_at(
+                                    *position + up,
+                                    &block_query,
+                                    hitbox.inflate(side),
+                                )
+                                .is_none()
+                                {
+                                    *position += up + side;
+                                    continue;
+                                }
+                            }
                         }
+                        *self.velocity.axis_mut(axis) = 0.;
                     } else {
-                        self.velocity.x = 0.;
-                    }
-                } else {
-                    if !self.on_ground
-                        || !holding_ledge
-                        || Self::collides_at(
-                            *position
-                                + Pos {
-                                    x: total_move.x,
-                                    y: -0.01,
-                                    z: 0.,
-                                },
-                            &block_query,
-                            hitbox,
-                        )
-                        .is_some()
-                    {
-                        position.x += total_move.x;
-                    }
-                }
-                if let Some(highest_point) = Self::collides_at(
-                    *position
-                        + Pos {
-                            x: 0.,
-                            y: 0.,
-                            z: total_move.z,
-                        },
-                    &block_query,
-                    hitbox,
-                ) {
-                    let step_difference = highest_point - position.y;
-                    if step_difference <= step_height + 0.01 && self.on_ground {
-                        let snap = Pos {
-                            x: 0.,
-                            y: step_difference + 0.02,
-                            z: total_move.z,
-                        };
-                        if Self::collides_at(*position + snap, &block_query, hitbox).is_none() {
-                            *position += snap;
-                        } else {
-                            self.velocity.z = 0.;
+                        {
+                            if axis == Axis::Y
+                                || !self.on_ground
+                                || !holding_ledge
+                                || Self::collides_at(
+                                    *position + (Pos::Y * -0.05).with(axis, total_move.axis(axis)),
+                                    &block_query,
+                                    hitbox,
+                                )
+                                .is_some()
+                            {
+                                *position.axis_mut(axis) += total_move.axis(axis);
+                            }
                         }
-                    } else {
-                        self.velocity.z = 0.;
-                    }
-                } else {
-                    if !self.on_ground
-                        || !holding_ledge
-                        || Self::collides_at(
-                            *position
-                                + Pos {
-                                    x: 0.,
-                                    y: -0.01,
-                                    z: total_move.z,
-                                },
-                            &block_query,
-                            hitbox,
-                        )
-                        .is_some()
-                    {
-                        position.z += total_move.z;
                     }
                 }
             }

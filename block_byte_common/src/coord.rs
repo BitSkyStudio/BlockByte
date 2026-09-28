@@ -19,6 +19,26 @@ pub struct Vec3<T: Copy> {
     pub y: T,
     pub z: T,
 }
+impl<T: Copy> Vec3<T> {
+    pub fn with(mut self, axis: Axis, value: T) -> Self {
+        *self.axis_mut(axis) = value;
+        self
+    }
+    pub const fn axis(self, axis: Axis) -> T {
+        match axis {
+            Axis::X => self.x,
+            Axis::Y => self.y,
+            Axis::Z => self.z,
+        }
+    }
+    pub const fn axis_mut(&mut self, axis: Axis) -> &mut T {
+        match axis {
+            Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
+            Axis::Z => &mut self.z,
+        }
+    }
+}
 impl<T: Copy + Serialize> Serialize for Vec3<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -408,6 +428,19 @@ impl<T: Copy + PartialOrd> AABB<T> {
                 z: self.max.z,
             },
         }
+    }
+}
+impl AABB<f32> {
+    pub fn inflate(mut self, by: Pos) -> Self {
+        for axis in Axis::all() {
+            let val = by.axis(axis);
+            if val < 0. {
+                *self.min.axis_mut(axis) += val;
+            } else {
+                *self.max.axis_mut(axis) += val;
+            }
+        }
+        self
     }
 }
 impl<T: Copy + Add<T, Output = T>> AABB<T> {
@@ -1058,6 +1091,11 @@ pub enum Axis {
     X,
     Y,
     Z,
+}
+impl Axis {
+    pub const fn all() -> [Axis; 3] {
+        [Axis::X, Axis::Y, Axis::Z]
+    }
 }
 impl Face {
     pub fn axis_direction(self) -> (Axis, bool) {

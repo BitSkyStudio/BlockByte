@@ -180,8 +180,10 @@ impl Entity {
                 damage * entity_data.damage_table[damage_type].unwrap_or(1.)
             })
             .sum::<f32>();
-        let received_damage = received_damage * (self.current_stats.vulnerability() / 100.)
-            / (1. + self.current_stats.armor().max(0.) / 100.);
+        let armor_multiplier =
+            1. - (self.current_stats.armor() / (self.current_stats.armor() + 100.));
+        let received_damage =
+            received_damage * (self.current_stats.vulnerability() / 100.) * armor_multiplier;
         if let Some(source_entity) = &source_entity {
             if let Some(brain) = &mut self.brain {
                 *brain
