@@ -13,7 +13,7 @@ use ahash::AHashMap;
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, ActiveEffect, CharacterController, ClientItem, Color, EntityAction,
     EntityPose, EntityResearchProgress, EntityStats, HitTimer, InternString, LookDirection,
-    MoveMode, NORMAL_SPEED, SERVER_DT, TexCoords,
+    MoveMode, NORMAL_SPEED, RUN_MULTIPLIER, SERVER_DT, TexCoords,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, LoopMode, Model, ModelGeometry},
     net::{
@@ -235,8 +235,12 @@ impl ParticleManager {
     pub fn emit(&mut self, position: Pos, count: u32, texture: TextureKey) {
         for _ in 0..count {
             let mut cc = CharacterController::new();
-            cc.velocity = Pos::all(0.);
-            for i in [&mut cc.velocity.x, &mut cc.velocity.y, &mut cc.velocity.z] {
+            cc.move_velocity = Pos::all(0.);
+            for i in [
+                &mut cc.move_velocity.x,
+                &mut cc.move_velocity.y,
+                &mut cc.move_velocity.z,
+            ] {
                 if *i == 0. || true {
                     *i = rng().random::<f32>() * 2. - 1.;
                 }
@@ -247,7 +251,7 @@ impl ParticleManager {
                 (raw_texture.width(), raw_texture.height())
             };
             let texture_size = 2;
-            cc.velocity = cc.velocity.normalize() * 5.;
+            cc.move_velocity = cc.move_velocity.normalize() * 5.;
             let tx = rng().next_u32() % (width - 1);
             let ty = rng().next_u32() % (height - 1);
             let delay = rng().random::<f32>() / 20.;
@@ -841,7 +845,11 @@ impl ClientGame {
                 self.camera.running = false;
             }
         }
-        move_vector *= if self.camera.running { 1.35 } else { 1. };
+        move_vector *= if self.camera.running {
+            RUN_MULTIPLIER
+        } else {
+            1.
+        };
         self.camera.crouching = input.keys.is_down(KeyCode::ShiftLeft) && can_move;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
@@ -879,7 +887,7 @@ impl ClientGame {
                     && self.camera.controller.on_ground
                     && can_move
                 {
-                    self.camera.controller.velocity.y += self.player_stats.jump_velocity();
+                    self.camera.controller.move_velocity.y += self.player_stats.jump_velocity();
                 }
             }
             MoveMode::Fly | MoveMode::NoClip => {}
@@ -1119,7 +1127,7 @@ impl ClientGame {
                     }
                 }
                 NetworkMessageS2C::Knockback { velocity } => {
-                    self.camera.controller.velocity += velocity;
+                    self.camera.controller.knockback_velocity += velocity;
                 }
                 NetworkMessageS2C::UpdateResearch { research } => {
                     self.research = research;
@@ -1426,7 +1434,7 @@ impl ClientGame {
                 viewmodel,
                 Matrix4::from_translation(Vector3::from(
                     (self.camera.get_eye(self.get_player_data())
-                        + (self.camera.controller.velocity * /*-0.005*/0.))
+                        + (self.camera.controller.move_velocity * /*-0.005*/0.))
                         .into_array(),
                 )) * Matrix4::from_angle_y(Rad(-self.camera.direction.yaw))
                     * Matrix4::from_angle_x(Rad(self.camera.direction.pitch)),

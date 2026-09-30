@@ -311,7 +311,7 @@ impl Entity {
                         *move_vector = next_path_point - self.position;
                         if move_vector.y > 0. {
                             if self.character_controller.on_ground {
-                                self.character_controller.velocity.y +=
+                                self.character_controller.move_velocity.y +=
                                     entity_data.base_stats.jump_velocity();
                             }
                         }
@@ -365,7 +365,7 @@ impl Entity {
                                             &self.current_stats,
                                         );
                                     target_entity.damage(damage_table, Some(self), world);
-                                    target_entity.character_controller.velocity +=
+                                    target_entity.character_controller.knockback_velocity +=
                                         (self.direction.make_front() + Pos::Y * 0.5) * knockback;
                                 }
                             } else {

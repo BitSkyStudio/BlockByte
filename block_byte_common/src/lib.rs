@@ -26,7 +26,8 @@ pub mod world;
 pub const SERVER_TPS: u32 = 40;
 pub const SERVER_DT: f32 = 1. / (SERVER_TPS as f32);
 pub const GRAVITY_ACCELERATION: f32 = 25.;
-pub const NORMAL_SPEED: f32 = 6.;
+pub const NORMAL_SPEED: f32 = 5.;
+pub const RUN_MULTIPLIER: f32 = 1.5;
 pub const ACCELERATION_COEFFICIENT: f32 = 8.;
 
 pub const fn time_to_ticks(time: f32) -> u32 {
@@ -417,13 +418,15 @@ create_entity_stats!(strength: 100., speed: 100., haste: 100., evasion: 0., vita
 
 #[derive(Serialize, Deserialize)]
 pub struct CharacterController {
-    pub velocity: Pos,
+    pub move_velocity: Pos,
+    pub knockback_velocity: Pos,
     pub on_ground: bool,
 }
 impl CharacterController {
     pub fn new() -> CharacterController {
         CharacterController {
-            velocity: Pos::ZERO,
+            move_velocity: Pos::ZERO,
+            knockback_velocity: Pos::ZERO,
             on_ground: false,
         }
     }
@@ -441,16 +444,22 @@ impl CharacterController {
     ) {
         match move_mode {
             MoveMode::Normal => {
-                self.velocity.y -= GRAVITY_ACCELERATION * delta_time;
+                self.move_velocity.y -= GRAVITY_ACCELERATION * delta_time;
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }
-        let ground_multiplier = if self.on_ground { 1. } else { 0.2 };
+        let ground_multiplier = if self.on_ground { 0.45 } else { 0.08 };
+        self.move_velocity *= (1_f32 - ground_multiplier).powf(delta_time);
+        self.knockback_velocity *= (match self.on_ground {
+            true => 0.2f32,
+            false => 0.6,
+        })
+        .powf(delta_time * 5.);
         let acceleration = match move_mode {
-            MoveMode::Normal => ground_multiplier,
+            MoveMode::Normal => ground_multiplier * 4.,
             MoveMode::Fly | MoveMode::NoClip => 1.,
         } * acceleration;
-        let mut error = move_vector - self.velocity;
+        let mut error = move_vector - self.move_velocity;
         match move_mode {
             MoveMode::Normal => {
                 error.y = 0.;
@@ -458,13 +467,13 @@ impl CharacterController {
             MoveMode::Fly | MoveMode::NoClip => {}
         }
         if error.length() > 0. {
-            self.velocity += error.normalize() * (error.length().min(acceleration * delta_time));
+            self.move_velocity +=
+                error.normalize() * (error.length().min(acceleration * delta_time));
         }
-        self.velocity *= (1_f32 - 0.1 * ground_multiplier).powf(delta_time);
-        let total_move = self.velocity * delta_time;
+        let total_move = (self.move_velocity + self.knockback_velocity) * delta_time;
+        self.on_ground = false;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
-                self.on_ground = false;
                 for axis in [Axis::Y, Axis::X, Axis::Z] {
                     if let Some(highest_point) = Self::collides_at(
                         *position,
@@ -472,7 +481,7 @@ impl CharacterController {
                         hitbox.inflate(Pos::ZERO.with(axis, total_move.axis(axis))),
                     ) {
                         if axis == Axis::Y {
-                            self.on_ground = self.velocity.y < 0.;
+                            self.on_ground = self.move_velocity.y < 0.;
                         } else {
                             let step_difference = highest_point - position.y;
                             if step_difference <= step_height + 0.01 && self.on_ground {
@@ -490,7 +499,8 @@ impl CharacterController {
                                 }
                             }
                         }
-                        *self.velocity.axis_mut(axis) = 0.;
+                        *self.move_velocity.axis_mut(axis) = 0.;
+                        *self.knockback_velocity.axis_mut(axis) = 0.;
                     } else {
                         {
                             if axis == Axis::Y

@@ -1079,7 +1079,7 @@ impl User {
                     if let Some(mut other_entity) = world.get_entity(other_entity_id) {
                         other_entity.damage(damage_table, Some(entity), world);
                         let knockback_direction = entity.direction.make_front();
-                        other_entity.character_controller.velocity +=
+                        other_entity.character_controller.knockback_velocity +=
                             (knockback_direction + Pos::Y * 0.5) * knockback;
                     }
                 }
@@ -1104,7 +1104,7 @@ impl User {
                     let throw_force = 10.;
                     let mut throw_velocity = entity.direction.make_front() * throw_force;
                     throw_velocity.y = 0.1;
-                    item_entity.character_controller.velocity = throw_velocity;
+                    item_entity.character_controller.knockback_velocity = throw_velocity;
                     item_entity.inventory.set_slot_raw(0, Some(drop_item));
                     world.spawn_entity(item_entity).unwrap();
                 }

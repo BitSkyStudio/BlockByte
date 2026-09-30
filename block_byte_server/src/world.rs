@@ -302,7 +302,10 @@ pub fn tick_chunk(world: &WorldAccess) {
         entity.health = entity.health.min(entity.current_stats.vitality());
         if let Some(controlling_user) = entity.controlling_user {
             let mut velocity = Pos::ZERO;
-            std::mem::swap(&mut velocity, &mut entity.character_controller.velocity);
+            std::mem::swap(
+                &mut velocity,
+                &mut entity.character_controller.knockback_velocity,
+            );
             if velocity.length_squared() > 0. {
                 world.send(controlling_user, NetworkMessageS2C::Knockback { velocity });
             }
@@ -1252,7 +1255,7 @@ impl WorldAccess<'_> {
         for item in items {
             let mut item_entity = Entity::new(item_entity_key, position);
             let angle = rand::random::<f32>() * 2. * std::f32::consts::PI;
-            item_entity.character_controller.velocity = Pos {
+            item_entity.character_controller.move_velocity = Pos {
                 x: angle.cos(),
                 y: rand::random::<f32>() / 2.,
                 z: angle.sin(),
@@ -1469,5 +1472,5 @@ pub fn compute_tool_damage_and_knockback(
             *value *= quality_multiplier * strength_multiplier;
         }
     }
-    (damage_table, tool.knockback)
+    (damage_table, tool.knockback * 2.)
 }
