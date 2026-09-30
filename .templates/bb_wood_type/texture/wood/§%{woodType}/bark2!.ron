@@ -1,7 +1,0 @@
-Flip(
-    vertical: true, 
-    base: Color(
-        base: Image("wood.bark!"),
-        color: "§%{barkColor}",
-    )
-)

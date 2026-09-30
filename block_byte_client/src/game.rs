@@ -679,11 +679,11 @@ impl GameScreen for ClientGame {
                     RayCastResult::Block(position, face, hit_position) => {
                         let block = self.get_block(position).unwrap();
                         let block = block.block.data();
-                        if let Some(texture) = &block.break_particle_texture {
+                        if let Some(texture) = block.get_break_particle_texture(face) {
                             self.particles.emit(
                                 hit_position + face.get_offset() * 0.1,
                                 10,
-                                *texture,
+                                texture,
                             );
                         }
                         self.send_message(NetworkMessageC2S::AttackBlock { position, face });

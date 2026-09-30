@@ -65,6 +65,17 @@ fn main() {
     /*rayon::ThreadPoolBuilder::new()
     .num_threads(4)
     .build_global();*/
+
+    {
+        let config: ServerConfig = ron::from_str(
+            std::fs::read_to_string("server_config.ron")
+                .unwrap_or("()".to_string())
+                .as_str(),
+        )
+        .unwrap();
+        assert!(SERVER_CONFIG_INSTANCE.set(config).is_ok());
+    }
+
     let mut memorydb = false;
     let mut is_design_server = false;
     if let Some(arg) = args().nth(1) {
@@ -96,15 +107,18 @@ fn main() {
         }
     }
     let mut network_server = RenetServer::new(make_connection_config());
-    const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
-    let network_socket: UdpSocket = UdpSocket::bind(SERVER_ADDR).unwrap();
+    let server_addr: SocketAddr = SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        ServerConfig::config().port,
+    );
+    let network_socket: UdpSocket = UdpSocket::bind(server_addr).unwrap();
     let network_server_config = renet_netcode::ServerConfig {
         current_time: SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap(),
         max_clients: 64,
         protocol_id: 0,
-        public_addresses: vec![SERVER_ADDR],
+        public_addresses: vec![server_addr],
         authentication: ServerAuthentication::Unsecure,
     };
     let mut network_transport =
@@ -139,15 +153,6 @@ fn main() {
         });
         rx
     };
-    {
-        let config: ServerConfig = ron::from_str(
-            std::fs::read_to_string("server_config.ron")
-                .unwrap_or("()".to_string())
-                .as_str(),
-        )
-        .unwrap();
-        assert!(SERVER_CONFIG_INSTANCE.set(config).is_ok());
-    }
 
     let world_generator_config = ron::from_str(
         std::fs::read_to_string("assets/world_generator.ron")
@@ -1565,6 +1570,8 @@ pub struct ServerConfig {
     view_distance: i16,
     #[serde(default = "default_i16::<8>")]
     world_chunk_height: i16,
+    #[serde(default = "default_u16::<5000>")]
+    port: u16,
 }
 static SERVER_CONFIG_INSTANCE: OnceLock<ServerConfig> = OnceLock::new();
 impl ServerConfig {

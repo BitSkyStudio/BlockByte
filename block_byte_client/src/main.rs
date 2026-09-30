@@ -6,7 +6,9 @@ mod ui;
 use core::f32;
 use std::{
     collections::{HashMap, HashSet},
+    env::args,
     hash::Hash,
+    net::SocketAddr,
     path::Path,
     time::Instant,
 };
@@ -41,7 +43,14 @@ fn main() {
     event_loop
         .run_app(&mut App {
             render_state: None,
-            screen: Box::new(ConnectionScreen::new()),
+            screen: Box::new(ConnectionScreen::new(
+                match args().nth(1) {
+                    Some(addr) => addr,
+                    None => "127.0.0.1:5000".to_string(),
+                }
+                .parse()
+                .unwrap(),
+            )),
             input: InputManager::default(),
             last_update: Instant::now(),
         })
@@ -281,8 +290,8 @@ struct ConnectionScreen {
     pub connection: Option<ClientConnection>,
 }
 impl ConnectionScreen {
-    pub fn new() -> ConnectionScreen {
-        let connection = ClientConnection::connect("127.0.0.1:5000".parse().unwrap());
+    pub fn new(address: SocketAddr) -> ConnectionScreen {
+        let connection = ClientConnection::connect(address);
         ConnectionScreen {
             connection: Some(connection),
         }

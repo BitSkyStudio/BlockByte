@@ -648,8 +648,6 @@ pub struct BlockData {
     pub hanging: Option<Face>,
     #[serde(default = "default_supporting_map")]
     pub supporting: FaceMap<bool>,
-    #[serde(default)]
-    pub break_particle_texture: Option<TextureKey>,
 }
 #[derive(Deserialize)]
 pub struct BlockRenderConnection {
@@ -672,6 +670,21 @@ fn default_connection_rotations_all() -> Vec<BlockRotation> {
 }
 fn default_front_face() -> Face {
     Face::Front
+}
+impl BlockData {
+    pub fn get_break_particle_texture(&self, face: Face) -> Option<TextureKey> {
+        match &self.render_data {
+            BlockRenderData::Air => None,
+            BlockRenderData::Full { faces, .. } => faces[face].list().get(0).cloned(),
+            BlockRenderData::Model { model, .. } => {
+                if let Some(texture) = model.textures.get(0) {
+                    return Some(*texture);
+                }
+                //todo: model texture
+                None
+            }
+        }
+    }
 }
 impl RegistryRonConfigLoadable for BlockData {
     fn preload_hook(&mut self) {
@@ -696,15 +709,6 @@ impl RegistryRonConfigLoadable for BlockData {
                 }
             }
             _ => {}
-        }
-        if self.break_particle_texture.is_none() {
-            match &self.render_data {
-                BlockRenderData::Air => {}
-                BlockRenderData::Full { faces, .. } => {
-                    self.break_particle_texture = Some(faces.front.list()[0]);
-                }
-                BlockRenderData::Model { .. } => {}
-            }
         }
     }
 }
