@@ -108,7 +108,7 @@ fn main() {
     }
     let mut network_server = RenetServer::new(make_connection_config());
     let server_addr: SocketAddr = SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
         ServerConfig::config().port,
     );
     let network_socket: UdpSocket = UdpSocket::bind(server_addr).unwrap();

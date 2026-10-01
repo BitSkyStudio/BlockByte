@@ -45,7 +45,10 @@ fn main() {
             render_state: None,
             screen: Box::new(ConnectionScreen::new(
                 match args().nth(1) {
-                    Some(addr) => addr,
+                    Some(addr) => {
+                        println!("{}", addr);
+                        addr
+                    }
                     None => "127.0.0.1:5000".to_string(),
                 }
                 .parse()

@@ -2379,7 +2379,8 @@ impl ClientConnection {
             let state = state.clone();
             std::thread::spawn(move || {
                 let mut client = RenetClient::new(make_connection_config());
-                let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+                let socket =
+                    UdpSocket::bind(&format!("0.0.0.0:{}", server_addr.port() + 1)).unwrap();
                 let current_time = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap();
