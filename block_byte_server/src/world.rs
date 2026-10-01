@@ -480,7 +480,7 @@ pub fn tick_chunk(world: &WorldAccess) {
                 false,
             );
             if new_position != entity.position {
-                world.teleport_entity(entity, new_position).unwrap();
+                let _ = world.teleport_entity(entity, new_position);
             } else if old_direction != entity.direction {
                 world.send_viewers(entity.position.to_chunk_pos(), entity.create_move_message());
             }
@@ -1472,5 +1472,5 @@ pub fn compute_tool_damage_and_knockback(
             *value *= quality_multiplier * strength_multiplier;
         }
     }
-    (damage_table, tool.knockback * 2.)
+    (damage_table, tool.knockback * 1.5)
 }
