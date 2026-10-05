@@ -1472,5 +1472,5 @@ pub fn compute_tool_damage_and_knockback(
             *value *= quality_multiplier * strength_multiplier;
         }
     }
-    (damage_table, tool.knockback * 1.5)
+    (damage_table, tool.knockback)
 }

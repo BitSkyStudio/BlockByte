@@ -9,9 +9,9 @@ use anyhow::anyhow;
 use image::{DynamicImage, GenericImageView};
 use image_overlay::overlay_dyn_img;
 use once_map::OnceMap;
-use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
+use palettevec::PaletteVec;
 use rand::RngCore;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
@@ -19,14 +19,13 @@ use serde::de::Visitor;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos};
+use crate::coord::{Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos, AABB};
 use crate::model::Model;
 use crate::net::PropertyModifyMode;
 use crate::rotation::BlockRotation;
 use crate::scripts::{
-    CompiledScript, ExternalScriptByteCode, FallibleInstructionResult, RegisterId,
-    RegisterOrImmediate, ScriptByteCode, ScriptParseContext, ScriptParseError,
-    expect_argument_count,
+    expect_argument_count, CompiledScript, ExternalScriptByteCode, FallibleInstructionResult,
+    RegisterId, RegisterOrImmediate, ScriptByteCode, ScriptParseContext, ScriptParseError,
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
@@ -603,9 +602,9 @@ impl ToolData {
             },
             swing_time: 0.5,
             reach: 5.,
-            knockback: 8.,
+            knockback: 12.,
             stamina: 10.,
-            hit_animation: InternString::intern("hit"),
+            hit_animation: default_tool_hit_animation(),
         })
     }
 }
