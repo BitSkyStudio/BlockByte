@@ -48,7 +48,7 @@ use crate::{
     render::{
         self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUBlockFace, GPUMesh,
         GPUParticleInstance, GUIMesh, GridChunkMesh, Mesh, MeshVertex, MeshVertexConsumer,
-        RenderState, SurfaceError, draw_model, get_block_matrix, get_block_rotation_face_vertices,
+        RenderState, SurfaceError, draw_model, get_block_matrix,
     },
     ui::{GameData, ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
 };
@@ -2120,9 +2120,8 @@ impl ClientChunk {
                                         }
                                     }
                                 }
-                                let (vertices, local_face) =
-                                    get_block_rotation_face_vertices(block.rotation, face);
-                                let face_texture = &faces[*local_face];
+                                let local_face = block.rotation.inverse_rotate_face(face);
+                                let face_texture = &faces[local_face];
                                 let textures = face_texture.list();
                                 let tex_index = if face_texture.variant_count() > 1 {
                                     let hash = (base_position.x as i32 * 94839)
@@ -2133,27 +2132,16 @@ impl ClientChunk {
                                 } else {
                                     0
                                 };
-                                if block.rotation != BlockRotation::default() {
-                                    //todo: actually include these in grid mesh
-                                    let mut mesh_consumer = mesh_detail.consumer(block.color, 0);
-                                    let texture = face_texture.tex_coords(tex_index);
-                                    mesh_consumer.add_quad(vertices.map(|vertex| MeshVertex {
-                                        position: vertex.position + base_position,
-                                        normal: vertex.normal,
-                                        uv: texture.map(vertex.uv),
-                                    }));
-                                } else {
-                                    let texture = TEXTURE_ATLAS.get().unwrap().atlas_ids
-                                        [textures[tex_index % textures.len()].numeric_id()]
-                                    .unwrap();
-                                    mesh_grid.add_vertex(GPUBlockFace {
-                                        block: ChunkOffset::new(x, y, z).index() as u16,
-                                        texture: texture,
-                                        face: face as u8,
-                                        color: block.color.0,
-                                        _pad: Default::default(),
-                                    });
-                                }
+                                let texture = TEXTURE_ATLAS.get().unwrap().atlas_ids
+                                    [textures[tex_index % textures.len()].numeric_id()]
+                                .unwrap();
+                                mesh_grid.add_vertex(GPUBlockFace {
+                                    block: ChunkOffset::new(x, y, z).index() as u16,
+                                    texture: texture,
+                                    face: face as u8 | (block.rotation.get_uv_rotation(face) << 3),
+                                    color: block.color.0,
+                                    _pad: Default::default(),
+                                });
                             }
                         }
                         BlockRenderData::Model {

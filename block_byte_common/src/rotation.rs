@@ -147,6 +147,9 @@ impl BlockRotation {
     pub fn rotate_block_pos(self, v: BlockPos) -> BlockPos {
         Orientation::from_block_rotation(self).rotate_block_pos(v)
     }
+    pub fn get_uv_rotation(self, face: Face) -> u8 {
+        precompute_table().uv_rotations[self as usize + face as usize * 24]
+    }
 }
 struct RotationPrecompute {
     orientations: [Orientation; 24],
@@ -154,6 +157,7 @@ struct RotationPrecompute {
     compositions: [BlockRotation; 24 * 24],
     face: [Face; 24 * 6],
     face_inverse: [Face; 24 * 6],
+    uv_rotations: [u8; 24 * 6],
 }
 static ROTATION_TABLE: OnceLock<RotationPrecompute> = OnceLock::new();
 fn precompute_table() -> &'static RotationPrecompute {
@@ -194,12 +198,37 @@ fn precompute_table() -> &'static RotationPrecompute {
             let face = Face::all()[i / 24];
             orientation.inverse_apply(face)
         });
+        let uv_rotations = std::array::from_fn(|i| {
+            let orientation = orientations[i % 24];
+            let face = Face::all()[i / 24];
+            let face_up = match face {
+                Face::Up | Face::Down => Face::Front,
+                _ => Face::Up,
+            };
+            let face_orientation = Orientation::from_front_up(face, face_up).unwrap();
+            let real_orientation = orientation.compose(face_orientation);
+            let local_face = orientation.apply(face);
+            let mut local_face_up = match local_face {
+                Face::Up | Face::Down => Face::Front,
+                _ => Face::Up,
+            };
+            for i in 0..4 {
+                if real_orientation
+                    == Orientation::from_front_up(local_face, local_face_up).unwrap()
+                {
+                    return i;
+                }
+                local_face_up = local_face_up.cross(local_face);
+            }
+            unreachable!()
+        });
         RotationPrecompute {
             orientations,
             rotations,
             compositions,
             face,
             face_inverse,
+            uv_rotations,
         }
     })
 }

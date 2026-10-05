@@ -54,7 +54,7 @@ fn vs_main(
     let position_y = f32((instance.position>>5) & 31);
     let position_z = f32((instance.position>>10) & 31);
 
-    let vertex = FACE_VERTICES[instance.face][vertex_index];
+    let vertex = FACE_VERTICES[instance.face&7][vertex_index];
 
     let position = chunk_position + vec3<f32>(position_x, position_y, position_z) + vec3<f32>(
         select(0., 1., (vertex&1)!=0), 

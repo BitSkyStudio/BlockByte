@@ -8,10 +8,6 @@ var<uniform> camera: CameraUniform;
 @group(4) @binding(0)
 var<uniform> time: f32;
 
-struct VertexInput {
-    @location(0) position: vec2<f32>,
-}
-
 struct InstanceInput {
     @location(1) position: u32,
     @location(2) texture: u32,
@@ -31,7 +27,6 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(
-    model: VertexInput,
     instance: InstanceInput,
     @builtin(vertex_index) vertex_index: u32
 ) -> VertexOutput {
@@ -51,11 +46,17 @@ fn vs_main(
         vec3<f32>(-1., 0., 0.),
         vec3<f32>(1., 0., 0.),
     );
+    const FACE_UVS = array<vec2<f32>, 4>(
+        vec2<f32>(0., 0.),
+        vec2<f32>(1., 0.),
+        vec2<f32>(1., 1.),
+        vec2<f32>(0., 1.),
+    );
     let position_x = f32(instance.position & 31);
     let position_y = f32((instance.position>>5) & 31);
     let position_z = f32((instance.position>>10) & 31);
 
-    let vertex = FACE_VERTICES[instance.face][vertex_index];
+    let vertex = FACE_VERTICES[instance.face&7][vertex_index];
 
     let position = chunk_position + vec3<f32>(position_x, position_y, position_z) + vec3<f32>(
         select(0., 1., (vertex&1)!=0), 
@@ -65,9 +66,11 @@ fn vs_main(
 
     let texture_cell = texture_dimension(instance.texture);
 
+    let uv = FACE_UVS[(vertex_index + 4 - ((instance.face>>3)&3))%4];
+
     var out: VertexOutput;
-    out.tex_coords = vec2<f32>(texture_cell.x + texture_cell.z * model.position.x, texture_cell.y + texture_cell.w * model.position.y);
-    out.normal = FACE_NORMALS[instance.face];
+    out.tex_coords = vec2<f32>(texture_cell.x + texture_cell.z * uv.x, texture_cell.y + texture_cell.w * uv.y);
+    out.normal = FACE_NORMALS[instance.face&7];
     out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
     out.world_position = position;
     out.color = convert_color(instance.color);
