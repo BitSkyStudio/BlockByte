@@ -3,7 +3,7 @@ use std::{collections::HashMap, u32};
 use block_byte_common::{
     ClientItem, Color, EntityResearchProgress, ItemMoveMode, TexCoords,
     coord::{Pos, Vec3},
-    net::{NetworkMessageC2S, ScreenSlot},
+    net::{NetworkPlayMessageC2S, ScreenSlot},
     registry::{ItemKey, ItemModel, TextureKey},
     ui::{
         CraftAreaRecipes, PropertyMap, SlotId, StretchTexture, UIElement, UIElementType,
@@ -148,7 +148,7 @@ pub fn measure_element(element: &UIElement, properties: &PropertyMap) -> taffy::
     }
 }
 pub enum UIMessage {
-    ServerMessage(NetworkMessageC2S),
+    ServerMessage(NetworkPlayMessageC2S),
 }
 fn render_element(
     node: NodeId,
@@ -312,7 +312,7 @@ fn render_element(
                                 match target_slot {
                                     SlotId::Id(target_slot) => {
                                         event_consumer(UIMessage::ServerMessage(
-                                            NetworkMessageC2S::MoveItem {
+                                            NetworkPlayMessageC2S::MoveItem {
                                                 from: slot,
                                                 to: target_slot,
                                                 mode,
@@ -321,7 +321,7 @@ fn render_element(
                                     }
                                     SlotId::Trash => {
                                         event_consumer(UIMessage::ServerMessage(
-                                            NetworkMessageC2S::TrashItem { slot, mode },
+                                            NetworkPlayMessageC2S::TrashItem { slot, mode },
                                         ));
                                     }
                                 }
@@ -530,7 +530,7 @@ fn render_element(
                                 {
                                     if input.buttons.is_just_down(button) {
                                         event_consumer(UIMessage::ServerMessage(
-                                            NetworkMessageC2S::GiveItem { item, stack },
+                                            NetworkPlayMessageC2S::GiveItem { item, stack },
                                         ));
                                     }
                                 }
@@ -606,7 +606,7 @@ fn render_element(
                                 {
                                     if input.buttons.is_just_down(button) {
                                         event_consumer(UIMessage::ServerMessage(
-                                            NetworkMessageC2S::Craft {
+                                            NetworkPlayMessageC2S::Craft {
                                                 recipe: *recipe,
                                                 count,
                                             },
@@ -655,7 +655,7 @@ fn render_element(
                                 x: (dependency.x + 0.5) * research_size + research_scroll.x,
                                 y: (dependency.y + 0.5) * research_size + research_scroll.y,
                             },
-                            TextureKey::id("crosshair").unwrap().tex_coords(), //todo
+                            TextureKey::id("crosshair").unwrap().tex_coords(),
                             Color::WHITE,
                             3.,
                         );
@@ -747,7 +747,7 @@ fn render_element(
                                 };
                                 if let Some(mode) = move_mode {
                                     event_consumer(UIMessage::ServerMessage(
-                                        NetworkMessageC2S::Research {
+                                        NetworkPlayMessageC2S::Research {
                                             slot,
                                             mode,
                                             research: *research_key,
@@ -777,11 +777,13 @@ fn render_element(
                 && context.content.contains(input.cursor_position)
             {
                 if input.buttons.is_just_down(MouseButton::Left) {
-                    event_consumer(UIMessage::ServerMessage(NetworkMessageC2S::UIButtonPress {
-                        property: *property,
-                        value: *value,
-                        modify_mode: *modify_mode,
-                    }));
+                    event_consumer(UIMessage::ServerMessage(
+                        NetworkPlayMessageC2S::UIButtonPress {
+                            property: *property,
+                            value: *value,
+                            modify_mode: *modify_mode,
+                        },
+                    ));
                 }
             }
         }

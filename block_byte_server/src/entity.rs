@@ -352,9 +352,8 @@ impl Entity {
                         .and_then(|item| item.item.data().tool.as_ref())
                         .unwrap_or(ToolData::hand());
                     let reach_distance = tool.reach * 0.6;
-                    //todo: eye height
                     if let Some(mut target_entity) = world.get_entity(target.id) {
-                        if target_entity.position.distance(entity_eye_position) <= reach_distance {
+                        if target_entity.get_eye().distance(entity_eye_position) <= reach_distance {
                             if let Some(timer) = &mut brain.hit_timer {
                                 if timer.is_finished() {
                                     brain.hit_timer = None;

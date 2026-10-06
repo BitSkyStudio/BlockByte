@@ -17,7 +17,7 @@ use block_byte_common::{
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, FaceMap, Pos, Ray, Vec3},
     model::{DrawAnimation, LoopMode, Model, ModelGeometry},
     net::{
-        ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, ScreenSlot,
+        ItemInteractTarget, NetworkMessageS2C, NetworkPlayMessageC2S, ScreenSlot,
         make_connection_config,
     },
     number_approach_smooth,
@@ -393,7 +393,7 @@ impl GameScreen for ClientGame {
                     } else {
                         if self.hotbar_slot != slot {
                             self.hotbar_slot = slot;
-                            self.send_message(NetworkMessageC2S::HotbarSelect { slot });
+                            self.send_message(NetworkPlayMessageC2S::HotbarSelect { slot });
                             if self.held_item().is_some() || self.swap_hand_item.is_some() {
                                 self.needs_equip = true;
                             }
@@ -410,7 +410,9 @@ impl GameScreen for ClientGame {
                             BlockInteractAction::Ignore => {}
                             _ => {
                                 self.current_local_action = Some(EntityAction::Interact);
-                                self.send_message(NetworkMessageC2S::InteractBlock { position });
+                                self.send_message(NetworkPlayMessageC2S::InteractBlock {
+                                    position,
+                                });
                             }
                         }
                     }
@@ -420,18 +422,18 @@ impl GameScreen for ClientGame {
                             EntityInteractAction::Ignore => {}
                             _ => {
                                 self.current_local_action = Some(EntityAction::Interact);
-                                self.send_message(NetworkMessageC2S::InteractEntity { entity });
+                                self.send_message(NetworkPlayMessageC2S::InteractEntity { entity });
                             }
                         }
                     }
                     RayCastResult::Plant(position, index) => {
                         self.current_local_action = Some(EntityAction::Interact);
-                        self.send_message(NetworkMessageC2S::HarvestPlant { position, index });
+                        self.send_message(NetworkPlayMessageC2S::HarvestPlant { position, index });
                     }
                 }
             }
             if input.keys.is_just_down(KeyCode::KeyQ) {
-                self.send_message(NetworkMessageC2S::DropItem {
+                self.send_message(NetworkPlayMessageC2S::DropItem {
                     stack: input.keys.is_down(KeyCode::ControlLeft),
                 });
             }
@@ -457,7 +459,7 @@ impl GameScreen for ClientGame {
                     new_slot += -scroll as isize;
                     new_slot = ((new_slot % 10) + 10) % 10;
                     self.hotbar_slot = new_slot as usize;
-                    self.send_message(NetworkMessageC2S::HotbarSelect {
+                    self.send_message(NetworkPlayMessageC2S::HotbarSelect {
                         slot: new_slot as usize,
                     });
                     if self.held_item().is_some() || self.swap_hand_item.is_some() {
@@ -542,14 +544,14 @@ impl GameScreen for ClientGame {
             {
                 screen.selected_slot = None;
             } else {
-                self.send_message(NetworkMessageC2S::CloseUI);
+                self.send_message(NetworkPlayMessageC2S::CloseUI);
             }
         }
         if input.keys.is_just_down(KeyCode::Tab) {
             self.send_message(if self.screen.is_some() {
-                NetworkMessageC2S::CloseUI
+                NetworkPlayMessageC2S::CloseUI
             } else {
-                NetworkMessageC2S::OpenPlayerInventory
+                NetworkPlayMessageC2S::OpenPlayerInventory
             });
         }
         self.hud.properties.0.insert(
@@ -661,7 +663,7 @@ impl GameScreen for ClientGame {
         }
         self.tick_camera(dt, input, self.screen.is_none());
         self.player_position = self.camera.position;
-        self.send_message(NetworkMessageC2S::PlayerPosition {
+        self.send_message(NetworkPlayMessageC2S::PlayerPosition {
             position: self.camera.position,
             teleport_id: self.teleport_id,
             direction: self.camera.direction,
@@ -690,7 +692,7 @@ impl GameScreen for ClientGame {
                                 texture,
                             );
                         }
-                        self.send_message(NetworkMessageC2S::AttackBlock { position, face });
+                        self.send_message(NetworkPlayMessageC2S::AttackBlock { position, face });
                     }
                     RayCastResult::Entity(id, hit_position) => {
                         let entity = self.entities.get(&id).unwrap();
@@ -698,7 +700,7 @@ impl GameScreen for ClientGame {
                         if let Some(texture) = &entity.hit_particle_texture {
                             self.particles.emit(hit_position, 5, *texture);
                         }
-                        self.send_message(NetworkMessageC2S::AttackEntity { entity: id });
+                        self.send_message(NetworkPlayMessageC2S::AttackEntity { entity: id });
                     }
                     RayCastResult::Empty => {}
                     RayCastResult::Plant(_position, _index) => {
@@ -769,7 +771,7 @@ impl GameScreen for ClientGame {
     }
 }
 impl ClientGame {
-    pub fn send_message(&mut self, message: NetworkMessageC2S) {
+    pub fn send_message(&mut self, message: NetworkPlayMessageC2S) {
         let _ = self.connection.tx.send(message);
     }
     pub fn tick_camera(&mut self, dt: f32, input: &InputManager, can_move: bool) {
@@ -1450,11 +1452,12 @@ impl ClientGame {
                         match &item_data.action {
                             ItemAction::Place(item_block_placements) => {
                                 let placement = &item_block_placements[*variant]; //todo: flash red when not enough items
-                                if *count < placement.use_count && self.hud.time % 2. < 1. {
+                                if *count < placement.use_count && (self.hud.time * 0.85) % 1. < 0.5
+                                {
                                     vc.color = Color {
                                         r: 255,
-                                        g: 200,
-                                        b: 200,
+                                        g: 150,
+                                        b: 150,
                                         a: 255,
                                     };
                                 }
@@ -1670,7 +1673,7 @@ impl ClientGame {
                                             }
                                         }));
                                     }
-                                    ModelGeometry::Triangle(_vertices, _texture) => todo!(),
+                                    ModelGeometry::Triangle(_vertices, _texture) => {}
                                 },
                                 |_matrix, _binding| {},
                             );
@@ -1841,7 +1844,7 @@ impl ClientGame {
                                     && self.hit_timer.is_none()
                                 {
                                     self.current_local_action = Some(EntityAction::Place);
-                                    self.send_message(NetworkMessageC2S::ItemInteraction {
+                                    self.send_message(NetworkPlayMessageC2S::ItemInteraction {
                                         target: ItemInteractTarget::Block { position, face },
                                         variant: variant_id,
                                     });
@@ -1856,7 +1859,7 @@ impl ClientGame {
                         RayCastResult::Block(position, face, _) => {
                             if input.buttons.is_just_down(MouseButton::Right) {
                                 self.current_local_action = Some(EntityAction::Interact);
-                                self.send_message(NetworkMessageC2S::ItemInteraction {
+                                self.send_message(NetworkPlayMessageC2S::ItemInteraction {
                                     target: ItemInteractTarget::Block { position, face },
                                     variant: variant_id,
                                 });
@@ -1869,7 +1872,7 @@ impl ClientGame {
                 ItemAction::Consume { .. } => {
                     if input.buttons.is_just_down(MouseButton::Right) {
                         self.current_local_action = Some(EntityAction::Interact);
-                        self.send_message(NetworkMessageC2S::ItemInteraction {
+                        self.send_message(NetworkPlayMessageC2S::ItemInteraction {
                             target: match raycast {
                                 RayCastResult::Empty => ItemInteractTarget::Empty,
                                 RayCastResult::Block(position, face, _) => {
@@ -2348,7 +2351,7 @@ pub mod clipping {
 
 pub struct ClientConnection {
     rx: std::sync::mpsc::Receiver<(NetworkMessageS2C, Instant)>,
-    tx: std::sync::mpsc::Sender<NetworkMessageC2S>,
+    tx: std::sync::mpsc::Sender<NetworkPlayMessageC2S>,
     pub state: Arc<Mutex<ClientConnectionState>>,
 }
 #[derive(Copy, Clone, PartialEq, Eq)]

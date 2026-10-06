@@ -7,10 +7,13 @@ use std::{
 
 use block_byte_common::{
     ACCELERATION_COEFFICIENT, DamageTable, DamageType, EntityAction, EntityPose, EntityStats,
-    MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
+    InternString, MoveMode, NORMAL_SPEED, SERVER_DT, SERVER_TPS,
     coord::{self, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::NetworkMessageS2C,
-    registry::{BlockEntry, BlockMachineFace, BlockPalette, EntityKey, ToolData, air_block},
+    registry::{
+        BlockEntry, BlockMachineFace, BlockPalette, EntityKey, PlantDataHarvestMode, ToolData,
+        air_block,
+    },
     scripts::ScriptValue,
     ui::PropertyMap,
     world::{
@@ -772,7 +775,7 @@ impl Into<ClientBlockDamage> for &BlockDamage {
         }
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct BlockPlants {
     pub plants: SmallVec<[PlantEntry; 1]>,
 }
@@ -892,13 +895,35 @@ impl WorldAccess<'_> {
             self.remove_block_component(damage);
         }
 
-        let mut drops = generate_loot_table(
-            block_data.loot_table.data(),
-            LootGenerationContext::new(rand::random()),
-        );
+        let mut loot_context = LootGenerationContext::default();
 
-        if let Some(plant) = self.get_block_component::<BlockPlants>(position) {
-            //todo: harvest
+        if let Some(energy) = self.get_block_component::<BlockEnergyStorage>(position) {
+            loot_context
+                .variables
+                .insert(InternString::intern("stored_energy"), energy.energy as f32);
+            self.remove_block_component(energy);
+        }
+
+        let mut drops = generate_loot_table(block_data.loot_table.data(), loot_context);
+
+        if let Some(mut plant) = self.get_block_component::<BlockPlants>(position) {
+            for plant in plant.plants.drain(..) {
+                let plant_data = plant.plant.data();
+                drops.append(&mut generate_loot_table(
+                    plant_data.break_loot.data(),
+                    LootGenerationContext::default(),
+                ));
+                match &plant_data.get_stage(plant.growth).harvest {
+                    PlantDataHarvestMode::Reset { loot, .. }
+                    | PlantDataHarvestMode::Destroy { loot } => {
+                        drops.append(&mut generate_loot_table(
+                            loot.data(),
+                            LootGenerationContext::default(),
+                        ));
+                    }
+                    PlantDataHarvestMode::None => {}
+                }
+            }
             self.remove_block_component(plant);
         }
 
@@ -910,9 +935,6 @@ impl WorldAccess<'_> {
                 }
             }
             self.remove_block_component(machine);
-        }
-        if let Some(energy) = self.get_block_component::<BlockEnergyStorage>(position) {
-            self.remove_block_component(energy);
         }
         for face in Face::all() {
             let neighbor_position = position + face.get_block_offset();

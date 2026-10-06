@@ -16,7 +16,7 @@ use block_byte_common::{
     ClientItem, EntityAction, EntityPose, EntityResearchProgress, InternString, InventoryView,
     LookDirection, SERVER_DT, SERVER_TPS, ViewSlot,
     coord::{AABB, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, HorizontalFace, Pos},
-    net::{ItemInteractTarget, NetworkMessageC2S, NetworkMessageS2C, make_connection_config},
+    net::{ItemInteractTarget, NetworkMessageS2C, NetworkPlayMessageC2S, make_connection_config},
     registry::{
         self, BlockColor, BlockEntry, BlockInteractAction, EntityInteractAction, EntityKey,
         ItemAction, KeyGroup, LootTableData, PlantDataHarvestMode, PrefabBlockEntry, PrefabData,
@@ -25,7 +25,7 @@ use block_byte_common::{
     rotation::BlockRotation,
     time_to_ticks,
     ui::{PropertyMap, UIScreenKey},
-    world::BlockTickList,
+    world::{BlockTickList, PlantEntry},
 };
 use parking_lot::Mutex;
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
@@ -303,7 +303,7 @@ fn main() {
         }
         for (_user_id, user) in &server.users {
             while let Some(message) = network_server.receive_message(user.client_id, 0) {
-                let message: NetworkMessageC2S = serde_cbor::from_slice(&message).unwrap();
+                let message: NetworkPlayMessageC2S = serde_cbor::from_slice(&message).unwrap();
                 user.message_queue.lock().push_front(message);
             }
         }
@@ -412,9 +412,7 @@ fn main() {
                                 );
                             }
                         },
-                        &mut |_, _, _| {
-                            //todo
-                        },
+                        &mut |_, _, _| {},
                     );
                 }
                 _ => {
@@ -706,7 +704,7 @@ pub struct User {
     teleport_id: AtomicU32,
     player_sync_items: Mutex<Vec<Option<ClientItem>>>,
     screen: Mutex<Option<UserScreen>>,
-    message_queue: Mutex<VecDeque<NetworkMessageC2S>>,
+    message_queue: Mutex<VecDeque<NetworkPlayMessageC2S>>,
 }
 impl User {
     pub fn tick_controlling_entity(
@@ -780,7 +778,7 @@ impl User {
         }
         while let Some(message) = message_queue.pop_back() {
             match message {
-                NetworkMessageC2S::PlayerPosition {
+                NetworkPlayMessageC2S::PlayerPosition {
                     position,
                     direction,
                     teleport_id,
@@ -810,7 +808,7 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::AttackBlock { position, face: _ } => {
+                NetworkPlayMessageC2S::AttackBlock { position, face: _ } => {
                     let (damage_table, _) = compute_tool_damage_and_knockback(
                         entity.inventory.get_slot_raw(entity.hand_slot),
                         &entity.current_stats,
@@ -825,7 +823,7 @@ impl User {
                         },
                     );
                 }
-                NetworkMessageC2S::ItemInteraction { target, variant } => {
+                NetworkPlayMessageC2S::ItemInteraction { target, variant } => {
                     let mut is_place = false;
                     let mut item_stack = entity.inventory.get_slot_mut_raw(entity.hand_slot);
                     if let Some(item) = &mut item_stack {
@@ -901,7 +899,31 @@ impl User {
                                     .unwrap();
                                 item.count -= 1;
                             }
-                            ItemAction::Plant(_key) => todo!(),
+                            ItemAction::Plant(key) => {
+                                let ItemInteractTarget::Block { position, face: _ } = target else {
+                                    continue;
+                                };
+                                let plant_data = key.data();
+                                let Some(block) = world.get_block(position) else {
+                                    continue;
+                                };
+                                if !plant_data.allowed_soil.contains(block.block) {
+                                    continue;
+                                }
+                                let Ok(mut plants) = world
+                                    .get_or_create_block_component(position, || {
+                                        BlockPlants::default()
+                                    })
+                                else {
+                                    continue;
+                                };
+                                plants.plants.push(PlantEntry {
+                                    growth: 0,
+                                    plant: *key,
+                                    position: rand::random(),
+                                });
+                                item.count -= 1;
+                            }
                             ItemAction::RotateBlock => {
                                 let ItemInteractTarget::Block { position, face: _ } = target else {
                                     continue;
@@ -976,16 +998,16 @@ impl User {
                         },
                     );
                 }
-                NetworkMessageC2S::CloseUI => {
+                NetworkPlayMessageC2S::CloseUI => {
                     if let Some(screen) = self.screen.lock().as_mut() {
                         screen.state = UserScreenState::Close;
                     }
                 }
-                NetworkMessageC2S::HotbarSelect { slot } => {
+                NetworkPlayMessageC2S::HotbarSelect { slot } => {
                     entity.hand_slot = slot;
                     entity.inventory.modified = true;
                 }
-                NetworkMessageC2S::InteractBlock { position } => {
+                NetworkPlayMessageC2S::InteractBlock { position } => {
                     let Some(block) = world.get_block(position) else {
                         continue;
                     };
@@ -1041,7 +1063,7 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::InteractEntity {
+                NetworkPlayMessageC2S::InteractEntity {
                     entity: other_entity_uuid,
                 } => {
                     let Some(mut other_entity) = world.get_entity(other_entity_uuid) else {
@@ -1069,7 +1091,7 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::AttackEntity {
+                NetworkPlayMessageC2S::AttackEntity {
                     entity: other_entity_id,
                 } => {
                     let (damage_table, knockback) = compute_tool_damage_and_knockback(
@@ -1083,7 +1105,7 @@ impl User {
                             (knockback_direction + Pos::Y * 0.5) * knockback;
                     }
                 }
-                NetworkMessageC2S::DropItem { stack } => {
+                NetworkPlayMessageC2S::DropItem { stack } => {
                     let slot = entity.inventory.get_slot_mut_raw(entity.hand_slot);
                     let drop_item = if let Some(item) = slot {
                         if item.count == 1 || stack {
@@ -1108,7 +1130,7 @@ impl User {
                     item_entity.inventory.set_slot_raw(0, Some(drop_item));
                     world.spawn_entity(item_entity).unwrap();
                 }
-                NetworkMessageC2S::MoveItem { from, to, mode } => {
+                NetworkPlayMessageC2S::MoveItem { from, to, mode } => {
                     if from == to {
                         continue;
                     }
@@ -1256,7 +1278,7 @@ impl User {
                         );
                     }
                 }
-                NetworkMessageC2S::Research {
+                NetworkPlayMessageC2S::Research {
                     research,
                     slot,
                     mode,
@@ -1340,7 +1362,7 @@ impl User {
                         );
                     }
                 }
-                NetworkMessageC2S::Craft { recipe, mut count } => {
+                NetworkPlayMessageC2S::Craft { recipe, mut count } => {
                     let screen = self.screen.lock();
                     let Some(screen) = &*screen else {
                         continue;
@@ -1383,14 +1405,14 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::OpenPlayerInventory => {
+                NetworkPlayMessageC2S::OpenPlayerInventory => {
                     self.set_screen(
                         Key::id("player_creative").unwrap(),
                         InventoryProvider::None,
                         Cow::Owned(InventoryView::from_range(0..0)),
                     );
                 }
-                NetworkMessageC2S::HarvestPlant { position, index } => {
+                NetworkPlayMessageC2S::HarvestPlant { position, index } => {
                     let Some(mut plants) = world.get_block_component::<BlockPlants>(position)
                     else {
                         continue;
@@ -1400,12 +1422,14 @@ impl User {
                     };
                     let plant_data = plant.plant.data();
                     let mut drop_loot_table = |loot: &LootTableData| {
-                        for item in
+                        world.drop_items(
                             generate_loot_table(loot, LootGenerationContext::new(rand::random()))
-                        {
-                            entity.inventory.add_item(entity_data.pickup_view(), item);
-                            //todo: drop as item if it doesnt fit
-                        }
+                                .into_iter()
+                                .filter_map(|item| {
+                                    entity.inventory.add_item(entity_data.pickup_view(), item)
+                                }),
+                            position.to_pos() + Pos::all(0.5),
+                        );
                     };
                     match &plant_data.get_stage(plant.growth).harvest {
                         PlantDataHarvestMode::None => {}
@@ -1422,7 +1446,7 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::UIButtonPress {
+                NetworkPlayMessageC2S::UIButtonPress {
                     property,
                     value,
                     modify_mode,
@@ -1460,7 +1484,7 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::TrashItem { slot, mode } => {
+                NetworkPlayMessageC2S::TrashItem { slot, mode } => {
                     let screen = self.screen.lock();
                     let Some(screen) = &*screen else {
                         continue;
@@ -1490,7 +1514,7 @@ impl User {
                         }
                     }
                 }
-                NetworkMessageC2S::GiveItem { item, stack } => {
+                NetworkPlayMessageC2S::GiveItem { item, stack } => {
                     let screen = self.screen.lock();
                     let Some(screen) = &*screen else {
                         continue;

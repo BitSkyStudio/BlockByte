@@ -369,7 +369,7 @@ impl ItemComponentManipulation for ItemCraftStats {
         (self.clone(), self.clone())
     }
     fn description(&self) -> String {
-        "todo".to_string()
+        format!("{:?}", self.0)
     }
 }
 #[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
@@ -441,22 +441,6 @@ impl Inventory {
     pub fn set_slot_raw(&mut self, slot: usize, item: Option<ItemStack>) {
         self.modified = true;
         self.items[slot] = item;
-    }
-    pub fn set_slot(
-        &mut self,
-        view: &InventoryView,
-        slot: usize,
-        item: Option<ItemStack>,
-    ) -> Result<(), ()> {
-        self.modified = true;
-        //todo: how should we handle filters and slot size overrides?
-        match view.slots.get(slot) {
-            Some(slot) => {
-                self.items[slot.slot] = item;
-                Ok(())
-            }
-            None => Err(()),
-        }
     }
     pub fn add_item(&mut self, view: &InventoryView, mut item: ItemStack) -> Option<ItemStack> {
         self.modified = true;
@@ -638,6 +622,11 @@ pub fn generate_loot_table(
 pub struct LootGenerationContext {
     rng: Xoshiro256PlusPlus,
     pub variables: LinearMap<InternString, f32>,
+}
+impl Default for LootGenerationContext {
+    fn default() -> Self {
+        Self::new(rand::random())
+    }
 }
 impl LootGenerationContext {
     pub fn new(seed: u64) -> LootGenerationContext {

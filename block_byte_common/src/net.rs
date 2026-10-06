@@ -27,6 +27,12 @@ pub struct ScreenSlot {
 }
 #[derive(Serialize, Deserialize)]
 pub enum NetworkMessageC2S {
+    Login { id: Uuid },
+    SelectCharacter { id: Uuid },
+    Play(NetworkPlayMessageC2S),
+}
+#[derive(Serialize, Deserialize)]
+pub enum NetworkPlayMessageC2S {
     PlayerPosition {
         position: Pos,
         direction: LookDirection,
