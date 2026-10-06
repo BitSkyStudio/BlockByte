@@ -370,6 +370,25 @@ macro_rules! create_entity_stats {
             }
             }
         }
+        impl Debug for EntityStats{
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let mut had_first = false;
+                paste::paste! {
+                $(
+                    let add = self.[<$id _add>];
+                    let mul = self.[<$id _mul>];
+                    if add != 0. || mul != 1.{
+                        if had_first{
+                            write!(f, "\n");
+                        }
+                        write!(f, "{}: {}, {}%", stringify!($id), add, mul)?;
+                        had_first = true;
+                    }
+                )*
+                }
+                Ok(())
+            }
+        }
         impl EntityStats {
             pub fn apply(&mut self, other: &EntityStats, quality: f32){
                 $(
