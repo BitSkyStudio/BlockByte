@@ -26,7 +26,6 @@ use block_byte_common::{
         EntityData, EntityInteractAction, EntityKey, ItemAction, ItemKey, ItemModel, Key,
         PlantDataHarvestMode, TextureKey, ToolData, TranslationLanguageData, air_block,
     },
-    rotation::BlockRotation,
     ui::PropertyMap,
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };

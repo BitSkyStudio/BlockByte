@@ -6,14 +6,14 @@ use block_byte_common::registry::{
 use block_byte_common::rotation::BlockRotation;
 use block_byte_common::{Color, InternString, TexCoords};
 use bytemuck::{NoUninit, Pod};
-use cgmath::{InnerSpace, Matrix4, Point3, SquareMatrix, Transform, Vector3};
+use cgmath::{InnerSpace, Matrix4, Point3, SquareMatrix, Vector3};
 use image::RgbaImage;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::iter;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use wgpu::util::StagingBelt;
 use wgpu::{
     BackendOptions, BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferSize,

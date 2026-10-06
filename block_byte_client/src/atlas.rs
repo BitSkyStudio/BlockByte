@@ -19,7 +19,6 @@ pub struct TextureAtlas {
     pub texture_mips: Vec<RgbaImage>,
     pub texture_material: RgbaImage,
     pub animation_data: Vec<AnimatedCell>,
-    pub dimension: u32,
     pub atlas_ids: Vec<Option<u16>>,
     pub atlas_size: u32,
 }
@@ -325,7 +324,6 @@ impl TextureAtlas {
             texture_material: material_texture,
             texture_mips: texture_atlas_mips,
             animation_data,
-            dimension: texture_dimensions,
             atlas_size,
             atlas_ids: TextureKey::entries()
                 .map(|texture| {

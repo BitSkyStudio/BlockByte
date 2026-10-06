@@ -379,13 +379,14 @@ macro_rules! create_entity_stats {
                     let mul = self.[<$id _mul>];
                     if add != 0. || mul != 1.{
                         if had_first{
-                            write!(f, "\n");
+                            write!(f, "\n")?;
                         }
                         write!(f, "{}: {}, {}%", stringify!($id), add, mul)?;
                         had_first = true;
                     }
                 )*
                 }
+                let _ = had_first;
                 Ok(())
             }
         }
