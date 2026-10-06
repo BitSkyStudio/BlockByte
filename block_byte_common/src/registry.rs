@@ -9,9 +9,9 @@ use anyhow::anyhow;
 use image::{DynamicImage, GenericImageView};
 use image_overlay::overlay_dyn_img;
 use once_map::OnceMap;
+use palettevec::PaletteVec;
 use palettevec::index_buffer::AlignedIndexBuffer;
 use palettevec::palette::HybridPalette;
-use palettevec::PaletteVec;
 use rand::RngCore;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
@@ -19,13 +19,14 @@ use serde::de::Visitor;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::coord::{Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos, AABB};
+use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos};
 use crate::model::Model;
 use crate::net::PropertyModifyMode;
 use crate::rotation::BlockRotation;
 use crate::scripts::{
-    expect_argument_count, CompiledScript, ExternalScriptByteCode, FallibleInstructionResult,
-    RegisterId, RegisterOrImmediate, ScriptByteCode, ScriptParseContext, ScriptParseError,
+    CompiledScript, ExternalScriptByteCode, FallibleInstructionResult, RegisterId,
+    RegisterOrImmediate, ScriptByteCode, ScriptParseContext, ScriptParseError,
+    expect_argument_count,
 };
 use crate::ui::{UIScreen, UIScreenKey, UIStyleList};
 use crate::{
@@ -647,7 +648,11 @@ pub struct BlockData {
     pub hanging: Option<Face>,
     #[serde(default = "default_supporting_map")]
     pub supporting: FaceMap<bool>,
+    #[serde(default)]
+    pub energy_storage: Option<EnergyStorage>,
 }
+#[derive(Deserialize)]
+pub struct EnergyStorage {}
 #[derive(Deserialize)]
 pub struct BlockRenderConnection {
     pub model: ModelInstance,
@@ -925,6 +930,17 @@ pub enum MachineInstrution {
     WaitForItems {
         view: usize,
     },
+    TransferEnergy {
+        face: Face,
+        amount: RegisterId,
+        pull: bool,
+    },
+    ConvertBlock {
+        from: KeyGroup<BlockData>,
+        to: BlockKey,
+        face: Face,
+        result: FallibleInstructionResult,
+    },
 }
 impl ExternalScriptByteCode for MachineInstrution {
     fn parse<'a>(
@@ -1039,6 +1055,27 @@ impl ExternalScriptByteCode for MachineInstrution {
                 expect_argument_count(parse_context, arguments, 1)?;
                 MachineInstrution::PlayAnimation {
                     animation: InternString::intern(&arguments[0]),
+                }
+            }
+            "transfer_energy_pull" | "transfer_energy_push" => {
+                expect_argument_count(parse_context, arguments, 2)?;
+                MachineInstrution::TransferEnergy {
+                    face: parse_face(arguments[0])?,
+                    amount: parse_context.parse_register(arguments[1]),
+                    pull: match opcode {
+                        "transfer_energy_pull" => true,
+                        "transfer_energy_push" => false,
+                        _ => unreachable!(),
+                    },
+                }
+            }
+            "convert_block" => {
+                expect_argument_count(parse_context, arguments, 4)?;
+                MachineInstrution::ConvertBlock {
+                    from: KeyGroup::parse(arguments[0]).unwrap(),
+                    to: Key::id(&arguments[1]).unwrap(),
+                    face: parse_face(&arguments[2])?,
+                    result: parse_context.parse_result(arguments[3]).unwrap(),
                 }
             }
             _ => {

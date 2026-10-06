@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     inventory::{Inventory, LootGenerationContext, generate_loot_table},
-    world::{WorldAccess, WorldEvent},
+    world::{BlockEnergyStorage, WorldAccess, WorldEvent},
 };
 
 pub enum MachineRunResult {
@@ -305,6 +305,41 @@ impl BlockMachine {
                         .unwrap() as u16;
                     self.animation_start_time = world.ticks_passed;
                     CallbackResult::Continue
+                }
+                MachineInstrution::TransferEnergy { face, amount, pull } => {
+                    let amount = &mut state.registers[*amount];
+                    let Some(mut energy_storage) = world.get_block_component::<BlockEnergyStorage>(
+                        block_position + face.get_block_offset(),
+                    ) else {
+                        *amount = 0;
+                        return CallbackResult::Continue;
+                    };
+                    if *pull {
+                        *amount = (*amount).min(energy_storage.energy);
+                        energy_storage.energy -= *amount;
+                    } else {
+                        let new_energy = energy_storage.energy.saturating_add(*amount);
+                        *amount = new_energy - energy_storage.energy;
+                        energy_storage.energy = new_energy;
+                    }
+                    CallbackResult::Continue
+                }
+                MachineInstrution::ConvertBlock {
+                    from,
+                    to,
+                    face,
+                    result,
+                } => {
+                    let target_position = block_position + face.get_block_offset();
+                    let mut block = world.get_block(target_position).unwrap();
+                    if from.contains(block.block) {
+                        block.rotation = to.data().rotation.get_nearest_valid(block.rotation);
+                        block.block = *to;
+                        world.replace_block(target_position, block).unwrap();
+                        result.succeed()
+                    } else {
+                        result.fail()
+                    }
                 }
             },
             1000,

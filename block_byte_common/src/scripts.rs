@@ -368,10 +368,10 @@ impl ScriptState {
                     let a = self.registers[*a];
                     let b = self.resolve_value(b);
                     let output = match operation {
-                        Operation::Add => a.wrapping_add(b),
-                        Operation::Sub => a.wrapping_sub(b),
-                        Operation::Mul => a.wrapping_mul(b),
-                        Operation::Div => a.wrapping_div(b),
+                        Operation::Add => a.saturating_add(b),
+                        Operation::Sub => a.saturating_sub(b),
+                        Operation::Mul => a.saturating_mul(b),
+                        Operation::Div => a.saturating_div(b),
                         Operation::Mod => a.mod_floor(&b),
                         Operation::Or => a | b,
                         Operation::Xor => a ^ b,

@@ -757,9 +757,9 @@ macro_rules! create_chunk_block_components_server_only {
     };
 }
 
-create_chunk_block_components!(BlockDamage, damage, false; BlockPlants, plant, false; BlockMachine, machine, true);
+create_chunk_block_components!(BlockDamage, damage, false; BlockPlants, plant, false; BlockMachine, machine, true; BlockEnergyStorage, energy, true);
 create_chunk_block_components_client_mapping!(BlockDamage, ClientBlockDamage, damage; BlockPlants, ClientBlockPlants, plant; BlockMachine, ClientBlockMachine, machine);
-create_chunk_block_components_server_only!();
+create_chunk_block_components_server_only!(BlockEnergyStorage);
 
 #[derive(Serialize, Deserialize)]
 pub struct BlockDamage {
@@ -782,6 +782,10 @@ impl Into<ClientBlockPlants> for &BlockPlants {
             plants: self.plants.clone(),
         }
     }
+}
+#[derive(Serialize, Deserialize)]
+pub struct BlockEnergyStorage {
+    pub energy: ScriptValue,
 }
 pub struct WorldAccess<'a> {
     pub ticks_passed: u64,
@@ -907,6 +911,9 @@ impl WorldAccess<'_> {
             }
             self.remove_block_component(machine);
         }
+        if let Some(energy) = self.get_block_component::<BlockEnergyStorage>(position) {
+            self.remove_block_component(energy);
+        }
         for face in Face::all() {
             let neighbor_position = position + face.get_block_offset();
             let (chunk, offset) = neighbor_position.to_chunk_pos_offset();
@@ -946,6 +953,10 @@ impl WorldAccess<'_> {
                 BlockMachine::new(machine_data, self.ticks_passed)
             })
             .unwrap();
+        }
+        if let Some(_) = &block_data.energy_storage {
+            self.get_or_create_block_component(position, || BlockEnergyStorage { energy: 0 })
+                .unwrap();
         }
         Ok(())
     }
