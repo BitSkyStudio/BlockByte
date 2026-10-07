@@ -893,6 +893,7 @@ impl ClientGame {
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }
+        const HITBOX_PADDING: f32 = 0.001;
         self.camera.controller.tick(
             &mut self.camera.position,
             dt,
@@ -911,11 +912,14 @@ impl ClientGame {
             },
             move_vector,
             move_mode,
-            player_entity_data.hitbox(if self.camera.crouching {
-                EntityPose::Crouch
-            } else {
-                EntityPose::Stand
-            }),
+            player_entity_data
+                .hitbox(if self.camera.crouching {
+                    EntityPose::Crouch
+                } else {
+                    EntityPose::Stand
+                })
+                .inflate(Pos::all(HITBOX_PADDING))
+                .inflate(Pos::all(-HITBOX_PADDING)),
             ACCELERATION_COEFFICIENT * self.player_stats.speed() / 100. * NORMAL_SPEED,
             0.5,
             input.keys.is_down(KeyCode::ShiftLeft),
