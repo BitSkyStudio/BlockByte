@@ -551,6 +551,65 @@ pub fn tick_chunk(world: &WorldAccess) {
             world.remove_block_component(damage);
         }
     }
+    if (world.center_chunk.x as u32 * 525
+        + world.center_chunk.y as u32 * 7547
+        + world.center_chunk.z as u32 * 1235
+        + world.ticks_passed as u32)
+        % 27
+        == 0
+    {
+        struct FlowChange {
+            target: BlockPos,
+            flow: i16,
+        }
+        let mut flows = Vec::new();
+        let mut lower_neighbors = Vec::new();
+        for energy_storage in world.iter_block_components::<BlockEnergyStorage>(&[], true) {
+            lower_neighbors.clear();
+            for neighbor in Face::all() {
+                let Some(neighbor) = world.get_block_component::<BlockEnergyStorage>(
+                    energy_storage.lock_key + neighbor.get_block_offset(),
+                ) else {
+                    continue;
+                };
+                let potential = energy_storage.energy - neighbor.energy - 1;
+                if potential > 0 {
+                    lower_neighbors.push((neighbor, potential));
+                }
+            }
+            let Some(heighest_lower_neigh_level) =
+                lower_neighbors.iter().map(|(neigh, _)| neigh.energy).max()
+            else {
+                continue;
+            };
+
+            let potential_sum: u16 = lower_neighbors
+                .iter()
+                .map(|(_, potential)| *potential)
+                .sum();
+
+            let max_flow = energy_storage.energy - heighest_lower_neigh_level;
+            for (neighbor, potential) in &lower_neighbors {
+                let amount = max_flow * *potential / potential_sum;
+                if amount > 0 {
+                    flows.push(FlowChange {
+                        target: energy_storage.lock_key,
+                        flow: -(amount as i16),
+                    });
+                    flows.push(FlowChange {
+                        target: neighbor.lock_key,
+                        flow: amount as i16,
+                    });
+                }
+            }
+        }
+        for flow in flows {
+            let mut block = world
+                .get_block_component::<BlockEnergyStorage>(flow.target)
+                .unwrap();
+            block.energy = block.energy.saturating_add_signed(flow.flow);
+        }
+    }
     if (world.center_chunk.x as u32 * 3278
         + world.center_chunk.y as u32 * 9841
         + world.center_chunk.z as u32 * 87
