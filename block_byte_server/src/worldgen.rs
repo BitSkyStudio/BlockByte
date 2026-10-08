@@ -189,6 +189,28 @@ impl RegionGeneration {
         }
         (relevant_biome_points, unique_biomes)
     }
+    fn get_road_info(&self, x: usize, z: usize) -> (u8, u8) {
+        let get_road = |x: usize, z: usize, x_off: usize, z_off: usize| -> u8 {
+            let x_final = x + x_off;
+            let z_final = z + z_off;
+            if x_final >= RegionGeneration::ROAD_SEGMENTS_PER_REGION {
+                return 0;
+            }
+            if z_final >= RegionGeneration::ROAD_SEGMENTS_PER_REGION {
+                return 0;
+            }
+            self.roads[x_final as usize][z_final as usize]
+        };
+        let a = get_road(x, z, 0, 0);
+        let b = get_road(x, z, 1, 0);
+        let c = get_road(x, z, 0, 1);
+        let d = get_road(x, z, 1, 1);
+        fn toi(x: u8) -> u8 {
+            if x != 0 { 1 } else { 0 }
+        }
+        let tile_id = toi(a) | toi(b) << 1 | toi(c) << 2 | toi(d) << 3;
+        (tile_id, a.max(b).max(c).max(d))
+    }
 }
 #[derive(Copy, Clone)]
 struct RegionBiomePoint {
@@ -454,35 +476,25 @@ impl WorldGenerator {
                     |pos| {
                         let pos = *pos;
                         let road_noise_cache = road_noise_cache.clone();
-                        HorizontalFace::all().into_iter().filter_map(move |face|{
-                            match face{
-                                HorizontalFace::Front => {
-                                    if pos.z == 0{
-                                        return None;
-                                    }
-                                }
-                                HorizontalFace::Back => {
-                                    if pos.z == RegionGeneration::ROAD_SEGMENTS_PER_REGION-1{
-                                        return None;
-                                    }
-                                }
-                                HorizontalFace::Left => {
-                                    if pos.x == 0{
-                                        return None;
-                                    }
-                                }
-                                HorizontalFace::Right => {
-                                    if pos.x == RegionGeneration::ROAD_SEGMENTS_PER_REGION-1{
-                                        return None;
-                                    }
-                                }
+                        [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)].into_iter().filter_map(move |(ox, oz)|{
+                            if ox < 0 && pos.x == 0{
+                                return None;
                             }
-                            let offset = face.get_block_offset();
+                            if oz < 0 && pos.z == 0{
+                                return None;
+                            }
+                            if ox > 0 && pos.x == RegionGeneration::ROAD_SEGMENTS_PER_REGION-1{
+                                return None;
+                            }
+                            if oz > 0 && pos.z == RegionGeneration::ROAD_SEGMENTS_PER_REGION-1{
+                                return None;
+                            }
+
                             let neighbor = RoadCoord{
-                                x: (pos.x as i32 + offset.x) as usize,
-                                z: (pos.z as i32 + offset.z) as usize,
+                                x: (pos.x as i32 + ox) as usize,
+                                z: (pos.z as i32 + oz) as usize,
                             };
-                            let mut cost = if region.roads[neighbor.x][neighbor.z] > 0 {1.} else {5.};
+                            let mut cost = if region.roads[neighbor.x][neighbor.z] > 0 {1.} else {5.} * ((ox*ox + oz*oz) as f32).sqrt();
                             cost *= road_noise_cache[neighbor.x][neighbor.z];
 
                             Some((neighbor, OrderedFloat(cost)))
@@ -779,6 +791,12 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
             .z
             .div_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16),
     );
+    let region_x = (position
+        .x
+        .rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16)) as usize;
+    let region_z = (position
+        .z
+        .rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16)) as usize;
     let chunk_aabb = (AABB {
         min: BlockPos::all(0),
         max: BlockPos::all(CHUNK_SIZE as i32),
@@ -802,16 +820,26 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                 z: block_offset.z + placed_decoration.z as i32,
             };
             //todo: this wraps on region borders
-            if region.roads[block_position
-                .x
-                .rem_euclid(RegionGeneration::REGION_BLOCK_SIZE as i32)
-                .div_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
-                as usize][block_position
+            let road = region.get_road_info(
+                block_position
+                    .x
+                    .rem_euclid(RegionGeneration::REGION_BLOCK_SIZE as i32)
+                    .div_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
+                    as usize,
+                block_position
+                    .z
+                    .rem_euclid(RegionGeneration::REGION_BLOCK_SIZE as i32)
+                    .div_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
+                    as usize,
+            );
+            if ROAD_LOOKUP_DATA[road.0 as usize][block_position
                 .z
-                .rem_euclid(RegionGeneration::REGION_BLOCK_SIZE as i32)
-                .div_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
+                .rem_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
+                as usize][block_position
+                .x
+                .rem_euclid(RegionGeneration::ROAD_SEGMENT_SIZE as i32)
                 as usize]
-                > 0
+                < 8
             {
                 continue;
             }
@@ -833,14 +861,6 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         }
     }
     {
-        let region_x = (position
-            .x
-            .rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16))
-            as usize;
-        let region_z = (position
-            .z
-            .rem_euclid(RegionGeneration::REGION_CHUNK_SIZE as i16))
-            as usize;
         let mut next_placement = region.structure_grid[region_x][region_z];
         while let Some(placement) = next_placement {
             let placement = &region.structure_grid_prefabs[(placement.get() - 1) as usize];
@@ -856,22 +876,11 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
         }
         for x in 0..RegionGeneration::ROAD_SEGMENTS_PER_CHUNK {
             for z in 0..RegionGeneration::ROAD_SEGMENTS_PER_CHUNK {
-                let get_road = |x: usize, z: usize, x_off: isize, z_off: isize| -> u8 {
-                    let x_final =
-                        (region_x * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + x) as isize + x_off;
-                    let z_final =
-                        (region_z * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + z) as isize + z_off;
-                    if x_final < 0 || x_final >= RegionGeneration::ROAD_SEGMENTS_PER_REGION as isize
-                    {
-                        return 0;
-                    }
-                    if z_final < 0 || z_final >= RegionGeneration::ROAD_SEGMENTS_PER_REGION as isize
-                    {
-                        return 0;
-                    }
-                    region.roads[x_final as usize][z_final as usize]
-                };
-                if get_road(x, z, 0, 0) > 0 {
+                let (tile_id, _) = region.get_road_info(
+                    region_x * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + x,
+                    region_z * RegionGeneration::ROAD_SEGMENTS_PER_CHUNK + z,
+                );
+                if tile_id != 0 {
                     //todo: better algorithm
                     let road_info = &column_data.biomes[x * RegionGeneration::ROAD_SEGMENT_SIZE]
                         [z * RegionGeneration::ROAD_SEGMENT_SIZE]
@@ -883,28 +892,8 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                             let offset_z = z * RegionGeneration::ROAD_SEGMENT_SIZE + place_z;
                             let height = column_data.height[offset_x][offset_z] as i32;
                             if height.div_euclid(CHUNK_SIZE as i32) == position.y as i32 {
-                                let [center_distance_x, center_distance_z] =
-                                    [(place_x, 1, 0), (place_z, 0, 1)].map(
-                                        |(place, x_off, z_off)| {
-                                            if place <= 3 {
-                                                if get_road(x, z, -x_off, -z_off) > 0 {
-                                                    0
-                                                } else {
-                                                    3 - place
-                                                }
-                                            } else {
-                                                if get_road(x, z, x_off, z_off) > 0 {
-                                                    0
-                                                } else {
-                                                    place - 4
-                                                }
-                                            }
-                                        },
-                                    );
-                                /*let center_distance =
-                                (center_distance_x.pow(2) + center_distance_z.pow(2)).isqrt()
-                                    as i32;*/
-                                let center_distance = center_distance_x + center_distance_z;
+                                let center_distance =
+                                    ROAD_LOOKUP_DATA[tile_id as usize][place_z][place_x];
                                 let Some(entry) = road_info.0.get_random(
                                     BiasWeightProvider(center_distance as f32),
                                     &mut rng,
@@ -924,9 +913,15 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
                             }
                         }
                     }
-                } else {
+                }
+                {
                     for place_x in 0..8 {
                         for place_z in 0..8 {
+                            let center_distance =
+                                ROAD_LOOKUP_DATA[tile_id as usize][place_z][place_x];
+                            if center_distance < 8 {
+                                continue;
+                            }
                             let offset_x = x * RegionGeneration::ROAD_SEGMENT_SIZE + place_x;
                             let offset_z = z * RegionGeneration::ROAD_SEGMENT_SIZE + place_z;
                             let height = column_data.height[offset_x][offset_z] as i32;
@@ -972,3 +967,182 @@ pub fn generate_chunk(position: ChunkPos, generator: &WorldGenerator) -> Chunk {
     }
     chunk
 }
+//road lookup table generated by ai
+const ROAD_LOOKUP_DATA: [[[u8; 8]; 8]; 16] = [
+    // 0: 0000 - Empty
+    [
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+    ],
+    // 1: 0001 - Top-Left Dead End
+    [
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [1, 1, 3, 5, 7, 8, 8, 8],
+        [2, 3, 4, 6, 8, 8, 8, 8],
+        [4, 5, 6, 7, 8, 8, 8, 8],
+        [6, 7, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+    ],
+    // 2: 0010 - Top-Right Dead End
+    [
+        [8, 8, 8, 8, 6, 4, 1, 0],
+        [8, 8, 8, 8, 7, 5, 2, 1],
+        [8, 8, 8, 8, 8, 6, 4, 2],
+        [8, 8, 8, 8, 8, 7, 5, 4],
+        [8, 8, 8, 8, 8, 8, 7, 6],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+    ],
+    // 3: 0011 - Horizontal Road (Top edge)
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1, 1, 1, 1],
+        [2, 2, 2, 2, 2, 2, 2, 2],
+        [4, 4, 4, 4, 4, 4, 4, 4],
+        [6, 6, 6, 6, 6, 6, 6, 6],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+    ],
+    // 4: 0100 - Bottom-Left Dead End
+    [
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [6, 7, 8, 8, 8, 8, 8, 8],
+        [4, 5, 6, 7, 8, 8, 8, 8],
+        [2, 3, 4, 6, 8, 8, 8, 8],
+        [1, 1, 3, 5, 7, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+    ],
+    // 5: 0101 - Vertical Road (Left edge)
+    [
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+        [0, 1, 2, 4, 6, 8, 8, 8],
+    ],
+    // 6: 0110 - Widened Corner Curve (Top-Right to Bottom-Left)
+    [
+        [6, 5, 4, 3, 2, 1, 0, 0],
+        [5, 4, 3, 2, 1, 0, 0, 1],
+        [4, 3, 2, 1, 0, 0, 1, 2],
+        [3, 2, 1, 0, 0, 1, 2, 3],
+        [2, 1, 0, 0, 1, 2, 3, 4],
+        [1, 0, 0, 1, 2, 3, 4, 5],
+        [0, 0, 1, 2, 3, 4, 5, 6],
+        [0, 1, 2, 3, 4, 5, 6, 8],
+    ],
+    // 7: 0111 - Outer Corner Sweep (Top & Left connected)
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 1],
+        [0, 0, 0, 0, 0, 1, 2, 3],
+        [0, 0, 0, 0, 1, 2, 4, 5],
+        [0, 0, 0, 1, 2, 4, 6, 7],
+        [0, 0, 1, 2, 4, 6, 7, 8],
+        [0, 0, 2, 4, 6, 7, 8, 8],
+        [0, 1, 3, 5, 7, 8, 8, 8],
+    ],
+    // 8: 1000 - Bottom-Right Dead End
+    [
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 7, 6, 5],
+        [8, 8, 8, 8, 7, 6, 5, 4],
+        [8, 8, 8, 8, 6, 4, 3, 2],
+        [8, 8, 8, 8, 5, 3, 1, 1],
+        [8, 8, 8, 8, 4, 2, 1, 0],
+    ],
+    // 9: 1001 - Widened Corner Curve (Top-Left to Bottom-Right)
+    [
+        [0, 0, 1, 2, 3, 4, 5, 6],
+        [0, 0, 0, 1, 2, 3, 4, 5],
+        [1, 0, 0, 0, 1, 2, 3, 4],
+        [2, 1, 0, 0, 0, 1, 2, 3],
+        [3, 2, 1, 0, 0, 0, 1, 2],
+        [4, 3, 2, 1, 0, 0, 0, 1],
+        [5, 4, 3, 2, 1, 0, 0, 0],
+        [6, 5, 4, 3, 2, 1, 0, 0],
+    ],
+    // 10: 1010 - Vertical Road (Right edge)
+    [
+        [8, 8, 8, 6, 4, 2, 1, 0],
+        [8, 8, 8, 6, 4, 2, 1, 0],
+        [8, 8, 8, 6, 4, 2, 1, 0],
+        [8, 8, 8, 6, 4, 2, 1, 0],
+        [8, 8, 8, 6, 4, 2, 1, 0],
+        [8, 8, 8, 6, 4, 2, 1, 0],
+        [8, 8, 8, 6, 4, 2, 1, 0],
+        [8, 8, 8, 6, 4, 2, 1, 0],
+    ],
+    // 11: 1011 - Outer Corner Sweep (Top & Right connected)
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 0, 0, 0, 0, 0, 0, 0],
+        [3, 2, 1, 0, 0, 0, 0, 0],
+        [5, 4, 2, 1, 0, 0, 0, 0],
+        [7, 6, 4, 2, 1, 0, 0, 0],
+        [8, 7, 6, 4, 2, 1, 0, 0],
+        [8, 8, 7, 6, 4, 2, 0, 0],
+        [8, 8, 8, 7, 5, 3, 1, 0],
+    ],
+    // 12: 1100 - Horizontal Road (Bottom edge)
+    [
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [8, 8, 8, 8, 8, 8, 8, 8],
+        [6, 6, 6, 6, 6, 6, 6, 6],
+        [4, 4, 4, 4, 4, 4, 4, 4],
+        [2, 2, 2, 2, 2, 2, 2, 2],
+        [1, 1, 1, 1, 1, 1, 1, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
+    // 13: 1101 - Outer Corner Sweep (Bottom & Left connected)
+    [
+        [0, 1, 3, 5, 7, 8, 8, 8],
+        [0, 0, 2, 4, 6, 7, 8, 8],
+        [0, 0, 1, 2, 4, 6, 7, 8],
+        [0, 0, 0, 1, 2, 4, 6, 7],
+        [0, 0, 0, 0, 1, 2, 4, 5],
+        [0, 0, 0, 0, 0, 1, 2, 3],
+        [0, 0, 0, 0, 0, 0, 0, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
+    // 14: 1110 - Outer Corner Sweep (Bottom & Right connected)
+    [
+        [8, 8, 8, 7, 5, 3, 1, 0],
+        [8, 8, 7, 6, 4, 2, 0, 0],
+        [8, 7, 6, 4, 2, 1, 0, 0],
+        [7, 6, 4, 2, 1, 0, 0, 0],
+        [5, 4, 2, 1, 0, 0, 0, 0],
+        [3, 2, 1, 0, 0, 0, 0, 0],
+        [1, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
+    // 15: 1111 - Full Tile Coverage
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+    ],
+];
