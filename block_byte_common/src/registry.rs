@@ -316,7 +316,25 @@ where
 static LOAD_REGISTRIES: OnceLock<LoadRegistryStorage> = OnceLock::new();
 pub static REGISTRIES: OnceLock<RegistryStorage> = OnceLock::new();
 
-create_registries!(BlockData, block; ItemData, item; TextureData, texture; EntityData, entity; PlantData, plant; BiomeData, biome; LootTableData, loot_table; UIScreen, ui; UIStyleList, ui_style; ModelData, model; TranslationLanguageData, language; RecipeData, recipe; PrefabData, prefab; ResearchData, research; WorldGenStructureData, structure; EffectData, effect);
+create_registries!(
+    BlockData, block;
+    ItemData, item;
+    TextureData, texture;
+    EntityData, entity;
+    PlantData, plant;
+    BiomeData, biome;
+    LootTableData, loot_table;
+    UIScreen, ui;
+    UIStyleList, ui_style;
+    ModelData, model;
+    TranslationLanguageData, language;
+    RecipeData, recipe;
+    PrefabData, prefab;
+    ResearchData, research;
+    WorldGenStructureData, structure;
+    EffectData, effect;
+    FluidData, fluid
+);
 
 impl<T: 'static> Key<T>
 where
@@ -2036,3 +2054,10 @@ pub struct EffectData {
 }
 impl RegistryRonConfigLoadable for EffectData {}
 pub type EffectKey = Key<EffectData>;
+
+#[derive(Deserialize)]
+pub struct FluidData {
+    pub texture: TextureKey,
+}
+impl RegistryRonConfigLoadable for FluidData {}
+pub type FluidKey = Key<FluidData>;

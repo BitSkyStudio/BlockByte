@@ -11,14 +11,14 @@ use block_byte_common::{
     coord::{self, BlockPos, CHUNK_SIZE, ChunkOffset, ChunkPos, Face, Pos},
     net::NetworkMessageS2C,
     registry::{
-        BlockEntry, BlockMachineFace, BlockPalette, EntityKey, PlantDataHarvestMode, ToolData,
-        air_block,
+        BlockEntry, BlockMachineFace, BlockPalette, EntityKey, FluidKey, PlantDataHarvestMode,
+        ToolData, air_block,
     },
     scripts::ScriptValue,
     ui::PropertyMap,
     world::{
-        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockPlants,
-        ClientChunkBlockComponents, ComponentTypeAccess, PlantEntry,
+        BlockComponentStorage, ClientBlockComponentUpdate, ClientBlockDamage, ClientBlockFluid,
+        ClientBlockPlants, ClientChunkBlockComponents, ComponentTypeAccess, PlantEntry,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -565,7 +565,6 @@ pub fn tick_chunk(world: &WorldAccess) {
         let mut flows = Vec::new();
         let mut lower_neighbors = Vec::new();
         for energy_storage in world.iter_block_components::<BlockEnergyStorage>(&[], true) {
-            lower_neighbors.clear();
             for neighbor in Face::all() {
                 let Some(neighbor) = world.get_block_component::<BlockEnergyStorage>(
                     energy_storage.lock_key + neighbor.get_block_offset(),
@@ -589,8 +588,8 @@ pub fn tick_chunk(world: &WorldAccess) {
                 .sum();
 
             let max_flow = energy_storage.energy - heighest_lower_neigh_level;
-            for (neighbor, potential) in &lower_neighbors {
-                let amount = max_flow * *potential / potential_sum;
+            for (neighbor, potential) in lower_neighbors.drain(..) {
+                let amount = max_flow * potential / potential_sum;
                 if amount > 0 {
                     flows.push(FlowChange {
                         target: energy_storage.lock_key,
@@ -819,8 +818,19 @@ macro_rules! create_chunk_block_components_server_only {
     };
 }
 
-create_chunk_block_components!(BlockDamage, damage, false; BlockPlants, plant, false; BlockMachine, machine, true; BlockEnergyStorage, energy, true);
-create_chunk_block_components_client_mapping!(BlockDamage, ClientBlockDamage, damage; BlockPlants, ClientBlockPlants, plant; BlockMachine, ClientBlockMachine, machine);
+create_chunk_block_components!(
+    BlockDamage, damage, false;
+    BlockPlants, plant, false;
+    BlockMachine, machine, true;
+    BlockEnergyStorage, energy, false;
+    BlockFluid, fluid, false
+);
+create_chunk_block_components_client_mapping!(
+    BlockDamage, ClientBlockDamage, damage;
+    BlockPlants, ClientBlockPlants, plant;
+    BlockMachine, ClientBlockMachine, machine;
+    BlockFluid, ClientBlockFluid, fluid
+);
 create_chunk_block_components_server_only!(BlockEnergyStorage);
 
 #[derive(Serialize, Deserialize)]
@@ -848,6 +858,19 @@ impl Into<ClientBlockPlants> for &BlockPlants {
 #[derive(Serialize, Deserialize)]
 pub struct BlockEnergyStorage {
     pub energy: ScriptValue,
+}
+#[derive(Serialize, Deserialize)]
+pub struct BlockFluid {
+    pub fluid: FluidKey,
+    pub level: u8,
+}
+impl Into<ClientBlockFluid> for &BlockFluid {
+    fn into(self) -> ClientBlockFluid {
+        ClientBlockFluid {
+            fluid: self.fluid,
+            level: self.level,
+        }
+    }
 }
 pub struct WorldAccess<'a> {
     pub ticks_passed: u64,

@@ -5,7 +5,10 @@ use priority_queue::PriorityQueue;
 use serde::{Deserialize, Serialize, ser::SerializeTuple};
 use smallvec::SmallVec;
 
-use crate::{coord::ChunkOffset, registry::PlantKey};
+use crate::{
+    coord::ChunkOffset,
+    registry::{FluidKey, PlantKey},
+};
 
 pub struct BlockComponentStorage<T> {
     pub components: Vec<(ChunkOffset, T)>,
@@ -239,7 +242,12 @@ macro_rules! create_client_chunk_block_components{
     }
 }
 
-create_client_chunk_block_components!(ClientBlockDamage, damage; ClientBlockPlants, plant; ClientBlockMachine, machine);
+create_client_chunk_block_components!(
+    ClientBlockDamage, damage;
+    ClientBlockPlants, plant;
+    ClientBlockMachine, machine;
+    ClientBlockFluid, fluid
+);
 
 pub trait ComponentTypeAccess<T> {
     type Item;
@@ -250,6 +258,11 @@ pub trait ComponentTypeAccess<T> {
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockDamage {
     pub damage: f32,
+}
+#[derive(Serialize, Deserialize)]
+pub struct ClientBlockFluid {
+    pub fluid: FluidKey,
+    pub level: u8,
 }
 #[derive(Serialize, Deserialize)]
 pub struct ClientBlockPlants {
