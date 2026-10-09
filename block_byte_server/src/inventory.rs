@@ -653,6 +653,9 @@ impl LootGenerationContext {
             }
             LootModifierNumber::Neg(value) => -self.generate_number(value),
             LootModifierNumber::Inv(value) => 1. / self.generate_number(value),
+            LootModifierNumber::MapSpline(value, spline) => {
+                spline.sample(self.generate_number(value)).unwrap()
+            }
         }
     }
     pub fn generate_number_const(&self, number: &LootModifierNumber) -> f32 {
@@ -675,6 +678,9 @@ impl LootGenerationContext {
             }
             LootModifierNumber::Neg(value) => -self.generate_number_const(value),
             LootModifierNumber::Inv(value) => 1. / self.generate_number_const(value),
+            LootModifierNumber::MapSpline(value, spline) => {
+                spline.sample(self.generate_number_const(value)).unwrap()
+            }
         }
     }
 }

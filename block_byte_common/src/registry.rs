@@ -17,6 +17,7 @@ use rand_xoshiro::Xoshiro256PlusPlus;
 use ron::extensions::Extensions;
 use serde::de::Visitor;
 use serde::{Deserialize, Serialize};
+use splines::Spline;
 use walkdir::WalkDir;
 
 use crate::coord::{AABB, Axis, BlockPos, Face, FaceMap, HorizontalFace, Pos};
@@ -1724,6 +1725,7 @@ pub enum LootModifierNumber {
     Var(InternString),
     VarOr(InternString, f32),
     Random(f32, f32),
+    MapSpline(Box<LootModifierNumber>, Spline<f32, f32>),
 }
 fn loot_modifier_num_zero() -> LootModifierNumber {
     LootModifierNumber::Num(1.)

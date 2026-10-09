@@ -522,19 +522,17 @@ impl CharacterController {
                         *self.move_velocity.axis_mut(axis) = 0.;
                         *self.knockback_velocity.axis_mut(axis) = 0.;
                     } else {
+                        if axis == Axis::Y
+                            || !self.on_ground
+                            || !holding_ledge
+                            || Self::collides_at(
+                                *position + (Pos::Y * -0.05).with(axis, total_move.axis(axis)),
+                                &block_query,
+                                hitbox,
+                            )
+                            .is_some()
                         {
-                            if axis == Axis::Y
-                                || !self.on_ground
-                                || !holding_ledge
-                                || Self::collides_at(
-                                    *position + (Pos::Y * -0.05).with(axis, total_move.axis(axis)),
-                                    &block_query,
-                                    hitbox,
-                                )
-                                .is_some()
-                            {
-                                *position.axis_mut(axis) += total_move.axis(axis);
-                            }
+                            *position.axis_mut(axis) += total_move.axis(axis);
                         }
                     }
                 }

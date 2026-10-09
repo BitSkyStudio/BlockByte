@@ -272,6 +272,7 @@ dependencies = [
  "serde_default_utils",
  "serde_json",
  "smallvec",
+ "splines",
  "taffy",
  "uuid",
  "walkdir",
@@ -2518,6 +2519,9 @@ name = "splines"
 version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b882be9bf6b37258bfba80ed5b5eeccccd6700bfbaca202bbd53e4c13bf3daa7"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "stable_deref_trait"
