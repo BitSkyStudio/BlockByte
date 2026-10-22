@@ -458,16 +458,38 @@ impl WorldGenerator {
             let mut road_noise_cache = [[0.;RegionGeneration::ROAD_SEGMENTS_PER_REGION];RegionGeneration::ROAD_SEGMENTS_PER_REGION];
             for x in 0..RegionGeneration::ROAD_SEGMENTS_PER_REGION{
                 for z in 0..RegionGeneration::ROAD_SEGMENTS_PER_REGION{
-                    road_noise_cache[x][z] = (road_noise.get([
+                    let noise_bias = (road_noise.get([
                         x as f64 * RegionGeneration::ROAD_SEGMENT_SIZE as f64 / 50.,// + region_z as f64 * RegionGeneration::REGION_BLOCK_SIZE as f64
                         z as f64 * RegionGeneration::ROAD_SEGMENT_SIZE as f64 / 50.,
-                    ]) as f32 +1.)*8.;
+                    ]) as f32 +1.)*4.;
+                    let height_bias = (self.get_height_at(region_x as i32 * RegionGeneration::REGION_BLOCK_SIZE as i32 + x as i32 * RegionGeneration::ROAD_SEGMENT_SIZE as i32, region_z as i32 * RegionGeneration::REGION_BLOCK_SIZE as i32 + z as i32 * RegionGeneration::ROAD_SEGMENT_SIZE as i32) as f32 / 30. - 0.5).max(1.);
+                    road_noise_cache[x][z] = height_bias * noise_bias;
                 }
             }
             let road_noise_cache = Rc::new(road_noise_cache);
-            for _i in 0..100{
-                let first_road = road_connectors[rand::random_range(0..road_connectors.len())];
-                let second_road = road_connectors[rand::random_range(0..road_connectors.len())];
+            let mut road_pairs = Vec::new();
+            for i in 0..road_connectors.len(){
+                for j in 0..road_connectors.len(){
+                    if i == j{
+                        continue;
+                    }
+                    road_pairs.push((i, j));
+                }
+            }
+            road_pairs.sort_by(|a, b|{
+                let a1 = road_connectors[a.0];
+                let a2 = road_connectors[a.1];
+                let b1 = road_connectors[b.0];
+                let b2 = road_connectors[b.1];
+                let a_weight = a1.1.min(a2.1);
+                let b_weight = b1.1.min(b2.1);
+                let a_length = (a1.0.x as isize - a2.0.x as isize).pow(2) + (a1.0.z as isize - a2.0.z as isize).pow(2);
+                let b_length = (b1.0.x as isize - b2.0.x as isize).pow(2) + (b1.0.z as isize - b2.0.z as isize).pow(2);
+                b_weight.cmp(&a_weight).then(a_length.cmp(&b_length))
+            });
+            for (a, b) in road_pairs.into_iter().take(100){
+                let first_road = road_connectors[a];
+                let second_road = road_connectors[b];
                 if first_road == second_road {
                     continue;
                 }

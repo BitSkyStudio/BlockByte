@@ -893,7 +893,7 @@ impl ClientGame {
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }
-        const HITBOX_PADDING: f32 = 0.001;
+        const HITBOX_PADDING: f32 = 0.0;
         self.camera.controller.tick(
             &mut self.camera.position,
             dt,

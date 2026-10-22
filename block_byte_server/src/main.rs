@@ -696,6 +696,7 @@ impl ChunkViewingManager {
     }
 }
 new_key_type! {pub struct UserIndex;}
+new_key_type! {pub struct ChunkIndex;}
 pub struct User {
     client_id: ClientId,
     view_position: Mutex<ChunkPos>,
