@@ -29,26 +29,26 @@ use block_byte_common::{
     ui::PropertyMap,
     world::{ClientBlockComponentUpdate, ClientChunkBlockComponents},
 };
-use bytemuck::Pod;
 use cgmath::{Matrix4, Rad, Vector3};
 use parking_lot::{Mutex, RwLock};
 use rand::{Rng, RngCore, rng};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
+use simple_game_engine::{GameEngineInterface, InputManager};
+use simple_gpu::GPUBuffer;
 use smallvec::SmallVec;
 use uuid::Uuid;
-use wgpu::{CommandEncoder, Device, Queue, util::StagingBelt};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 use crate::{
-    InputManager,
     atlas::{TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt},
     game::clipping::Frustum,
     render::{
-        self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUBlockFace, GPUMesh,
-        GPUParticleInstance, GUIMesh, GridChunkMesh, Mesh, MeshVertex, MeshVertexConsumer,
-        RenderState, SurfaceError, draw_model, get_block_matrix,
+        self, BaseMesh, CameraUniform, ChunkMesh, DamageMesh, GPUBlockFace, GPUParticleInstance,
+        GUIMesh, GridChunkMesh, Mesh, MeshVertex, MeshVertexConsumer, RenderState, draw_model,
+        get_block_matrix,
     },
+    set_cursor_visible,
     ui::{GameData, ScreenData, UIMessage, UIPos, UIRect, render_screen, text_renderer},
 };
 
@@ -326,7 +326,6 @@ pub struct ClientGame {
     pub stamina: f32,
     pub chunk_mesh_queue_size: usize,
     pub server_ticks_passed: u64,
-    pub chunk_buffer_pool: ChunkBufferPool,
     pub is_attack_queued: bool,
     pub placement_visualize_toggled: bool,
     pub needs_equip: bool,
@@ -334,18 +333,16 @@ pub struct ClientGame {
     pub connection: ClientConnection,
     pub teleport_id: u32,
     pub mspt: f32,
-    pub delta_time_average: f32,
     pub particles: ParticleManager,
 }
 impl GameScreen for ClientGame {
-    fn start(&mut self, renderer: &mut RenderState) {
-        renderer.set_cursor_visible(false);
+    fn start(&mut self, _renderer: &mut RenderState) {
+        //renderer.set_cursor_visible(false);
     }
     fn render(
         &mut self,
-        input: &crate::InputManager,
-        renderer: &mut crate::render::RenderState,
-        dt: f32,
+        engine: &mut GameEngineInterface,
+        renderer: &mut RenderState,
         _screen_transition: &mut Option<Box<dyn GameScreen>>,
     ) {
         let mut local_player_mesh = Mesh::default();
@@ -353,14 +350,14 @@ impl GameScreen for ClientGame {
         let mut gui_mesh = Mesh::default();
         let mut viewmodel_mesh = Mesh::default();
         let mut damage_mesh = Mesh::default();
-        let aspect_ratio = renderer.size().width as f32 / renderer.size().height as f32;
+        let aspect_ratio = engine.width as f32 / engine.height as f32;
         if self.screen.is_none() {
-            let sensitivity = 0.6;
+            let sensitivity = 0.6 * 1.;
             self.camera.update_orientation(
-                -input.mouse_delta.y as f32 * sensitivity * 0.022,
-                input.mouse_delta.x as f32 * sensitivity * 0.022,
+                -engine.input.mouse_dy as f32 * sensitivity * 0.022,
+                engine.input.mouse_dx as f32 * sensitivity * 0.022,
             );
-            let is_variant_selection = input.keys.is_down(KeyCode::KeyG);
+            let is_variant_selection = engine.input.is_key_down(KeyCode::KeyG);
             for (slot, key) in [
                 KeyCode::Digit1,
                 KeyCode::Digit2,
@@ -376,7 +373,7 @@ impl GameScreen for ClientGame {
             .into_iter()
             .enumerate()
             {
-                if input.keys.is_just_down(key) {
+                if engine.input.is_key_just_down(key) {
                     if is_variant_selection {
                         if let Some(held_item) = self.held_item() {
                             let variation_count = held_item.item.data().action.variation_count();
@@ -400,7 +397,7 @@ impl GameScreen for ClientGame {
                     }
                 }
             }
-            if input.keys.is_just_down(KeyCode::KeyE) {
+            if engine.input.is_key_just_down(KeyCode::KeyE) {
                 match self.camera.raycast(self, false) {
                     RayCastResult::Empty => {}
                     RayCastResult::Block(position, _, _) => {
@@ -431,12 +428,12 @@ impl GameScreen for ClientGame {
                     }
                 }
             }
-            if input.keys.is_just_down(KeyCode::KeyQ) {
+            if engine.input.is_key_just_down(KeyCode::KeyQ) {
                 self.send_message(NetworkPlayMessageC2S::DropItem {
-                    stack: input.keys.is_down(KeyCode::ControlLeft),
+                    stack: engine.input.is_key_down(KeyCode::ControlLeft),
                 });
             }
-            let scroll = input.wheel_scroll_delta.y;
+            let scroll = engine.input.scroll_line_dy;
             if scroll != 0. {
                 if is_variant_selection {
                     if let Some(held_item) = self.held_item() {
@@ -474,10 +471,10 @@ impl GameScreen for ClientGame {
             let crosshair_data = &*crosshair_texture.data().texture;
             let crosshair_size = 2.;
             let crosshair_size = UIPos {
-                x: crosshair_data.width() as f32 / renderer.size().width as f32
+                x: crosshair_data.width() as f32 / engine.width as f32
                     * crosshair_size
                     * aspect_ratio,
-                y: crosshair_data.height() as f32 / renderer.size().height as f32 * crosshair_size,
+                y: crosshair_data.height() as f32 / engine.height as f32 * crosshair_size,
             };
             gui_mesh.add_quad(
                 UIRect {
@@ -528,7 +525,7 @@ impl GameScreen for ClientGame {
                     &mut gui_mesh,
                 );
             }
-            if input.buttons.is_down(MouseButton::Left)
+            if engine.input.is_button_down(MouseButton::Left)
                 && match &self.hit_timer {
                     Some(hit_timer) => hit_timer.current_time > hit_timer.swing_time * 0.8,
                     None => true,
@@ -537,7 +534,7 @@ impl GameScreen for ClientGame {
                 self.is_attack_queued = true;
             }
         }
-        if input.keys.is_just_down(KeyCode::Escape) {
+        if engine.input.is_key_just_down(KeyCode::Escape) {
             if let Some(screen) = &mut self.screen
                 && screen.selected_slot.is_some()
             {
@@ -546,7 +543,7 @@ impl GameScreen for ClientGame {
                 self.send_message(NetworkPlayMessageC2S::CloseUI);
             }
         }
-        if input.keys.is_just_down(KeyCode::Tab) {
+        if engine.input.is_key_just_down(KeyCode::Tab) {
             self.send_message(if self.screen.is_some() {
                 NetworkPlayMessageC2S::CloseUI
             } else {
@@ -572,15 +569,10 @@ impl GameScreen for ClientGame {
             .properties
             .0
             .insert(InternString::intern("hotbar_slot"), self.hotbar_slot as f32);
-        self.chunk_buffer_pool.tick(&renderer.device);
-        {
-            let weight = 0.05;
-            self.delta_time_average = weight * dt + (1. - weight) * self.delta_time_average;
-        }
         let frustum = clipping::Frustum::from_matrix(
             CameraUniform::OPENGL_TO_WGPU_MATRIX
                 * ClientPlayer::create_projection_matrix(
-                    renderer.size().width as f32 / renderer.size().height as f32,
+                    engine.width as f32 / engine.height as f32,
                     90.,
                 )
                 * self.camera.create_view_matrix(self.get_player_data()),
@@ -591,18 +583,15 @@ impl GameScreen for ClientGame {
                 y: 0.9,
             },
             &format!(
-                "{:.2} {:.2} {:.2} fps: {:.0}, queue: {}, pool: {}, mspt: {:.2} {}",
+                "{:.2} {:.2} {:.2} {} {} fps: {:.0}, queue: {}, pool: {}, mspt: {:.2} {}",
                 self.player_position.x,
                 self.player_position.y,
                 self.player_position.z,
-                1. / self.delta_time_average,
+                self.camera.direction.yaw.to_degrees() as i32,
+                self.camera.direction.pitch.to_degrees() as i32,
+                engine.fps,
                 self.chunk_mesh_queue_size,
-                self.chunk_buffer_pool
-                    .buffers
-                    .iter()
-                    .map(|p| p.len().to_string())
-                    .collect::<Vec<_>>()
-                    .join(","),
+                false,
                 self.mspt,
                 match self.camera.raycast(&self, true) {
                     RayCastResult::Block(position, face, _) =>
@@ -621,20 +610,20 @@ impl GameScreen for ClientGame {
         render_screen(
             &mut self.hud,
             None,
-            renderer.size(),
+            engine.window.inner_size(),
             &game_data,
             &mut gui_mesh,
-            dt,
+            engine.dt,
             |_| {},
         );
         if let Some(screen) = &mut self.screen {
             render_screen(
                 screen,
-                Some(&input),
-                renderer.size(),
+                Some(&engine.input),
+                engine.window.inner_size(),
                 &game_data,
                 &mut gui_mesh,
-                dt,
+                engine.dt,
                 |event| match event {
                     UIMessage::ServerMessage(message) => {
                         let _ = self.connection.tx.send(message);
@@ -660,7 +649,7 @@ impl GameScreen for ClientGame {
                 });
             }
         }
-        self.tick_camera(dt, input, self.screen.is_none());
+        self.tick_camera(engine.dt, &engine.input, self.screen.is_none());
         self.player_position = self.camera.position;
         self.send_message(NetworkPlayMessageC2S::PlayerPosition {
             position: self.camera.position,
@@ -679,7 +668,7 @@ impl GameScreen for ClientGame {
             },
         });
         if let Some(hit_timer) = &mut self.hit_timer {
-            if hit_timer.tick(dt) {
+            if hit_timer.tick(engine.dt) {
                 match self.camera.raycast(self, true) {
                     RayCastResult::Block(position, face, hit_position) => {
                         let block = self.get_block(position).unwrap();
@@ -716,23 +705,23 @@ impl GameScreen for ClientGame {
                 }
             }
         }
-        self.process_messages(renderer);
+        renderer.time += engine.dt;
+        self.process_messages(engine, renderer);
         self.tick_client(
-            &renderer.device,
-            &renderer.queue,
             &mut local_player_mesh,
             &mut entity_mesh,
             &mut gui_mesh,
             &mut viewmodel_mesh,
             &mut damage_mesh,
             &frustum,
-            dt,
-            renderer.animation_time,
-            input,
+            engine.dt,
+            renderer.time,
+            &engine.input,
         );
-        self.particles.tick(dt, &self.chunks);
+        self.particles.tick(engine.dt, &self.chunks);
         let ps = profiler::profiler_scope("render");
-        match renderer.render(
+        renderer.render(
+            engine,
             self,
             entity_mesh,
             local_player_mesh,
@@ -755,18 +744,12 @@ impl GameScreen for ClientGame {
                 })
                 .collect(),
             &frustum,
-        ) {
-            Ok(_) => {}
-            Err(SurfaceError::Recreate) => renderer.resize(renderer.size()),
-            Err(SurfaceError::Crash) => {
-                panic!("crash");
-            }
-        }
+        );
         ps.end();
     }
-    fn exit(&mut self, renderer: &mut RenderState) {
+    fn exit(&mut self, _renderer: &mut RenderState) {
         *self.connection.state.lock() = ClientConnectionState::Disconnect;
-        renderer.set_cursor_visible(true);
+        //set_cursor_visible(&mut engine.window, true);
     }
 }
 impl ClientGame {
@@ -803,7 +786,17 @@ impl ClientGame {
         );
         use cgmath::InnerSpace;
         let cross_normalized = forward.cross(ClientPlayer::UP).normalize();
-        let move_vector = input.keys.down.iter().copied().fold(
+        let move_vector = [
+            KeyCode::KeyW,
+            KeyCode::KeyS,
+            KeyCode::KeyA,
+            KeyCode::KeyD,
+            KeyCode::Space,
+            KeyCode::ShiftLeft,
+        ]
+        .into_iter()
+        .filter(|key| input.is_key_down(*key))
+        .fold(
             cgmath::Vector3 {
                 x: 0.0,
                 y: 0.0,
@@ -834,7 +827,7 @@ impl ClientGame {
         }
         move_vector *= self.player_stats.speed() / 100. * NORMAL_SPEED;
         //move_vector *= player_entity_data.speed;
-        self.camera.running = input.keys.is_down(KeyCode::ControlLeft);
+        self.camera.running = input.is_key_down(KeyCode::ControlLeft);
         self.camera.walking = move_vector.length_squared() > 0.;
         if move_vector.length_squared() == 0. {
             self.camera.running = false;
@@ -851,7 +844,7 @@ impl ClientGame {
         } else {
             1.
         };
-        self.camera.crouching = input.keys.is_down(KeyCode::ShiftLeft) && can_move;
+        self.camera.crouching = input.is_key_down(KeyCode::ShiftLeft) && can_move;
         match move_mode {
             MoveMode::Normal | MoveMode::Fly => {
                 if !self.camera.crouching
@@ -884,16 +877,13 @@ impl ClientGame {
                 if self.camera.crouching {
                     move_vector /= 2.;
                 }
-                if input.keys.is_down(KeyCode::Space)
-                    && self.camera.controller.on_ground
-                    && can_move
+                if input.is_key_down(KeyCode::Space) && self.camera.controller.on_ground && can_move
                 {
                     self.camera.controller.move_velocity.y += self.player_stats.jump_velocity();
                 }
             }
             MoveMode::Fly | MoveMode::NoClip => {}
         }
-        const HITBOX_PADDING: f32 = 0.0;
         self.camera.controller.tick(
             &mut self.camera.position,
             dt,
@@ -912,20 +902,21 @@ impl ClientGame {
             },
             move_vector,
             move_mode,
-            player_entity_data
-                .hitbox(if self.camera.crouching {
-                    EntityPose::Crouch
-                } else {
-                    EntityPose::Stand
-                })
-                .inflate(Pos::all(HITBOX_PADDING))
-                .inflate(Pos::all(-HITBOX_PADDING)),
+            player_entity_data.hitbox(if self.camera.crouching {
+                EntityPose::Crouch
+            } else {
+                EntityPose::Stand
+            }),
             ACCELERATION_COEFFICIENT * self.player_stats.speed() / 100. * NORMAL_SPEED,
             0.5,
-            input.keys.is_down(KeyCode::ShiftLeft),
+            input.is_key_down(KeyCode::ShiftLeft),
         );
     }
-    pub fn process_messages(&mut self, renderer: &mut RenderState) {
+    pub fn process_messages(
+        &mut self,
+        engine: &mut GameEngineInterface,
+        _renderer: &mut RenderState,
+    ) {
         while let Ok((message, time)) = self.connection.rx.try_recv() {
             match message {
                 NetworkMessageS2C::LoadChunk {
@@ -941,15 +932,10 @@ impl ClientGame {
                                 components: RwLock::new(components),
                                 version: AtomicU64::new(0),
                             }),
-                            gpu_mesh_grid: GPUMesh::empty(),
-                            grid_count: 0,
-                            gpu_mesh_detail: GPUMesh::empty(),
                             position,
                             modified: false,
                             scheduled: false,
-                            lod_only_faces: 0,
-                            detail_mesh: None,
-                            last_visible: false,
+                            render_data: None,
                         },
                     );
                     self.mark_modified(position);
@@ -958,10 +944,7 @@ impl ClientGame {
                     }
                 }
                 NetworkMessageS2C::UnloadChunk { position } => {
-                    if let Some(chunk) = self.chunks.remove(&position) {
-                        self.chunk_buffer_pool.reclaim(chunk.gpu_mesh_grid);
-                        self.chunk_buffer_pool.reclaim(chunk.gpu_mesh_detail);
-                    }
+                    self.chunks.remove(&position);
                 }
                 NetworkMessageS2C::SetBlock { position, block } => {
                     let (chunk, offset) = position.to_chunk_pos_offset();
@@ -1092,7 +1075,7 @@ impl ClientGame {
                         element_data: HashMap::new(),
                         time: 0.,
                     });
-                    renderer.set_cursor_visible(true);
+                    set_cursor_visible(&mut engine.window, true);
                 }
                 NetworkMessageS2C::UISetSlot { slot, item } => {
                     if let Some(screen) = &mut self.screen {
@@ -1107,7 +1090,7 @@ impl ClientGame {
                 }
                 NetworkMessageS2C::UIClose => {
                     self.screen = None;
-                    renderer.set_cursor_visible(false);
+                    set_cursor_visible(&mut engine.window, false);
                 }
                 NetworkMessageS2C::PlayerSetSlot { slot, item } => {
                     if slot >= self.player_inventory.len() {
@@ -1180,84 +1163,7 @@ impl ClientGame {
         }
     }
 }
-#[derive(Default)]
-pub struct ChunkBufferPool {
-    pub buffers: Vec<Vec<GPUMesh>>,
-}
-impl ChunkBufferPool {
-    const MIN_BUFFER_SIZE: usize = 1024;
-    pub fn tick(&mut self, _device: &Device) {}
-    pub fn reclaim(&mut self, mesh: GPUMesh) {
-        if let Some(buffer) = &mesh.buffer {
-            let bucket = Self::get_data_index(buffer.size() as usize).0;
-            self.get_bucket(bucket).push(mesh);
-        }
-    }
-    pub fn allocate_or_reuse<T: Pod>(
-        &mut self,
-        mesh: &Mesh<T>,
-        mut gpu_buffer: GPUMesh,
-        staging_belt: &mut StagingBelt,
-        command_encoder: &mut CommandEncoder,
-        device: &Device,
-    ) -> GPUMesh {
-        let (vertex_size, index_size, _) = mesh.get_data_size();
-        let total_size = vertex_size + index_size;
-        if let Some(buffer) = &gpu_buffer.buffer {
-            if total_size <= buffer.size() as usize {
-                gpu_buffer.upload(mesh, device, staging_belt, command_encoder);
-                return gpu_buffer;
-            }
-        }
-        self.reclaim(gpu_buffer);
-        self.allocate(mesh, staging_belt, device, command_encoder)
-    }
-    pub fn allocate<T: Pod>(
-        &mut self,
-        mesh: &Mesh<T>,
-        staging_belt: &mut StagingBelt,
-        device: &Device,
-        command_encoder: &mut CommandEncoder,
-    ) -> GPUMesh {
-        if mesh.is_empty() {
-            return GPUMesh::empty();
-        }
-        let (vertex_size, index_size, _) = mesh.get_data_size();
-        let total_size = vertex_size + index_size;
-        let (bucket, size) = Self::get_data_index(total_size);
-        let bucket = self.get_bucket(bucket);
-        if let Some(mut buffer) = bucket.pop() {
-            buffer.upload(mesh, device, staging_belt, command_encoder);
-            buffer
-        } else {
-            /*println!(
-                "had to allocate new buffer of size {}, for {}",
-                size, total_size
-            );*/
-            GPUMesh::allocate(mesh, size, device)
-        }
-    }
-    fn get_bucket(&mut self, id: usize) -> &mut Vec<GPUMesh> {
-        if id >= self.buffers.len() {
-            self.buffers.resize_with(id + 1, || Vec::new());
-        }
-        &mut self.buffers[id]
-    }
-    fn get_data_index(buffer_size: usize) -> (usize, usize) {
-        let mut current_size = Self::MIN_BUFFER_SIZE;
-        let mut i = 0;
-        loop {
-            if buffer_size <= current_size {
-                return (i, current_size);
-            }
-            i += 1;
-            current_size *= 2;
-            if i > 20 {
-                panic!("failsafe");
-            }
-        }
-    }
-}
+
 lazy_static::lazy_static! {
     static ref IDLE_STRING: InternString = InternString::intern("idle");
     static ref RUNNING_STRING: InternString = InternString::intern("running");
@@ -1291,14 +1197,12 @@ impl ClientGame {
             stamina: 0.,
             chunk_mesh_queue_size: 0,
             server_ticks_passed: 0,
-            chunk_buffer_pool: ChunkBufferPool::default(),
             is_attack_queued: false,
             placement_visualize_toggled: false,
             current_local_action: None,
             needs_equip: false,
             camera: ClientPlayer::default(),
             connection,
-            delta_time_average: 0.,
             mspt: 0.,
             teleport_id: 0,
             player_inventory: Vec::new(),
@@ -1347,8 +1251,6 @@ impl ClientGame {
 
     pub fn tick_client(
         &mut self,
-        _device: &Device,
-        _queue: &Queue,
         _local_player_mesh: &mut BaseMesh,
         entity_mesh: &mut BaseMesh,
         _gui_mesh: &mut GUIMesh,
@@ -1749,7 +1651,7 @@ impl ClientGame {
         }
         ps.end();
 
-        if input.keys.is_just_down(KeyCode::AltLeft) {
+        if input.is_key_just_down(KeyCode::AltLeft) {
             self.placement_visualize_toggled ^= true;
         }
 
@@ -1841,7 +1743,7 @@ impl ClientGame {
                                         }),
                                     );
                                 }
-                                if input.buttons.is_just_down(MouseButton::Right)
+                                if input.is_button_just_down(MouseButton::Right)
                                     && self.screen.is_none()
                                     && !blocked
                                     && self.hit_timer.is_none()
@@ -1860,7 +1762,7 @@ impl ClientGame {
                 ItemAction::Plant(_) | ItemAction::RotateBlock | ItemAction::SpawnEntity(_) => {
                     match raycast {
                         RayCastResult::Block(position, face, _) => {
-                            if input.buttons.is_just_down(MouseButton::Right) {
+                            if input.is_button_just_down(MouseButton::Right) {
                                 self.current_local_action = Some(EntityAction::Interact);
                                 self.send_message(NetworkPlayMessageC2S::ItemInteraction {
                                     target: ItemInteractTarget::Block { position, face },
@@ -1873,7 +1775,7 @@ impl ClientGame {
                 }
                 ItemAction::Ignore => {}
                 ItemAction::Consume { .. } => {
-                    if input.buttons.is_just_down(MouseButton::Right) {
+                    if input.is_button_just_down(MouseButton::Right) {
                         self.current_local_action = Some(EntityAction::Interact);
                         self.send_message(NetworkPlayMessageC2S::ItemInteraction {
                             target: match raycast {
@@ -1939,14 +1841,17 @@ pub struct ChunkMeshBuildData {
 pub struct ClientChunk {
     pub position: ChunkPos,
     pub mesh_build_data: Arc<ChunkMeshBuildData>,
-    pub gpu_mesh_grid: GPUMesh,
-    pub grid_count: usize,
-    pub gpu_mesh_detail: GPUMesh,
-    pub detail_mesh: Option<ChunkMesh>,
     pub modified: bool,
     pub scheduled: bool,
+    pub render_data: Option<ChunkGPUData>,
+}
+pub struct ChunkGPUData {
+    pub grid_buffer: Option<GPUBuffer>,
+    pub detail_buffer: Option<GPUBuffer>,
+    pub detail_index_count: u32,
+    pub detail_index_offset: u32,
+    pub grid_count: usize,
     pub lod_only_faces: usize,
-    pub last_visible: bool,
 }
 
 impl ClientChunk {
@@ -2373,8 +2278,7 @@ impl ClientConnection {
             let state = state.clone();
             std::thread::spawn(move || {
                 let mut client = RenetClient::new(make_connection_config());
-                let socket =
-                    UdpSocket::bind(&format!("0.0.0.0:{}", server_addr.port() + 1)).unwrap();
+                let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
                 let current_time = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap();

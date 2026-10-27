@@ -11,6 +11,7 @@ use block_byte_common::{
     },
 };
 use cgmath::{Matrix4, SquareMatrix};
+use simple_game_engine::InputManager;
 use smallvec::SmallVec;
 use taffy::{AvailableSpace, Dimension, NodeId, Style, TaffyTree};
 use uuid::Uuid;
@@ -18,7 +19,7 @@ use winit::{dpi::PhysicalSize, event::MouseButton, keyboard::NamedKey};
 
 use crate::atlas::TexCoordsExt;
 use crate::{
-    GUIMesh, InputManager,
+    GUIMesh,
     atlas::TEXTURE_ATLAS,
     game::language,
     render::{GUIVertex, MeshVertex, MeshVertexConsumer, item_model_icon_view},
@@ -118,7 +119,7 @@ pub fn render_screen(
     mesh.append_mesh(overlay_mesh);
     if let Some(input) = input {
         if let Some((_, button)) = screen_data.selected_slot.as_ref() {
-            if !input.buttons.is_down(*button) {
+            if !input.is_button_down(*button) {
                 screen_data.selected_slot = None;
             }
         }
@@ -285,22 +286,25 @@ fn render_element(
         }
         UIElementType::ItemSlot { slot } => {
             if let Some(input) = input {
-                if context.content.contains(input.cursor_position) {
+                if context.content.contains(UIPos {
+                    x: input.mouse_x,
+                    y: input.mouse_y,
+                }) {
                     let target_slot = *slot;
                     match data.selected_slot {
                         Some((slot, button)) => {
                             let move_mode = match button {
                                 MouseButton::Left => {
-                                    if input.buttons.is_just_up(MouseButton::Left) {
+                                    if input.is_button_just_up(MouseButton::Left) {
                                         Some(ItemMoveMode::Stack)
-                                    } else if input.buttons.is_just_down(MouseButton::Right) {
+                                    } else if input.is_button_just_down(MouseButton::Right) {
                                         Some(ItemMoveMode::Single)
                                     } else {
                                         None
                                     }
                                 }
                                 MouseButton::Right => {
-                                    if input.buttons.is_just_up(MouseButton::Right) {
+                                    if input.is_button_just_up(MouseButton::Right) {
                                         Some(ItemMoveMode::Half)
                                     } else {
                                         None
@@ -330,7 +334,7 @@ fn render_element(
                         None => match target_slot {
                             SlotId::Id(target_slot) => {
                                 for button in [MouseButton::Left, MouseButton::Right] {
-                                    if input.buttons.is_just_down(button) {
+                                    if input.is_button_just_down(button) {
                                         data.selected_slot = Some((target_slot, button));
                                         break;
                                     }
@@ -350,12 +354,18 @@ fn render_element(
                     };
                     if let Some(item) = slots.get(slot.slot).cloned().flatten() {
                         if let Some(input) = input
-                            && context.content.contains(input.cursor_position)
+                            && context.content.contains(UIPos {
+                                x: input.mouse_x,
+                                y: input.mouse_y,
+                            })
                             && data.selected_slot.is_none()
                         {
                             let mut shift = overlay_context
                                 .draw_text(
-                                    input.cursor_position,
+                                    UIPos {
+                                        x: input.mouse_x,
+                                        y: input.mouse_y,
+                                    },
                                     language().translate_key(item.item),
                                     40.,
                                     Color::WHITE,
@@ -365,8 +375,8 @@ fn render_element(
                                 shift += overlay_context
                                     .draw_text(
                                         UIPos {
-                                            x: input.cursor_position.x,
-                                            y: input.cursor_position.y + shift,
+                                            x: input.mouse_x,
+                                            y: input.mouse_y + shift,
                                         },
                                         line,
                                         40.,
@@ -411,8 +421,8 @@ fn render_element(
                                         draw_slot(
                                             &mut overlay_context,
                                             UIPos {
-                                                x: input.cursor_position.x + border - 25.,
-                                                y: input.cursor_position.y + border - 25.,
+                                                x: input.mouse_x + border - 25.,
+                                                y: input.mouse_y + border - 25.,
                                             },
                                             item.count,
                                         );
@@ -427,8 +437,8 @@ fn render_element(
                                         draw_slot(
                                             &mut overlay_context,
                                             UIPos {
-                                                x: input.cursor_position.x + border - 25.,
-                                                y: input.cursor_position.y + border - 25.,
+                                                x: input.mouse_x + border - 25.,
+                                                y: input.mouse_y + border - 25.,
                                             },
                                             move_count,
                                         );
@@ -473,7 +483,10 @@ fn render_element(
             let craft_width = (context.content.size.x / craft_size).floor() as usize;
             let left_offset = (context.content.size.x - craft_width as f32 * craft_size) / 2.;
             let mouse_inside = if let Some(input) = input {
-                if context.content.contains(input.cursor_position) {
+                if context.content.contains(UIPos {
+                    x: input.mouse_x,
+                    y: input.mouse_y,
+                }) {
                     let crafts_count = match recipes {
                         CraftAreaRecipes::Recipes(key_group) => key_group.list().len(),
                         CraftAreaRecipes::CheatMenu => ItemKey::count(),
@@ -481,8 +494,7 @@ fn render_element(
                     let max_scroll_height = (crafts_count.div_ceil(craft_width) as f32 * 50.
                         - context.content.size.y)
                         .max(0.);
-                    element_data.scroll.y = (element_data.scroll.y
-                        - input.wheel_scroll_delta.y * 20.)
+                    element_data.scroll.y = (element_data.scroll.y - input.scroll_line_dy * 20.)
                         .clamp(0., max_scroll_height);
                     true
                 } else {
@@ -515,12 +527,17 @@ fn render_element(
                                 },
                                 size: UIPos::all(craft_size),
                             })
-                            .contains(input.cursor_position)
-                                && data.selected_slot.is_none()
+                            .contains(UIPos {
+                                x: input.mouse_x,
+                                y: input.mouse_y,
+                            }) && data.selected_slot.is_none()
                                 && mouse_inside
                             {
                                 overlay_context.draw_text(
-                                    input.cursor_position,
+                                    UIPos {
+                                        x: input.mouse_x,
+                                        y: input.mouse_y,
+                                    },
                                     item_name,
                                     40.,
                                     Color::WHITE,
@@ -528,7 +545,7 @@ fn render_element(
                                 for (button, stack) in
                                     [(MouseButton::Left, false), (MouseButton::Right, true)]
                                 {
-                                    if input.buttons.is_just_down(button) {
+                                    if input.is_button_just_down(button) {
                                         event_consumer(UIMessage::ServerMessage(
                                             NetworkPlayMessageC2S::GiveItem { item, stack },
                                         ));
@@ -576,8 +593,10 @@ fn render_element(
                                 },
                                 size: UIPos::all(craft_size),
                             })
-                            .contains(input.cursor_position)
-                                && mouse_inside
+                            .contains(UIPos {
+                                x: input.mouse_x,
+                                y: input.mouse_y,
+                            }) && mouse_inside
                             {
                                 for (input_item, input_count) in &recipe_data.inputs {
                                     text += format!(
@@ -596,7 +615,10 @@ fn render_element(
                                     .as_str();
                                 }
                                 overlay_context.draw_multiline_text(
-                                    input.cursor_position,
+                                    UIPos {
+                                        x: input.mouse_x,
+                                        y: input.mouse_y,
+                                    },
                                     text.as_str(),
                                     40.,
                                     Color::WHITE,
@@ -604,7 +626,7 @@ fn render_element(
                                 for (button, count) in
                                     [(MouseButton::Left, 1), (MouseButton::Right, 5)]
                                 {
-                                    if input.buttons.is_just_down(button) {
+                                    if input.is_button_just_down(button) {
                                         event_consumer(UIMessage::ServerMessage(
                                             NetworkPlayMessageC2S::Craft {
                                                 recipe: *recipe,
@@ -623,13 +645,16 @@ fn render_element(
         UIElementType::ResearchTree { research } => {
             let element_data = data.element_data.entry(element.uuid).or_default();
             let mouse_inside = if let Some(input) = input {
-                if context.content.contains(input.cursor_position) {
-                    if data.selected_slot.is_none() && input.buttons.is_down(MouseButton::Left) {
-                        element_data.scroll.x += input.mouse_delta.x as f32;
-                        element_data.scroll.y += input.mouse_delta.y as f32;
+                if context.content.contains(UIPos {
+                    x: input.mouse_x,
+                    y: input.mouse_y,
+                }) {
+                    if data.selected_slot.is_none() && input.is_button_down(MouseButton::Left) {
+                        element_data.scroll.x += input.mouse_dx;
+                        element_data.scroll.y += input.mouse_dy;
                     }
                     element_data.zoom =
-                        (element_data.zoom - input.wheel_scroll_delta.y / 4.).clamp(1., 3.);
+                        (element_data.zoom - input.scroll_line_dy / 4.).clamp(1., 3.);
                     true
                 } else {
                     false
@@ -680,8 +705,10 @@ fn render_element(
                         },
                         size: UIPos::all(research_size),
                     })
-                    .contains(input.cursor_position)
-                        && mouse_inside
+                    .contains(UIPos {
+                        x: input.mouse_x,
+                        y: input.mouse_y,
+                    }) && mouse_inside
                     {
                         let mut text = String::new();
                         use std::fmt::Write;
@@ -719,7 +746,10 @@ fn render_element(
                             }
                         }
                         overlay_context.draw_multiline_text(
-                            input.cursor_position,
+                            UIPos {
+                                x: input.mouse_x,
+                                y: input.mouse_y,
+                            },
                             &text,
                             40.,
                             Color::WHITE,
@@ -728,16 +758,16 @@ fn render_element(
                             Some((slot, button)) => {
                                 let move_mode = match button {
                                     MouseButton::Left => {
-                                        if input.buttons.is_just_up(MouseButton::Left) {
+                                        if input.is_button_just_up(MouseButton::Left) {
                                             Some(ItemMoveMode::Stack)
-                                        } else if input.buttons.is_just_down(MouseButton::Right) {
+                                        } else if input.is_button_just_down(MouseButton::Right) {
                                             Some(ItemMoveMode::Single)
                                         } else {
                                             None
                                         }
                                     }
                                     MouseButton::Right => {
-                                        if input.buttons.is_just_up(MouseButton::Right) {
+                                        if input.is_button_just_up(MouseButton::Right) {
                                             Some(ItemMoveMode::Half)
                                         } else {
                                             None
@@ -774,9 +804,12 @@ fn render_element(
                 Color::WHITE,
             );
             if let Some(input) = input
-                && context.content.contains(input.cursor_position)
+                && context.content.contains(UIPos {
+                    x: input.mouse_x,
+                    y: input.mouse_y,
+                })
             {
-                if input.buttons.is_just_down(MouseButton::Left) {
+                if input.is_button_just_down(MouseButton::Left) {
                     event_consumer(UIMessage::ServerMessage(
                         NetworkPlayMessageC2S::UIButtonPress {
                             property: *property,
@@ -814,11 +847,14 @@ fn render_element(
                 );
             }
             if let Some(input) = input {
-                if input.buttons.is_just_down(MouseButton::Left) {
-                    element_data.selected = context.content.contains(input.cursor_position);
+                if input.is_button_just_down(MouseButton::Left) {
+                    element_data.selected = context.content.contains(UIPos {
+                        x: input.mouse_x,
+                        y: input.mouse_y,
+                    });
                 }
                 if element_data.selected {
-                    for logical in &input.logical {
+                    for logical in input.logical_keys() {
                         match logical {
                             winit::keyboard::Key::Named(NamedKey::ArrowLeft) => {
                                 if element_data.text_cursor > 0 {

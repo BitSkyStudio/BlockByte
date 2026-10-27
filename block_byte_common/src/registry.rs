@@ -647,10 +647,8 @@ fn full_aabb() -> Vec<crate::coord::AABB<f32>> {
 #[derive(Deserialize)]
 pub struct BlockData {
     pub health: BlockHealthData,
-    #[cfg(feature = "client")]
     pub render_data: BlockRenderData,
     #[serde(default = "full_aabb")]
-    #[cfg(feature = "client")]
     pub selection: Vec<AABB<f32>>,
     #[serde(default = "full_aabb")]
     pub collision: Vec<AABB<f32>>,
@@ -1122,7 +1120,6 @@ impl Default for BlockMachineFace {
     }
 }
 #[derive(Deserialize)]
-#[cfg(feature = "client")]
 pub enum BlockRenderData {
     Air,
     Full {
@@ -1439,7 +1436,6 @@ impl ComposedTexture {
 }
 #[derive(Deserialize)]
 pub struct EntityData {
-    #[cfg(feature = "server")]
     pub inventory_size: usize,
     #[serde(default)]
     pub equipment_view: InventoryView,
@@ -1556,13 +1552,9 @@ fn default_empty_loot_table() -> OwnOrKey<LootTableData> {
 #[derive(Deserialize)]
 pub struct PlantData {
     pub stages: Vec<PlantDataStage>,
-    #[cfg(feature = "client")]
     pub size: f32,
-    #[cfg(feature = "client")]
     pub height: f32,
-    #[cfg(feature = "client")]
     pub blades: u32,
-    #[cfg(feature = "client")]
     pub center_offset: f32,
     pub stage_time: f32,
     #[serde(default = "default_empty_loot_table")]

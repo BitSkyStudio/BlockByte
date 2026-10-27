@@ -1,400 +1,158 @@
-use block_byte_common::coord::{AABB, BlockPos, CHUNK_SIZE, ChunkPos, Face, Pos};
+use block_byte_common::coord::{AABB, Axis, BlockPos, CHUNK_SIZE, Face, Pos};
 use block_byte_common::model::{DrawAnimation, ModelGeometry, ModelTexture};
 use block_byte_common::registry::{
     BlockColor, BlockData, BlockKey, BlockRenderData, EntityData, ItemModel, ModelInstance,
 };
 use block_byte_common::rotation::BlockRotation;
 use block_byte_common::{Color, InternString, TexCoords};
-use bytemuck::{NoUninit, Pod};
 use cgmath::{InnerSpace, Matrix4, Point3, SquareMatrix, Vector3};
 use image::RgbaImage;
-use smallvec::SmallVec;
-use std::borrow::Cow;
-use std::iter;
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-use std::sync::Arc;
-use wgpu::util::StagingBelt;
-use wgpu::{
-    BackendOptions, BindGroup, BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferSize,
-    CommandEncoder, CompareFunction, Device, FilterMode, IndexFormat, InstanceFlags,
-    MemoryBudgetThresholds, Queue, RenderPass, Sampler, TextureFormat, TextureView,
-    VertexBufferLayout,
+use simple_game_engine::GameEngineInterface;
+use simple_gpu::{
+    BlendFactor, BlendOp, BlendState, DrawIndexedIndirectCommand, GPU, GPUArena, GPUBuffer,
+    GPUCullMode, GPUDepthTestConfig, GPUDescriptorHeap, GPUPointer, GPUTexture, GraphicsShaders,
+    IndexBufferFormat, MemoryKind, QueueKind, RenderPassAttachment, RenderPassDesc,
+    RenderPassLoadOp, SamplerFilter, TextureDesc, TextureFormat, TextureRegion, TextureSampler,
+    TextureUsage, TextureViewDesc,
 };
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::window::{CursorGrabMode, Window};
+use std::alloc::Layout;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::atlas::{TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
+use crate::game::clipping::Frustum;
+use crate::game::{ChunkGPUData, ClientGame, ClientPlayer, ModifiedChunkEntry};
+use crate::ui::{UIPos, UIRect};
 
 pub struct RenderState {
-    surface: wgpu::Surface<'static>,
-    pub device: Arc<wgpu::Device>,
-    pub queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    size: PhysicalSize<u32>,
-    window: Arc<Window>,
-    base_render_pipeline: GPURenderPipeline,
-    chunk_render_pipeline: GPURenderPipeline,
-    chunk_grid_render_pipeline: GPURenderPipeline,
-    gui_render_pipeline: GPURenderPipeline,
-    damage_render_pipeline: GPURenderPipeline,
-    skybox_render_pipeline: GPURenderPipeline,
-    hdr_render_pipeline: GPURenderPipeline,
-    skybox_mesh: GPUMesh,
-    skybox_texture: GPUTexture,
-    texture_atlas: GPUTexture,
-    camera_uniform: GPUUniform<CameraUniform>,
-    gui_camera_uniform: GPUUniform<CameraUniform>,
-    depth_texture: GPUTexture,
-    hdr_texture: GPUTexture,
-    texel_size_uniform: GPUUniform<[f32; 2]>,
-    blur_texture: GPUTexture,
-    blur_render_pipeline: GPURenderPipeline,
-    shadow_texture: GPUTexture,
-    shadow_camera: GPUUniform<CameraUniform>,
-    shadow_chunk_grid_render_pipeline: GPURenderPipeline,
-    shadow_chunk_render_pipeline: GPURenderPipeline,
-    shadow_base_render_pipeline: GPURenderPipeline,
-    time_uniform: GPUUniform<f32>,
-    material_texture: GPUTexture,
-    entity_gpu_mesh: GPUMesh,
-    local_player_gpu_mesh: GPUMesh,
-    damage_gpu_mesh: GPUMesh,
-    viewmodel_gpu_mesh: GPUMesh,
-    gui_gpu_mesh: GPUMesh,
-    pub animation_time: f32,
-    pub staging_belt: StagingBelt,
-    animation_data_uniform: GPUUniform<()>,
-    particle_gpu_mesh: GPUMesh,
-    billboard_mesh: GPUMesh,
-    particle_render_pipeline: GPURenderPipeline,
+    pub gpu: Arc<GPU>,
+    pub time: f32,
+    #[allow(unused)]
+    pub skybox: GPUTexture,
+    #[allow(unused)]
+    pub texture_atlas: GPUTexture,
+    #[allow(unused)]
+    pub persistent_arena: GPUArena,
+    pub quad_index_buffer: GPUPointer,
+    pub skybox_buffer: (GPUPointer, GPUPointer),
+    per_frame: [PerFrameRenderData; 3],
+    buffer_graveyard: Vec<(GPUBuffer, u32)>,
+    shaders: ShaderLoader,
 }
 
-pub enum SurfaceError {
-    Recreate,
-    Crash,
+struct PerFrameRenderData {
+    pub depth_buffer: GPUTexture,
+    pub hdr_buffer: GPUTexture,
+    pub shadow_buffer: GPUTexture,
 }
+
+const BASE_BLEND: BlendState = BlendState {
+    color_op: BlendOp::Add,
+    src_color_factor: BlendFactor::SrcAlpha,
+    dst_color_factor: BlendFactor::OneMinusSrcAlpha,
+    alpha_op: BlendOp::Add,
+    src_alpha_factor: BlendFactor::One,
+    dst_alpha_factor: BlendFactor::OneMinusSrcAlpha,
+};
 
 impl RenderState {
-    pub async fn new(window: Window, skybox: RgbaImage) -> Self {
-        let window = Arc::new(window);
-        let size = window.inner_size();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            backend_options: BackendOptions::default(),
-            display: None,
-            flags: InstanceFlags::default(),
-            memory_budget_thresholds: MemoryBudgetThresholds::default(),
-        });
-        let surface = instance.create_surface(window.clone()).unwrap();
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
-
-        //println!("{:?}", adapter.get_info());
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty().union(wgpu::Features::IMMEDIATES),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                required_limits: wgpu::Limits {
-                    max_bind_groups: 8,
-                    max_immediate_size: 64,
+    pub fn new(gpu: Arc<GPU>, desc_heap: &mut GPUDescriptorHeap, skybox: RgbaImage) -> Self {
+        desc_heap.set_samplers(
+            0,
+            &[TextureSampler {
+                min: SamplerFilter::Nearest,
+                mag: SamplerFilter::Nearest,
+                ..Default::default()
+            }],
+        );
+        desc_heap.set_samplers(
+            1,
+            &[TextureSampler {
+                ..Default::default()
+            }],
+        );
+        let texture_atlas = {
+            let upload_semaphore = gpu.create_semaphore(0);
+            let mip_levels = &TEXTURE_ATLAS.get().unwrap().texture_mips;
+            let texture = gpu.create_texture(
+                TextureDesc {
+                    dimensions: [mip_levels[0].width(), mip_levels[0].height(), 1],
+                    usage: TextureUsage::SAMPLED,
+                    format: TextureFormat::ABGR8Unorm,
+                    mip_count: mip_levels.len() as u32,
                     ..Default::default()
                 },
-                memory_hints: Default::default(),
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .unwrap();
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Immediate,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
-        let texture_images = &TEXTURE_ATLAS.get().unwrap().texture_mips;
-        let texture_atlas = GPUTexture::new(
-            &device,
-            texture_images[0].dimensions(),
-            texture_images.len() as u32,
-            TextureFormat::Rgba8Unorm,
-            wgpu::FilterMode::Nearest,
-        );
-        for (mip_level, texture_image) in texture_images.into_iter().enumerate() {
-            texture_atlas.write_image(&texture_image, mip_level as u32, &queue);
-        }
-        let material_texture = GPUTexture::new(
-            &device,
-            texture_images[0].dimensions(),
-            1,
-            TextureFormat::Rgba8Unorm,
-            wgpu::FilterMode::Nearest,
-        );
-        material_texture.write_image(&TEXTURE_ATLAS.get().unwrap().texture_material, 0, &queue);
-
-        let skybox_texture = GPUTexture::new(
-            &device,
-            skybox.dimensions(),
-            1,
-            TextureFormat::Rgba8UnormSrgb,
-            wgpu::FilterMode::Nearest,
-        );
-        skybox_texture.write_image(&skybox, 0, &queue);
-
-        let atlas_size = TEXTURE_ATLAS.get().unwrap().atlas_size;
-        let animation_data_buffer = device.create_buffer(&BufferDescriptor {
-            label: None,
-            mapped_at_creation: false,
-            size: 4 * 2 + std::mem::size_of::<AnimatedCell>() as u64 * (atlas_size as u64).pow(2),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        queue.write_buffer(
-            &animation_data_buffer,
-            0,
-            bytemuck::cast_slice(std::slice::from_ref(&atlas_size)),
-        );
-        queue.write_buffer(
-            &animation_data_buffer,
-            4,
-            bytemuck::cast_slice(TEXTURE_ATLAS.get().unwrap().animation_data.as_slice()),
-        );
-        let animation_data_uniform =
-            GPUUniform::new_with_buffer(&device, true, animation_data_buffer);
-
-        let camera_uniform = GPUUniform::new(&device, false);
-        let gui_camera_uniform = GPUUniform::new(&device, false);
-        let texel_size_uniform = GPUUniform::new(&device, false);
-        let shadow_camera = GPUUniform::new(&device, false);
-        let time_uniform = GPUUniform::new(&device, false);
-        texel_size_uniform.write(&queue, &[1. / size.width as f32, 1. / size.height as f32]);
-        let depth_texture = GPUTexture::new(
-            &device,
-            (size.width, size.height),
-            1,
-            TextureFormat::Depth32Float,
-            wgpu::FilterMode::Nearest,
-        );
-        let hdr_texture = GPUTexture::new(
-            &device,
-            (size.width, size.height),
-            1,
-            TextureFormat::Rgba16Float,
-            wgpu::FilterMode::Nearest,
-        );
-        let blur_texture = GPUTexture::new(
-            &device,
-            (size.width, size.height),
-            1,
-            TextureFormat::Rgba16Float,
-            wgpu::FilterMode::Nearest,
-        );
-        let shadow_texture = GPUTexture::new(
-            &device,
-            (2048 * 2, 2048 * 2),
-            1,
-            TextureFormat::Depth32Float,
-            wgpu::FilterMode::Linear,
-        );
-        let base_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
-            &device,
-            "base",
-            &[
-                Some(&texture_atlas.bind_group_layout),
-                Some(&camera_uniform.bind_group_layout),
-                Some(&shadow_camera.bind_group_layout),
-                Some(&shadow_texture.bind_group_layout),
-                Some(&time_uniform.bind_group_layout),
-                Some(&material_texture.bind_group_layout),
-                Some(&animation_data_uniform.bind_group_layout),
-            ],
-            Some(BlendState::ALPHA_BLENDING),
-            Some(wgpu::Face::Back),
-            Some(hdr_texture.format),
-            Some(TextureFormat::Depth32Float),
-            0,
-        );
-
-        let chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex, ()>(
-            &device,
-            "chunk",
-            &[
-                Some(&texture_atlas.bind_group_layout),
-                Some(&camera_uniform.bind_group_layout),
-                Some(&shadow_camera.bind_group_layout),
-                Some(&shadow_texture.bind_group_layout),
-                Some(&time_uniform.bind_group_layout),
-                Some(&material_texture.bind_group_layout),
-                Some(&animation_data_uniform.bind_group_layout),
-            ],
-            Some(BlendState::REPLACE),
-            Some(wgpu::Face::Back),
-            Some(hdr_texture.format),
-            Some(TextureFormat::Depth32Float),
-            0,
-        );
-        let chunk_grid_render_pipeline = GPURenderPipeline::new::<BillboardVertex, GPUBlockFace>(
-            &device,
-            "chunk_grid",
-            &[
-                Some(&texture_atlas.bind_group_layout),
-                Some(&camera_uniform.bind_group_layout),
-                Some(&shadow_camera.bind_group_layout),
-                Some(&shadow_texture.bind_group_layout),
-                Some(&time_uniform.bind_group_layout),
-                Some(&material_texture.bind_group_layout),
-                Some(&animation_data_uniform.bind_group_layout),
-            ],
-            Some(BlendState::REPLACE),
-            Some(wgpu::Face::Back),
-            Some(hdr_texture.format),
-            Some(TextureFormat::Depth32Float),
-            4 * 3,
-        );
-
-        let gui_render_pipeline = GPURenderPipeline::new::<GUIVertex, ()>(
-            &device,
-            "gui",
-            &[
-                Some(&texture_atlas.bind_group_layout),
-                Some(&gui_camera_uniform.bind_group_layout),
-            ],
-            Some(BlendState::REPLACE),
-            Some(wgpu::Face::Back),
-            Some(config.format),
-            None,
-            0,
-        );
-
-        let damage_render_pipeline = GPURenderPipeline::new::<DamageVertex, ()>(
-            &device,
-            "damage",
-            &[Some(&camera_uniform.bind_group_layout)],
-            Some(BlendState::ALPHA_BLENDING),
-            Some(wgpu::Face::Back),
-            Some(hdr_texture.format),
-            Some(TextureFormat::Depth32Float),
-            0,
-        );
-
-        let skybox_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
-            &device,
-            "skybox",
-            &[
-                Some(&skybox_texture.bind_group_layout),
-                Some(&camera_uniform.bind_group_layout),
-            ],
-            Some(BlendState::REPLACE),
-            None,
-            Some(config.format),
-            None,
-            0,
-        );
-
-        let blur_render_pipeline = GPURenderPipeline::new::<(), ()>(
-            &device,
-            "blur",
-            &[
-                Some(&hdr_texture.bind_group_layout),
-                Some(&texel_size_uniform.bind_group_layout),
-            ],
-            Some(BlendState::ALPHA_BLENDING),
-            None,
-            Some(hdr_texture.format),
-            None,
-            0,
-        );
-
-        let hdr_render_pipeline = GPURenderPipeline::new::<(), ()>(
-            &device,
-            "postprocess",
-            &[
-                Some(&hdr_texture.bind_group_layout),
-                Some(&blur_texture.bind_group_layout),
-            ],
-            Some(BlendState::ALPHA_BLENDING),
-            None,
-            Some(config.format),
-            None,
-            0,
-        );
-        let shadow_chunk_render_pipeline = GPURenderPipeline::new::<ChunkVertex, ()>(
-            &device,
-            "chunk_shadow",
-            &[
-                Some(&texture_atlas.bind_group_layout),
-                Some(&shadow_camera.bind_group_layout),
-                Some(&time_uniform.bind_group_layout),
-            ],
-            None,
-            Some(wgpu::Face::Back),
-            None,
-            Some(TextureFormat::Depth32Float),
-            0,
-        );
-        let shadow_chunk_grid_render_pipeline =
-            GPURenderPipeline::new::<BillboardVertex, GPUBlockFace>(
-                &device,
-                "chunk_grid_shadow",
-                &[
-                    Some(&texture_atlas.bind_group_layout),
-                    Some(&shadow_camera.bind_group_layout),
-                    Some(&time_uniform.bind_group_layout),
-                ],
-                None,
-                Some(wgpu::Face::Back),
-                None,
-                Some(TextureFormat::Depth32Float),
-                4 * 3,
+                QueueKind::Main,
+                Some((&upload_semaphore, 1)),
             );
-
-        let shadow_base_render_pipeline = GPURenderPipeline::new::<Vertex, ()>(
-            &device,
-            "base_shadow",
-            &[
-                Some(&texture_atlas.bind_group_layout),
-                Some(&camera_uniform.bind_group_layout),
-            ],
-            None,
-            Some(wgpu::Face::Back),
-            None,
-            Some(TextureFormat::Depth32Float),
-            0,
-        );
-
-        let particle_render_pipeline = GPURenderPipeline::new::<BillboardVertex, GPUParticleInstance>(
-            &device,
-            "particle",
-            &[
-                Some(&texture_atlas.bind_group_layout),
-                Some(&camera_uniform.bind_group_layout),
-                Some(&shadow_camera.bind_group_layout),
-                Some(&shadow_texture.bind_group_layout),
-            ],
-            None,
-            None,
-            Some(hdr_texture.format),
-            Some(TextureFormat::Depth32Float),
-            0,
-        );
-
+            let mut upload_arena = gpu.allocate_arena(16 * 1024 * 1024);
+            let mut upload_buffer = gpu.begin_commands(QueueKind::Main);
+            upload_buffer.add_wait(&upload_semaphore, 1);
+            upload_buffer.add_signal(&upload_semaphore, 2);
+            for (i, image) in mip_levels.iter().enumerate() {
+                let image_buffer = image
+                    .pixels()
+                    .map(|rgba| rgba.0.into_iter())
+                    .flatten()
+                    .collect::<Vec<_>>();
+                upload_buffer.copy_to_texture(
+                    &texture,
+                    TextureRegion {
+                        mip_level: i as u32,
+                        ..Default::default()
+                    },
+                    upload_arena.alloc(image_buffer.as_slice()),
+                );
+            }
+            upload_buffer.submit();
+            upload_semaphore.wait(2);
+            desc_heap.set_textures(
+                0,
+                &[(
+                    &texture,
+                    TextureViewDesc {
+                        mip_count: mip_levels.len() as u8,
+                        ..Default::default()
+                    },
+                )],
+            );
+            texture
+        };
+        let skybox_texture = {
+            let upload_semaphore = gpu.create_semaphore(0);
+            let texture = gpu.create_texture(
+                TextureDesc {
+                    dimensions: [skybox.width(), skybox.height(), 1],
+                    usage: TextureUsage::SAMPLED,
+                    format: TextureFormat::ABGR8SRGB,
+                    mip_count: 1,
+                    ..Default::default()
+                },
+                QueueKind::Main,
+                Some((&upload_semaphore, 1)),
+            );
+            let mut upload_arena = gpu.allocate_arena(16 * 1024 * 1024);
+            let mut upload_buffer = gpu.begin_commands(QueueKind::Main);
+            upload_buffer.add_wait(&upload_semaphore, 1);
+            upload_buffer.add_signal(&upload_semaphore, 2);
+            let image_buffer = skybox
+                .pixels()
+                .map(|rgba| rgba.0.into_iter())
+                .flatten()
+                .collect::<Vec<_>>();
+            upload_buffer.copy_to_texture(
+                &texture,
+                TextureRegion {
+                    ..Default::default()
+                },
+                upload_arena.alloc(image_buffer.as_slice()),
+            );
+            upload_buffer.submit();
+            upload_semaphore.wait(2);
+            desc_heap.set_textures(1, &[(&texture, TextureViewDesc::default())]);
+            texture
+        };
         let mut skybox_mesh: Mesh<Vertex> = Mesh::default();
         {
             let mut skybox_vertex_consumer = skybox_mesh.consumer(Color::WHITE);
@@ -427,757 +185,666 @@ impl RenderState {
                 );
             }
         }
-        let mut billboard_mesh: Mesh<BillboardVertex> = Mesh::default();
-        {
-            billboard_mesh.add_vertex(BillboardVertex { position: [0., 0.] });
-            billboard_mesh.add_vertex(BillboardVertex { position: [1., 0.] });
-            billboard_mesh.add_vertex(BillboardVertex { position: [1., 1.] });
-            billboard_mesh.add_vertex(BillboardVertex { position: [0., 1.] });
-            billboard_mesh.add_index(2);
-            billboard_mesh.add_index(1);
-            billboard_mesh.add_index(0);
-            billboard_mesh.add_index(0);
-            billboard_mesh.add_index(3);
-            billboard_mesh.add_index(2);
-        }
-
-        Self {
-            staging_belt: StagingBelt::new(device.clone(), 4 * 1024 * 1024),
-            skybox_mesh: GPUMesh::allocate(&skybox_mesh, 0, &device),
-            billboard_mesh: GPUMesh::allocate(&billboard_mesh, 0, &device),
-            window,
-            surface,
-            queue,
-            config,
-            size,
-            base_render_pipeline,
-            chunk_render_pipeline,
-            chunk_grid_render_pipeline,
-            gui_render_pipeline,
-            hdr_render_pipeline,
-            texture_atlas,
-            camera_uniform,
-            gui_camera_uniform,
-            depth_texture,
-            hdr_texture,
-            device: Arc::new(device),
-            damage_render_pipeline,
-            skybox_render_pipeline,
-            skybox_texture,
-            texel_size_uniform,
-            blur_render_pipeline,
-            blur_texture,
-            shadow_camera,
-            shadow_texture,
-            shadow_chunk_render_pipeline,
-            shadow_base_render_pipeline,
-            shadow_chunk_grid_render_pipeline,
-            animation_time: 0.,
-            material_texture,
-            time_uniform,
-            damage_gpu_mesh: GPUMesh::empty(),
-            entity_gpu_mesh: GPUMesh::empty(),
-            gui_gpu_mesh: GPUMesh::empty(),
-            viewmodel_gpu_mesh: GPUMesh::empty(),
-            local_player_gpu_mesh: GPUMesh::empty(),
-            particle_gpu_mesh: GPUMesh::empty(),
-            animation_data_uniform,
-            particle_render_pipeline,
-        }
-    }
-
-    pub fn window(&self) -> &Window {
-        &self.window
-    }
-    pub fn set_cursor_visible(&self, visible: bool) {
-        self.window().set_cursor_visible(visible);
-        let _ = self.window().set_cursor_grab(if visible {
-            CursorGrabMode::None
-        } else {
-            CursorGrabMode::Confined
-        });
-        if visible {
-            let _ = self.window().set_cursor_position(PhysicalPosition::new(
-                self.size.width / 2,
-                self.size.height / 2,
-            ));
-        }
-    }
-    pub fn size(&self) -> PhysicalSize<u32> {
-        self.size
-    }
-
-    pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
-            self.depth_texture
-                .resize((new_size.width, new_size.height), &self.device);
-            self.hdr_texture
-                .resize((new_size.width, new_size.height), &self.device);
-            self.texel_size_uniform.write(
-                &self.queue,
-                &[1. / new_size.width as f32, 1. / new_size.height as f32],
+        let mut persistent_arena = gpu.allocate_arena(1024 * 1024);
+        let skybox_buffer = (
+            persistent_arena.alloc(&skybox_mesh.vertices),
+            persistent_arena.alloc(&skybox_mesh.indices),
+        );
+        let quad_index_buffer = persistent_arena.alloc::<u16>(&[2, 1, 0, 0, 3, 2]);
+        let per_frame = std::array::from_fn(|i| {
+            let depth_buffer = gpu.create_texture(
+                TextureDesc {
+                    dimensions: [128, 128, 1],
+                    format: TextureFormat::D32Float,
+                    mip_count: 1,
+                    layer_count: 1,
+                    sample_count: 1,
+                    usage: TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+                    ..Default::default()
+                },
+                QueueKind::Main,
+                None,
             );
+            let hdr_buffer = gpu.create_texture(
+                TextureDesc {
+                    dimensions: [128, 128, 1],
+                    format: TextureFormat::RGBA16Float,
+                    mip_count: 1,
+                    layer_count: 1,
+                    sample_count: 1,
+                    usage: TextureUsage::COLOR_ATTACHMENT | TextureUsage::SAMPLED,
+                    ..Default::default()
+                },
+                QueueKind::Main,
+                None,
+            );
+            let shadow_buffer = gpu.create_texture(
+                TextureDesc {
+                    dimensions: [2048 * 2, 2048 * 2, 1],
+                    format: TextureFormat::D32Float,
+                    mip_count: 1,
+                    layer_count: 1,
+                    sample_count: 1,
+                    usage: TextureUsage::DEPTH_STENCIL_ATTACHMENT | TextureUsage::SAMPLED,
+                    ..Default::default()
+                },
+                QueueKind::Main,
+                None,
+            );
+            desc_heap.set_textures(5 + i, &[(&shadow_buffer, TextureViewDesc::default())]);
+            PerFrameRenderData {
+                depth_buffer,
+                hdr_buffer,
+                shadow_buffer,
+            }
+        });
+        gpu.queue_wait_idle(QueueKind::Main);
+        RenderState {
+            gpu: gpu.clone(),
+            time: 0.,
+            persistent_arena,
+            quad_index_buffer,
+            texture_atlas,
+            per_frame,
+            buffer_graveyard: Vec::new(),
+            skybox: skybox_texture,
+            skybox_buffer,
+            shaders: ShaderLoader {
+                gpu,
+                shaders: HashMap::new(),
+            },
         }
     }
-
+    pub fn tick(&mut self, engine: &mut GameEngineInterface) {
+        if engine.resized {
+            for (i, per_frame) in self.per_frame.iter_mut().enumerate() {
+                let depth_buffer = self.gpu.create_texture(
+                    TextureDesc {
+                        dimensions: [engine.width, engine.height, 1],
+                        format: TextureFormat::D32Float,
+                        mip_count: 1,
+                        layer_count: 1,
+                        sample_count: 1,
+                        usage: TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+                        ..Default::default()
+                    },
+                    QueueKind::Main,
+                    None,
+                );
+                per_frame.depth_buffer = depth_buffer;
+                let hdr_buffer = self.gpu.create_texture(
+                    TextureDesc {
+                        dimensions: [engine.width, engine.height, 1],
+                        format: TextureFormat::RGBA16Float,
+                        mip_count: 1,
+                        layer_count: 1,
+                        sample_count: 1,
+                        usage: TextureUsage::COLOR_ATTACHMENT | TextureUsage::SAMPLED,
+                        ..Default::default()
+                    },
+                    QueueKind::Main,
+                    None,
+                );
+                per_frame.hdr_buffer = hdr_buffer;
+                engine.desc_heap.set_textures(
+                    2 + i,
+                    &[(&per_frame.hdr_buffer, TextureViewDesc::default())],
+                );
+            }
+            self.gpu.queue_wait_idle(QueueKind::Main);
+        }
+        self.buffer_graveyard.retain_mut(|(_, i)| {
+            if *i == 0 {
+                return false;
+            }
+            *i -= 1;
+            true
+        });
+    }
     pub fn render(
         &mut self,
+        engine: &mut GameEngineInterface,
         game: &mut ClientGame,
         entity_mesh: BaseMesh,
-        local_player_mesh: BaseMesh,
+        _local_player_mesh: BaseMesh,
         gui_mesh: GUIMesh,
         viewmodel_mesh: BaseMesh,
         damage_mesh: DamageMesh,
         particles: Vec<GPUParticleInstance>,
         frustum: &Frustum,
-    ) -> Result<(), SurfaceError> {
-        let should_update_shadowmap = true;
+    ) {
+        let per_frame = &mut self.per_frame[engine.frame_flight_index as usize];
+        while let Ok((chunk, mesh, detail_mesh, version, lod_only_faces)) =
+            game.chunk_mesh_channels.1.try_recv()
+        {
+            let Some(chunk) = game.chunks.get_mut(&chunk) else {
+                continue;
+            };
+            chunk.scheduled = false;
+            if version
+                < chunk
+                    .mesh_build_data
+                    .version
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                if !chunk.modified {
+                    chunk.modified = true;
+                    game.modified_chunks.push(ModifiedChunkEntry {
+                        distance: game
+                            .player_position
+                            .to_chunk_pos()
+                            .distance_squared(chunk.position)
+                            as usize,
+                        chunk: chunk.position,
+                    });
+                }
+            }
+            let grid_buffer = if mesh.vertices.is_empty() {
+                None
+            } else {
+                let buffer = self.gpu.allocate_buffer(
+                    Layout::array::<GPUBlockFace>(mesh.vertices.len()).unwrap(),
+                    MemoryKind::GPU,
+                );
+                let vertices = engine.frame_arena.alloc(&mesh.vertices);
 
-        let ps = profiler::profiler_scope("load uniforms");
-        self.time_uniform.write(&self.queue, &self.animation_time);
+                engine
+                    .commands
+                    .copy(vertices, buffer.gpu_pointer().slice(0, vertices.size()));
+                Some(buffer)
+                //Some(self.gpu.allocate_buffer_with(&mesh.vertices))
+            };
+            let (detail_buffer, detail_index_offset, detail_index_count) =
+                if detail_mesh.vertices.is_empty() {
+                    (None, 0, 0)
+                } else {
+                    let mut data = Vec::new();
+                    data.extend_from_slice(bytemuck::cast_slice::<_, u8>(&detail_mesh.vertices));
+                    let indices_start = data.len();
+                    data.extend_from_slice(bytemuck::cast_slice::<_, u8>(&detail_mesh.indices)); //todo: maybe alignment broken?
+                    let buffer = self
+                        .gpu
+                        .allocate_buffer(Layout::array::<u8>(data.len()).unwrap(), MemoryKind::GPU);
+                    let data_gpu = engine.frame_arena.alloc(&data);
 
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.load_camera_proj_matrix(
+                    engine
+                        .commands
+                        .copy(data_gpu, buffer.gpu_pointer().slice(0, data.len() as u64));
+                    (
+                        Some(buffer),
+                        indices_start as u32,
+                        ((data.len() - indices_start) / 4) as u32,
+                    )
+                };
+            if let Some(previous) = chunk.render_data.take() {
+                if let Some(grid_buffer) = previous.grid_buffer {
+                    self.buffer_graveyard.push((grid_buffer, 5));
+                }
+                if let Some(detail_buffer) = previous.detail_buffer {
+                    self.buffer_graveyard.push((detail_buffer, 5));
+                }
+            }
+            chunk.render_data = Some(ChunkGPUData {
+                grid_buffer,
+                grid_count: mesh.vertices.len(),
+                lod_only_faces,
+                detail_buffer,
+                detail_index_count,
+                detail_index_offset,
+            });
+        }
+        let entity_vertices = engine.frame_arena.alloc(&entity_mesh.vertices);
+        let entity_indices = engine.frame_arena.alloc(&entity_mesh.indices);
+        let mut lcu = CameraUniform::new();
+        lcu.load_light(game.camera.position);
+        #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+        #[repr(C)]
+        struct LightData {
+            matrix: [[f32; 4]; 4],
+            direction: [f32; 3],
+            shadow_index: u32,
+        }
+        let light_data = engine.frame_arena.alloc(&[LightData {
+            matrix: lcu.view_proj,
+            direction: lcu.direction,
+            shadow_index: 5 + engine.frame_flight_index,
+        }]);
+        {
+            let mut render_pass = engine.commands.begin_render(RenderPassDesc {
+                color_attachments: &[],
+                depth_attachment: Some(RenderPassAttachment {
+                    load: RenderPassLoadOp::Clear(1.),
+                    store: simple_gpu::RenderPassStoreOp::Store,
+                    resolve: None,
+                    texture: &per_frame.shadow_buffer,
+                    view: TextureViewDesc::default(),
+                }),
+                ..Default::default()
+            });
+
+            render_pass.set_shaders(self.shaders.get_shader("chunk_detail_shadow"));
+            render_pass.set_blend(0, Some(BASE_BLEND));
+            render_pass.set_culling(GPUCullMode::KeepCCW);
+            render_pass.set_depth_test(Some(GPUDepthTestConfig::default()));
+            #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+            #[repr(C)]
+            struct ChunkDataEntry {
+                chunk_position: [f32; 3],
+                _pad: f32,
+                pointer: u64,
+            }
+            let mut indirect_commands = Vec::new();
+            let mut buffer_pointers = Vec::new();
+            for chunk in game.chunks.values() {
+                if let Some(render_data) = &chunk.render_data {
+                    let chunk_pos = chunk.position.to_block_pos().to_pos();
+                    let is_near = chunk
+                        .position
+                        .with(Axis::Y, 0)
+                        .distance_squared(game.player_position.to_chunk_pos().with(Axis::Y, 0))
+                        <= 3;
+                    let is_far = chunk
+                        .position
+                        .with(Axis::Y, 0)
+                        .distance_squared(game.player_position.to_chunk_pos().with(Axis::Y, 0))
+                        >= 6_i16.pow(2);
+                    if let Some(grid_buffer) = &render_data.grid_buffer
+                        && !is_far
+                    {
+                        indirect_commands.push(DrawIndexedIndirectCommand {
+                            first_index: 0,
+                            first_instance: 0,
+                            index_count: 6,
+                            instance_count: render_data.grid_count as u32
+                                - if is_near {
+                                    render_data.lod_only_faces as u32
+                                } else {
+                                    0
+                                },
+                            vertex_offset: 0,
+                        });
+                        buffer_pointers.push(ChunkDataEntry {
+                            pointer: grid_buffer.gpu(),
+                            chunk_position: chunk_pos.into_array(),
+                            _pad: 0.,
+                        });
+                    }
+                    if let Some(detail_buffer) = &render_data.detail_buffer
+                        && is_near
+                    {
+                        render_pass.draw(
+                            BaseRenderData {
+                                matrix: lcu.view_proj,
+                                vertices: detail_buffer.gpu(),
+                                light: light_data.gpu(),
+                                time: self.time,
+                                _pad: 0.,
+                            },
+                            render_data.detail_index_count,
+                            1,
+                            Some((
+                                detail_buffer.gpu_pointer().slice(
+                                    render_data.detail_index_offset as u64,
+                                    render_data.detail_index_count as u64,
+                                ),
+                                IndexBufferFormat::U32,
+                            )),
+                        );
+                    }
+                }
+            }
+            render_pass.set_shaders(self.shaders.get_shader("chunk_grid_shadow"));
+            render_pass.draw_indirect(
+                BaseRenderData {
+                    matrix: lcu.view_proj,
+                    vertices: engine.frame_arena.alloc(&buffer_pointers).gpu(),
+                    light: light_data.gpu(),
+                    time: self.time,
+                    _pad: 0.,
+                },
+                engine.frame_arena.alloc(&indirect_commands),
+                indirect_commands.len() as u32,
+                Some((self.quad_index_buffer, IndexBufferFormat::U16)),
+            );
+            {
+                render_pass.set_shaders(self.shaders.get_shader("entity_shadow"));
+                render_pass.draw(
+                    BaseRenderData {
+                        matrix: lcu.view_proj,
+                        vertices: entity_vertices.gpu(),
+                        light: light_data.gpu(),
+                        time: self.time,
+                        _pad: 0.,
+                    },
+                    entity_mesh.indices.len() as u32,
+                    1,
+                    Some((entity_indices, IndexBufferFormat::U32)),
+                );
+            }
+        }
+        engine.commands.texture_barrier(
+            simple_gpu::GPUStage::All,
+            simple_gpu::GPUStage::All,
+            &per_frame.shadow_buffer,
+        );
+        let mut cu = CameraUniform::new();
+        cu.load_camera_proj_matrix(
             &game.camera,
-            self.size.width as f32 / self.size.height as f32,
+            1. / (engine.height as f32 / engine.width as f32),
             90.,
             game.get_player_data(),
         );
-        self.camera_uniform.write(&self.queue, &camera_uniform);
-
-        camera_uniform.load_gui_matrix(self.size.height as f32 / self.size.width as f32);
-        self.gui_camera_uniform.write(&self.queue, &camera_uniform);
-
-        if should_update_shadowmap {
-            camera_uniform.load_light(game.camera.position);
-            self.shadow_camera.write(&self.queue, &camera_uniform);
-        }
-        ps.end();
-
-        let ps = profiler::profiler_scope("render mesh alloc");
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Upload Encoder"),
+        {
+            let mut render_pass = engine.commands.begin_render(RenderPassDesc {
+                color_attachments: &[RenderPassAttachment {
+                    load: RenderPassLoadOp::Clear([0., 0., 0., 0.]),
+                    store: simple_gpu::RenderPassStoreOp::Store,
+                    texture: &per_frame.hdr_buffer,
+                    view: TextureViewDesc::default(),
+                    resolve: None,
+                }],
+                depth_attachment: Some(RenderPassAttachment {
+                    load: RenderPassLoadOp::Clear(1.),
+                    store: simple_gpu::RenderPassStoreOp::Store,
+                    resolve: None,
+                    texture: &per_frame.depth_buffer,
+                    view: TextureViewDesc::default(),
+                }),
+                ..Default::default()
             });
 
-        self.entity_gpu_mesh.upload(
-            &entity_mesh,
-            &self.device,
-            &mut self.staging_belt,
-            &mut encoder,
-        );
-        self.gui_gpu_mesh.upload(
-            &gui_mesh,
-            &self.device,
-            &mut self.staging_belt,
-            &mut encoder,
-        );
-        self.viewmodel_gpu_mesh.upload(
-            &viewmodel_mesh,
-            &self.device,
-            &mut self.staging_belt,
-            &mut encoder,
-        );
-        self.damage_gpu_mesh.upload(
-            &damage_mesh,
-            &self.device,
-            &mut self.staging_belt,
-            &mut encoder,
-        );
-        self.local_player_gpu_mesh.upload(
-            &local_player_mesh,
-            &self.device,
-            &mut self.staging_belt,
-            &mut encoder,
-        );
-        let particles_count = particles.len();
-        self.particle_gpu_mesh.upload(
-            &Mesh {
-                vertices: particles,
-                indices: Vec::new(),
-            },
-            &self.device,
-            &mut self.staging_belt,
-            &mut encoder,
-        );
-        let ps2 = profiler::profiler_scope("chunk download");
-        let mut frame_load_limit = 0;
-        while let Ok((position, buffer, buffer_high_res, version, lod_only_faces)) =
-            game.chunk_mesh_channels.1.try_recv()
-        {
-            game.chunk_mesh_queue_size -= 1;
-            if let Some(chunk) = game.chunks.get_mut(&position) {
-                chunk.lod_only_faces = lod_only_faces;
-                chunk.scheduled = false;
-
-                chunk.grid_count = buffer.vertices.len();
-                chunk.gpu_mesh_grid = game.chunk_buffer_pool.allocate_or_reuse(
-                    &buffer,
-                    chunk.gpu_mesh_grid.take(),
-                    &mut self.staging_belt,
-                    &mut encoder,
-                    &self.device,
-                );
-                chunk.detail_mesh = Some(buffer_high_res);
-
-                if let Some(render_data) = &chunk.gpu_mesh_grid.render_data {
-                    frame_load_limit += render_data.memory_size();
-                }
-                /*if let Some(render_data) = &chunk.gpu_mesh_detail.render_data {
-                    frame_load_limit += render_data.memory_size();
-                }*/
-
-                if version
-                    < chunk
-                        .mesh_build_data
-                        .version
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    if !chunk.modified {
-                        chunk.modified = true;
-
-                        game.modified_chunks.push(ModifiedChunkEntry {
-                            distance: game
-                                .player_position
-                                .to_chunk_pos()
-                                .distance_squared(chunk.position)
-                                as usize,
-                            chunk: chunk.position,
+            render_pass.set_shaders(self.shaders.get_shader("chunk_detail"));
+            render_pass.set_blend(0, Some(BASE_BLEND));
+            render_pass.set_culling(GPUCullMode::KeepCCW);
+            render_pass.set_depth_test(Some(GPUDepthTestConfig::default()));
+            #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+            #[repr(C)]
+            struct ChunkDataEntry {
+                chunk_position: [f32; 3],
+                _pad: f32,
+                pointer: u64,
+            }
+            let mut indirect_commands = Vec::new();
+            let mut buffer_pointers = Vec::new();
+            for chunk in game.chunks.values() {
+                if let Some(render_data) = &chunk.render_data {
+                    let chunk_pos = chunk.position.to_block_pos().to_pos();
+                    if !frustum.intersects_aabb(
+                        &AABB {
+                            min: Pos::all(0.),
+                            max: Pos::all(CHUNK_SIZE as f32),
+                        }
+                        .offset(chunk_pos),
+                    ) {
+                        continue;
+                    }
+                    let is_far = chunk
+                        .position
+                        .with(Axis::Y, 0)
+                        .distance_squared(game.player_position.to_chunk_pos().with(Axis::Y, 0))
+                        >= 6_i16.pow(2);
+                    if let Some(grid_buffer) = &render_data.grid_buffer {
+                        indirect_commands.push(DrawIndexedIndirectCommand {
+                            first_index: 0,
+                            first_instance: 0,
+                            index_count: 6,
+                            instance_count: render_data.grid_count as u32
+                                - if is_far {
+                                    0
+                                } else {
+                                    render_data.lod_only_faces as u32
+                                },
+                            vertex_offset: 0,
+                        });
+                        buffer_pointers.push(ChunkDataEntry {
+                            pointer: grid_buffer.gpu(),
+                            chunk_position: chunk_pos.into_array(),
+                            _pad: 0.,
                         });
                     }
-                }
-                if frame_load_limit > (0.25 * 1024. * 1024.) as usize && true {
-                    break;
-                }
-            }
-        }
-        let camera_chunk_position = game.camera.position.to_chunk_pos();
-        for (chunk_position, chunk) in &mut game.chunks {
-            /*if frustum.intersects_aabb(
-                &AABB {
-                    min: Pos::all(0.),
-                    max: Pos::all(CHUNK_SIZE as f32),
-                }
-                .offset(chunk.position.to_block_pos().to_pos()),
-            ) {*/
-            if chunk_position.distance_squared(camera_chunk_position) <= 5_i16.pow(2)
-                && chunk.detail_mesh.is_some()
-            {
-                chunk.gpu_mesh_detail = game.chunk_buffer_pool.allocate_or_reuse(
-                    &chunk.detail_mesh.take().unwrap(),
-                    chunk.gpu_mesh_detail.take(),
-                    &mut self.staging_belt,
-                    &mut encoder,
-                    &self.device,
-                );
-            }
-            //}
-        }
-
-        ps2.end();
-        self.staging_belt.finish();
-        self.queue.submit(iter::once(encoder.finish()));
-        ps.end();
-        self.staging_belt.recall();
-
-        let ps = profiler::profiler_scope("render texture");
-        let output = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
-                ps.end();
-                return Err(SurfaceError::Recreate);
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                return Err(SurfaceError::Crash);
-            }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Validation
-            | wgpu::CurrentSurfaceTexture::Occluded => {
-                ps.end();
-                return Ok(());
-            }
-        };
-        ps.end();
-
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
-        let ps = profiler::profiler_scope("render shadow");
-        if should_update_shadowmap {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Shadow Render Pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.shadow_chunk_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.shadow_camera.bind_group, &[]);
-            render_pass.set_bind_group(2, &self.time_uniform.bind_group, &[]);
-
-            for chunk_position in (AABB {
-                min: ChunkPos::all(-5),
-                max: ChunkPos::all(5),
-            })
-            .offset(camera_chunk_position)
-            {
-                if let Some(chunk) = game.chunks.get(&chunk_position) {
-                    //chunk.gpu_mesh_grid.draw(&mut render_pass);
-                    if chunk_position.distance_squared(camera_chunk_position) <= 4_i16.pow(2) {
-                        chunk.gpu_mesh_detail.draw(&mut render_pass);
-                    }
-                }
-            }
-            render_pass.set_pipeline(&self.shadow_chunk_grid_render_pipeline.render_pipeline);
-            self.billboard_mesh
-                .bind_vertex_index(&mut render_pass)
-                .unwrap();
-            for chunk_position in (AABB {
-                min: ChunkPos::all(-5),
-                max: ChunkPos::all(5),
-            })
-            .offset(camera_chunk_position)
-            {
-                if let Some(chunk) = game.chunks.get(&chunk_position) {
-                    if let Some(grid_buffer) = chunk.gpu_mesh_grid.buffer.as_ref() {
-                        let chunk_position = chunk.position.to_block_pos().to_pos().into_array();
-                        render_pass
-                            .set_immediates(0, bytemuck::cast_slice(chunk_position.as_slice()));
-                        render_pass.set_vertex_buffer(1, grid_buffer.slice(..));
-                        let render_count = chunk.grid_count as u32 - chunk.lod_only_faces as u32;
-                        if render_count == 0 {
-                            continue;
-                        }
-                        render_pass.draw_indexed(
-                            0..self
-                                .billboard_mesh
-                                .render_data
-                                .as_ref()
-                                .unwrap()
-                                .index_count,
-                            0,
-                            0..render_count,
+                    if let Some(detail_buffer) = &render_data.detail_buffer
+                        && !is_far
+                    {
+                        render_pass.draw(
+                            BaseRenderData {
+                                matrix: cu.view_proj,
+                                vertices: detail_buffer.gpu(),
+                                light: light_data.gpu(),
+                                time: self.time,
+                                _pad: 0.,
+                            },
+                            render_data.detail_index_count,
+                            1,
+                            Some((
+                                detail_buffer.gpu_pointer().slice(
+                                    render_data.detail_index_offset as u64,
+                                    render_data.detail_index_count as u64,
+                                ),
+                                IndexBufferFormat::U32,
+                            )),
                         );
                     }
                 }
             }
-
-            render_pass.set_pipeline(&self.shadow_base_render_pipeline.render_pipeline);
-
-            self.entity_gpu_mesh.draw(&mut render_pass);
-            self.local_player_gpu_mesh.draw(&mut render_pass);
-        }
-        ps.end();
-        if true {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Skybox Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+            render_pass.set_shaders(self.shaders.get_shader("chunk_grid"));
+            render_pass.draw_indirect(
+                BaseRenderData {
+                    matrix: cu.view_proj,
+                    vertices: engine.frame_arena.alloc(&buffer_pointers).gpu(),
+                    light: light_data.gpu(),
+                    time: self.time,
+                    _pad: 0.,
+                },
+                engine.frame_arena.alloc(&indirect_commands),
+                indirect_commands.len() as u32,
+                Some((self.quad_index_buffer, IndexBufferFormat::U16)),
+            );
+            {
+                render_pass.set_shaders(self.shaders.get_shader("entity"));
+                render_pass.draw(
+                    BaseRenderData {
+                        matrix: cu.view_proj,
+                        vertices: entity_vertices.gpu(),
+                        light: light_data.gpu(),
+                        time: self.time,
+                        _pad: 0.,
                     },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.skybox_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.skybox_texture.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
-            self.skybox_mesh.draw(&mut render_pass);
-        }
-        let ps = profiler::profiler_scope("render base");
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Base Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_texture.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.,
-                            g: 0.,
-                            b: 0.,
-                            a: 0.,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
-            render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
-            render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
-            render_pass.set_bind_group(4, &self.time_uniform.bind_group, &[]);
-            render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
-            render_pass.set_bind_group(6, &self.animation_data_uniform.bind_group, &[]);
-
-            render_pass.set_pipeline(&self.chunk_grid_render_pipeline.render_pipeline);
-            self.billboard_mesh
-                .bind_vertex_index(&mut render_pass)
-                .unwrap();
-            for (chunk_position, chunk) in &mut game.chunks {
-                chunk.last_visible = frustum.intersects_aabb(
-                    &AABB {
-                        min: Pos::all(0.),
-                        max: Pos::all(CHUNK_SIZE as f32),
-                    }
-                    .offset(chunk.position.to_block_pos().to_pos()),
+                    entity_mesh.indices.len() as u32,
+                    1,
+                    Some((entity_indices, IndexBufferFormat::U32)),
                 );
-                if chunk.last_visible {
-                    if let Some(grid_buffer) = chunk.gpu_mesh_grid.buffer.as_ref() {
-                        let is_near =
-                            chunk_position.distance_squared(camera_chunk_position) <= 5_i16.pow(2);
-                        let chunk_position = chunk.position.to_block_pos().to_pos().into_array();
-                        render_pass
-                            .set_immediates(0, bytemuck::cast_slice(chunk_position.as_slice()));
-                        render_pass.set_vertex_buffer(1, grid_buffer.slice(..));
-                        let render_count = chunk.grid_count as u32
-                            - if is_near {
-                                chunk.lod_only_faces as u32
-                            } else {
-                                0
-                            };
-                        if render_count == 0 {
-                            continue;
-                        }
-                        render_pass.draw_indexed(
-                            0..self
-                                .billboard_mesh
-                                .render_data
-                                .as_ref()
-                                .unwrap()
-                                .index_count,
-                            0,
-                            0..render_count,
-                        );
-                    }
-                }
             }
-
-            render_pass.set_pipeline(&self.chunk_render_pipeline.render_pipeline);
-            for (chunk_position, chunk) in &game.chunks {
-                if chunk.last_visible {
-                    if chunk_position.distance_squared(camera_chunk_position) <= 5_i16.pow(2) {
-                        chunk.gpu_mesh_detail.draw(&mut render_pass);
-                    }
-                }
+            if !damage_mesh.vertices.is_empty() {
+                let damage_vertices = engine.frame_arena.alloc(&damage_mesh.vertices);
+                let damage_indices = engine.frame_arena.alloc(&damage_mesh.indices);
+                render_pass.set_shaders(self.shaders.get_shader("damage"));
+                render_pass.set_depth_test(Some(GPUDepthTestConfig {
+                    compare: simple_gpu::GPUCompareOp::LessEqual,
+                    ..Default::default()
+                }));
+                render_pass.draw(
+                    BaseRenderData {
+                        matrix: cu.view_proj,
+                        vertices: damage_vertices.gpu(),
+                        light: light_data.gpu(),
+                        time: self.time,
+                        _pad: 0.,
+                    },
+                    damage_mesh.indices.len() as u32,
+                    1,
+                    Some((damage_indices, IndexBufferFormat::U32)),
+                );
             }
+            if !particles.is_empty() {
+                let particle_instances = engine.frame_arena.alloc(&particles);
+                render_pass.set_shaders(self.shaders.get_shader("particle"));
+                #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+                #[repr(C)]
+                struct ParticleRenderData {
+                    matrix: [[f32; 4]; 4],
+                    pointer: u64,
+                    camera_up: [f32; 3],
+                    camera_right: [f32; 3],
+                }
 
-            render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
-            self.entity_gpu_mesh.draw(&mut render_pass);
-        }
-        if !damage_mesh.vertices.is_empty() {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Damage Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_texture.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+                render_pass.draw(
+                    ParticleRenderData {
+                        matrix: cu.view_proj,
+                        pointer: particle_instances.gpu(),
+                        camera_right: [cu.view[0][0], cu.view[1][0], cu.view[2][0]],
+                        camera_up: [cu.view[0][1], cu.view[1][1], cu.view[2][1]],
                     },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.damage_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_uniform.bind_group, &[]);
-            self.damage_gpu_mesh.draw(&mut render_pass);
-        }
-        if particles_count > 0 {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Particle Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_texture.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.particle_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
-            render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
-            render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
-            render_pass
-                .set_vertex_buffer(1, self.particle_gpu_mesh.buffer.as_ref().unwrap().slice(..));
-            self.billboard_mesh
-                .draw_instanced(&mut render_pass, particles_count as u32);
+                    6,
+                    particles.len() as u32,
+                    Some((self.quad_index_buffer, IndexBufferFormat::U16)),
+                );
+            }
         }
         if !viewmodel_mesh.vertices.is_empty() {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ViewModel Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_texture.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
+            let mut render_pass = engine.commands.begin_render(RenderPassDesc {
+                color_attachments: &[RenderPassAttachment {
+                    load: RenderPassLoadOp::Load,
+                    store: simple_gpu::RenderPassStoreOp::Store,
+                    texture: &per_frame.hdr_buffer,
+                    view: TextureViewDesc::default(),
+                    resolve: None,
+                }],
+                depth_attachment: Some(RenderPassAttachment {
+                    load: RenderPassLoadOp::Clear(1.),
+                    store: simple_gpu::RenderPassStoreOp::Store,
+                    resolve: None,
+                    texture: &per_frame.depth_buffer,
+                    view: TextureViewDesc::default(),
                 }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
+                ..Default::default()
             });
-            render_pass.set_pipeline(&self.base_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_uniform.bind_group, &[]);
-            render_pass.set_bind_group(2, &self.shadow_camera.bind_group, &[]);
-            render_pass.set_bind_group(3, &self.shadow_texture.bind_group, &[]);
-            render_pass.set_bind_group(4, &self.time_uniform.bind_group, &[]);
-            render_pass.set_bind_group(5, &self.material_texture.bind_group, &[]);
-            render_pass.set_bind_group(6, &self.animation_data_uniform.bind_group, &[]);
-
-            self.viewmodel_gpu_mesh.draw(&mut render_pass);
+            let viewmodel_vertices = engine.frame_arena.alloc(&viewmodel_mesh.vertices);
+            let viewmodel_indices = engine.frame_arena.alloc(&viewmodel_mesh.indices);
+            render_pass.set_shaders(self.shaders.get_shader("entity"));
+            render_pass.set_culling(GPUCullMode::KeepCCW);
+            render_pass.set_depth_test(Some(GPUDepthTestConfig::default()));
+            render_pass.draw(
+                BaseRenderData {
+                    matrix: cu.view_proj,
+                    vertices: viewmodel_vertices.gpu(),
+                    light: light_data.gpu(),
+                    time: self.time,
+                    _pad: 0.,
+                },
+                viewmodel_mesh.indices.len() as u32,
+                1,
+                Some((viewmodel_indices, IndexBufferFormat::U32)),
+            );
         }
-        ps.end();
-        if false {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blur Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.blur_texture.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.,
-                            g: 0.,
-                            b: 0.,
-                            a: 0.,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.blur_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.hdr_texture.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.texel_size_uniform.bind_group, &[]);
-
-            render_pass.draw(0..3, 0..1);
-        }
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("HDR Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.hdr_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.hdr_texture.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.blur_texture.bind_group, &[]);
-
-            render_pass.draw(0..3, 0..1);
-        }
-
-        if !gui_mesh.vertices.is_empty() {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("GUI Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.gui_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.gui_camera_uniform.bind_group, &[]);
-
-            self.gui_gpu_mesh.draw(&mut render_pass);
-        }
-        let ps = profiler::profiler_scope("render queue");
-        self.queue.submit(iter::once(encoder.finish()));
-        output.present();
-        ps.end();
-
-        Ok(())
-    }
-    pub fn render_gui(&mut self, gui_mesh: GUIMesh) -> Result<(), SurfaceError> {
-        let ps = profiler::profiler_scope("load uniforms");
-        self.time_uniform.write(&self.queue, &self.animation_time);
-
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.load_gui_matrix(self.size.height as f32 / self.size.width as f32);
-        self.gui_camera_uniform.write(&self.queue, &camera_uniform);
-        ps.end();
-
-        let ps = profiler::profiler_scope("render mesh alloc");
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Upload Encoder"),
-            });
-
-        self.gui_gpu_mesh.upload(
-            &gui_mesh,
-            &self.device,
-            &mut self.staging_belt,
-            &mut encoder,
+        engine.commands.texture_barrier(
+            simple_gpu::GPUStage::All,
+            simple_gpu::GPUStage::All,
+            &per_frame.hdr_buffer,
         );
-        self.staging_belt.finish();
-        self.queue.submit(iter::once(encoder.finish()));
-        ps.end();
-        self.staging_belt.recall();
-
-        let ps = profiler::profiler_scope("render texture");
-        let output = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
-                ps.end();
-                return Err(SurfaceError::Recreate);
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                return Err(SurfaceError::Crash);
-            }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Validation
-            | wgpu::CurrentSurfaceTexture::Occluded => {
-                ps.end();
-                return Ok(());
-            }
-        };
-        ps.end();
-
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+        {
+            let mut render_pass = engine.commands.begin_render(RenderPassDesc {
+                color_attachments: &[RenderPassAttachment {
+                    load: RenderPassLoadOp::Clear([0., 0., 0., 1.]),
+                    store: simple_gpu::RenderPassStoreOp::Store,
+                    texture: &engine.framebuffer,
+                    view: TextureViewDesc::default(),
+                    resolve: None,
+                }],
+                ..Default::default()
             });
+            render_pass.set_blend(0, Some(BASE_BLEND));
+            render_pass.set_shaders(self.shaders.get_shader("skybox"));
+            render_pass.draw(
+                BaseRenderData {
+                    matrix: cu.view_proj,
+                    vertices: self.skybox_buffer.0.gpu(),
+                    light: light_data.gpu(),
+                    time: self.time,
+                    _pad: 0.,
+                },
+                6 * 6,
+                1,
+                Some((self.skybox_buffer.1, IndexBufferFormat::U32)),
+            );
 
-        if !gui_mesh.vertices.is_empty() {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("GUI Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.,
-                            g: 0.,
-                            b: 0.,
-                            a: 1.,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            render_pass.set_pipeline(&self.gui_render_pipeline.render_pipeline);
-            render_pass.set_bind_group(0, &self.texture_atlas.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.gui_camera_uniform.bind_group, &[]);
-
-            self.gui_gpu_mesh.draw(&mut render_pass);
+            render_pass.set_shaders(self.shaders.get_shader("postprocess"));
+            render_pass.draw(
+                2 + engine.frame_flight_index,
+                6,
+                1,
+                Some((self.quad_index_buffer, IndexBufferFormat::U16)),
+            );
         }
-        let ps = profiler::profiler_scope("render queue");
-        self.queue.submit(iter::once(encoder.finish()));
-        output.present();
-        ps.end();
 
-        Ok(())
+        self.render_gui(engine, gui_mesh, false);
     }
+    pub fn render_gui(&mut self, engine: &mut GameEngineInterface, gui_mesh: GUIMesh, clear: bool) {
+        let indices = engine.frame_arena.alloc(&gui_mesh.indices);
+        let vertices = engine.frame_arena.alloc(&gui_mesh.vertices);
+        let mut render_pass = engine.commands.begin_render(RenderPassDesc {
+            color_attachments: &[RenderPassAttachment {
+                load: if clear {
+                    RenderPassLoadOp::Clear([0., 0., 0., 1.])
+                } else {
+                    RenderPassLoadOp::Load
+                },
+                store: simple_gpu::RenderPassStoreOp::Store,
+                texture: &engine.framebuffer,
+                view: TextureViewDesc::default(),
+                resolve: None,
+            }],
+            ..Default::default()
+        });
+        render_pass.set_shaders(self.shaders.get_shader("gui"));
+        render_pass.set_blend(0, Some(BASE_BLEND));
+        let mut cu = CameraUniform::new();
+        cu.load_gui_matrix(engine.height as f32 / engine.width as f32);
+        render_pass.draw(
+            BaseRenderData {
+                matrix: cu.view_proj,
+                vertices: vertices.gpu(),
+                light: 0,
+                time: self.time,
+                _pad: 0.,
+            },
+            gui_mesh.indices.len() as u32,
+            1,
+            Some((indices, IndexBufferFormat::U32)),
+        );
+    }
+}
+
+struct ShaderLoader {
+    gpu: Arc<GPU>,
+    shaders: HashMap<String, GraphicsShaders>,
+}
+static SHADER_DIR: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/shaders/spirv");
+impl ShaderLoader {
+    fn get_shader(&mut self, shader: &str) -> &GraphicsShaders {
+        self.shaders.entry(shader.to_string()).or_insert_with(|| {
+            let buffer = SHADER_DIR
+                .get_file(&format!("{}.spv", shader))
+                .expect(shader)
+                .contents();
+            self.gpu.create_shaders_graphic_spirv(
+                buffer,
+                "vertexMain",
+                "fragmentMain",
+                &HashMap::new(),
+            )
+        })
+    }
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct BaseRenderData {
+    matrix: [[f32; 4]; 4],
+    vertices: u64,
+    light: u64,
+    time: f32,
+    _pad: f32,
 }
 
 #[repr(C)]
@@ -1185,58 +852,10 @@ impl RenderState {
 pub struct ChunkVertex {
     pub position: [f32; 3],
     pub normals: [i8; 4],
-    //pub tex_coords: [u16; 2],
     pub tex_coords: [f32; 2],
     pub color: u16,
     pub shade: u8,
     pub flags: u8,
-}
-
-static SHADER_DIR: include_dir::Dir<'_> =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/shaders");
-pub fn load_shader_source(shader: &str) -> String {
-    let content = SHADER_DIR
-        .get_file(format!("{}.wgsl", shader))
-        .unwrap()
-        .contents_utf8()
-        .unwrap();
-    content
-        .lines()
-        .map(|line| {
-            let include_string = "#include ";
-            if line.starts_with(include_string) {
-                load_shader_source(&line[include_string.len()..])
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-pub trait VertexDescription {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>>;
-}
-
-impl VertexDescription for () {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        None
-    }
-}
-
-impl ChunkVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Snorm8x4, 2 => Float32x2, 3 => Uint16, 4 => Unorm8, 5 => Uint8];
-}
-impl VertexDescription for ChunkVertex {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        use std::mem;
-
-        Some(wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        })
-    }
 }
 
 #[repr(C)]
@@ -1247,21 +866,6 @@ pub struct Vertex {
     pub normals: [f32; 3],
     pub color: [u8; 4],
 }
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Unorm8x4];
-}
-impl VertexDescription for Vertex {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        use std::mem;
-
-        Some(wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        })
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1269,21 +873,6 @@ pub struct GUIVertex {
     pub position: [f32; 2],
     pub tex_coords: [f32; 2],
     pub color: [u8; 4],
-}
-impl GUIVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4];
-}
-impl VertexDescription for GUIVertex {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        use std::mem;
-
-        Some(wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        })
-    }
 }
 
 #[repr(C)]
@@ -1293,39 +882,11 @@ pub struct DamageVertex {
     pub tex_coords: [f32; 2],
     pub progress: f32,
 }
-impl DamageVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32];
-}
-impl VertexDescription for DamageVertex {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        use std::mem;
-
-        Some(wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        })
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BillboardVertex {
     pub position: [f32; 2],
-}
-impl BillboardVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
-}
-impl VertexDescription for BillboardVertex {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        use std::mem;
-        Some(wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        })
-    }
 }
 
 #[repr(C)]
@@ -1336,20 +897,6 @@ pub struct GPUParticleInstance {
     pub uv2: [f32; 2],
     pub size: [f32; 2],
 }
-impl GPUParticleInstance {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![1 => Float32x3, 2 => Float32x2, 3 => Float32x2, 4 => Float32x2];
-}
-impl VertexDescription for GPUParticleInstance {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        use std::mem;
-        Some(wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &Self::ATTRIBS,
-        })
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1359,20 +906,6 @@ pub struct GPUBlockFace {
     pub color: u16,
     pub face: u8,
     pub _pad: [u8; 1],
-}
-impl GPUBlockFace {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![1 => Uint16, 2 => Uint16, 3 => Uint16, 4 => Uint8];
-}
-impl VertexDescription for GPUBlockFace {
-    fn vertex_description() -> Option<wgpu::VertexBufferLayout<'static>> {
-        use std::mem;
-        Some(wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &Self::ATTRIBS,
-        })
-    }
 }
 
 #[repr(C)]
@@ -1475,201 +1008,10 @@ impl CameraUniform {
     #[rustfmt::skip]
     pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
         1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
+        0.0, -1.0, 0.0, 0.0,
         0.0, 0.0, 0.5, 0.5,
         0.0, 0.0, 0.0, 1.0,
     );
-}
-
-use crate::atlas::{AnimatedCell, TEXTURE_ATLAS, TexCoordsExt, TexCoordsIndexExt};
-use crate::game::clipping::Frustum;
-use crate::game::{ClientGame, ClientPlayer, ModifiedChunkEntry, profiler};
-use crate::ui::{UIPos, UIRect};
-
-pub struct GPUTexture {
-    pub texture: wgpu::Texture,
-    pub view: TextureView,
-    pub sampler: Sampler,
-    pub bind_group_layout: BindGroupLayout,
-    pub bind_group: BindGroup,
-    pub dimensions: (u32, u32),
-    pub format: wgpu::TextureFormat,
-    pub mip_levels: u32,
-    pub filter_mode: wgpu::FilterMode,
-}
-
-impl GPUTexture {
-    pub fn new(
-        device: &wgpu::Device,
-        dimensions: (u32, u32),
-        mip_levels: u32,
-        format: wgpu::TextureFormat,
-        filter_mode: wgpu::FilterMode,
-    ) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: match GPUTexture::is_format_depth(format) {
-                            true => wgpu::TextureSampleType::Depth,
-                            false => wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(
-                        match Self::is_format_depth(format)
-                            && filter_mode == FilterMode::Linear
-                            && false
-                        {
-                            true => wgpu::SamplerBindingType::Comparison,
-                            false => wgpu::SamplerBindingType::Filtering,
-                        },
-                    ),
-                    count: None,
-                },
-            ],
-            label: None,
-        });
-        let (texture, view, sampler, bind_group) = GPUTexture::init_on_gpu(
-            device,
-            dimensions,
-            format,
-            &bind_group_layout,
-            mip_levels,
-            filter_mode,
-        );
-        Self {
-            texture,
-            view,
-            sampler,
-            bind_group_layout,
-            bind_group,
-            dimensions,
-            format,
-            mip_levels,
-            filter_mode,
-        }
-    }
-    fn is_format_depth(format: wgpu::TextureFormat) -> bool {
-        match format {
-            TextureFormat::Depth16Unorm
-            | TextureFormat::Depth24Plus
-            | TextureFormat::Depth24PlusStencil8
-            | TextureFormat::Depth32Float
-            | TextureFormat::Depth32FloatStencil8 => true,
-            _ => false,
-        }
-    }
-    fn init_on_gpu(
-        device: &Device,
-        dimensions: (u32, u32),
-        format: wgpu::TextureFormat,
-        bind_group_layout: &BindGroupLayout,
-        mip_levels: u32,
-        filter_mode: wgpu::FilterMode,
-    ) -> (
-        wgpu::Texture,
-        wgpu::TextureView,
-        wgpu::Sampler,
-        wgpu::BindGroup,
-    ) {
-        let size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            depth_or_array_layers: 1,
-        };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size,
-            mip_level_count: mip_levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: filter_mode,
-            min_filter: filter_mode,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            //border_color: Some(wgpu::SamplerBorderColor::TransparentBlack),
-            compare: match Self::is_format_depth(format)
-                && filter_mode == FilterMode::Linear
-                && false
-            {
-                true => Some(CompareFunction::Less),
-                false => None,
-            },
-            ..Default::default()
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-            label: None,
-        });
-        (texture, view, sampler, bind_group)
-    }
-    pub fn resize(&mut self, dimensions: (u32, u32), device: &Device) {
-        self.dimensions = dimensions;
-        let (texture, view, sampler, bind_group) = GPUTexture::init_on_gpu(
-            device,
-            dimensions,
-            self.format,
-            &self.bind_group_layout,
-            self.mip_levels,
-            self.filter_mode,
-        );
-        self.texture = texture;
-        self.view = view;
-        self.sampler = sampler;
-        self.bind_group = bind_group;
-    }
-    pub fn write_image(&self, rgba: &RgbaImage, mip_level: u32, queue: &Queue) {
-        //assert_eq!(rgba.dimensions(), self.dimensions);
-        let size = wgpu::Extent3d {
-            width: rgba.width(),
-            height: rgba.height(),
-            depth_or_array_layers: 1,
-        };
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                aspect: wgpu::TextureAspect::All,
-                texture: &self.texture,
-                mip_level,
-                origin: wgpu::Origin3d::ZERO,
-            },
-            &rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * rgba.width()),
-                rows_per_image: Some(rgba.height()),
-            },
-            size,
-        );
-    }
 }
 
 pub fn draw_block_model(
@@ -1826,178 +1168,7 @@ pub fn get_block_matrix(block_pos: BlockPos, rotation: BlockRotation) -> Matrix4
         Vector4::new(0., 0., 0., 1.),
     ) * Matrix4::from_translation(Vector3::new(0., -0.5, 0.))
 }
-pub struct GPUMesh {
-    pub buffer: Option<Buffer>,
-    pub render_data: Option<GPUMeshRenderData>,
-}
-pub struct GPUMeshRenderData {
-    pub vertex_length: u64,
-    pub index_count: u32,
-    pub index_format: IndexFormat,
-}
-impl GPUMeshRenderData {
-    pub fn memory_size(&self) -> usize {
-        self.vertex_length as usize
-            + match self.index_format {
-                IndexFormat::Uint16 => 2,
-                IndexFormat::Uint32 => 4,
-            } * self.index_count as usize
-    }
-}
-impl GPUMesh {
-    pub fn empty() -> GPUMesh {
-        GPUMesh {
-            buffer: None,
-            render_data: None,
-        }
-    }
-    pub fn take(&mut self) -> GPUMesh {
-        GPUMesh {
-            buffer: self.buffer.take(),
-            render_data: self.render_data.take(),
-        }
-    }
-    fn size_align(unpadded_size: u64) -> u64 {
-        let align_mask = wgpu::COPY_BUFFER_ALIGNMENT - 1;
-        ((unpadded_size + align_mask) & !align_mask).max(wgpu::COPY_BUFFER_ALIGNMENT)
-    }
-    pub fn allocate<T: Pod>(mesh: &Mesh<T>, min_size: usize, device: &Device) -> GPUMesh {
-        if mesh.vertices.is_empty() && min_size == 0 {
-            return GPUMesh::empty();
-        }
-        let (vertex_buffer_size, index_buffer_size, index_format) = mesh.get_data_size();
-        GPUMesh {
-            buffer: Some({
-                let unpadded_size = (vertex_buffer_size + index_buffer_size).max(min_size) as u64;
-                let padded_size = Self::size_align(unpadded_size);
-                let descriptor = wgpu::BufferDescriptor {
-                    label: None,
-                    mapped_at_creation: true,
-                    size: padded_size,
-                    usage: wgpu::BufferUsages::VERTEX
-                        | wgpu::BufferUsages::INDEX
-                        | wgpu::BufferUsages::COPY_DST,
-                };
-                let buffer = device.create_buffer(&descriptor);
 
-                {
-                    let mut mapped = buffer.slice(..).get_mapped_range_mut();
-                    mapped
-                        .slice(..vertex_buffer_size)
-                        .copy_from_slice(bytemuck::cast_slice(mesh.vertices.as_slice()));
-                    let mut mapped_indices = mapped.slice(
-                        vertex_buffer_size..(vertex_buffer_size + index_buffer_size) as usize,
-                    );
-                    match index_format {
-                        IndexFormat::Uint16 => {
-                            let mapped_indices_u16: &mut [u16] = bytemuck::cast_slice_mut(unsafe {
-                                mapped_indices.as_raw_ptr().as_ptr().as_mut().unwrap()
-                                    as &mut [u8]
-                            });
-                            for i in 0..mesh.indices.len() {
-                                mapped_indices_u16[i] = mesh.indices[i] as u16;
-                            }
-                        }
-                        IndexFormat::Uint32 => {
-                            mapped_indices
-                                .copy_from_slice(bytemuck::cast_slice(mesh.indices.as_slice()));
-                        }
-                    }
-                }
-                buffer.unmap();
-                buffer
-            }),
-            render_data: Some(GPUMeshRenderData {
-                vertex_length: vertex_buffer_size as u64,
-                index_format,
-                index_count: mesh.indices.len() as u32,
-            }),
-        }
-    }
-    pub fn upload<T: Pod>(
-        &mut self,
-        new_mesh: &Mesh<T>,
-        device: &Device,
-        staging_belt: &mut StagingBelt,
-        command_encoder: &mut CommandEncoder,
-    ) {
-        if new_mesh.vertices.is_empty() {
-            self.render_data = None;
-            return;
-        }
-        if self.buffer.is_none() {
-            *self = Self::allocate(new_mesh, 0, device);
-            return;
-        }
-        let (vertex_buffer_size, index_buffer_size, index_format) = new_mesh.get_data_size();
-        let total_size = vertex_buffer_size + index_buffer_size;
-        let buffer = self.buffer.as_ref().unwrap();
-        if buffer.size() < total_size as u64 {
-            *self = Self::allocate(new_mesh, total_size + total_size / 2, device);
-            return;
-        }
-        let mut buffer_view = staging_belt.write_buffer(
-            command_encoder,
-            buffer,
-            0,
-            BufferSize::new(Self::size_align(total_size as u64)).unwrap(),
-        );
-        buffer_view
-            .slice(..vertex_buffer_size)
-            .copy_from_slice(bytemuck::cast_slice(new_mesh.vertices.as_slice()));
-        match index_format {
-            IndexFormat::Uint16 => {
-                let mut buffer_slice = buffer_view.slice(vertex_buffer_size..);
-                let buffer_slice = unsafe {
-                    wgpu::WriteOnly::new(NonNull::slice_from_raw_parts(
-                        buffer_slice.as_raw_ptr().cast::<u16>(),
-                        new_mesh.indices.len(),
-                    ))
-                };
-                buffer_slice.write_iter(new_mesh.indices.iter().map(|i| *i as u16));
-            }
-            IndexFormat::Uint32 => {
-                buffer_view
-                    .slice(vertex_buffer_size..)
-                    .copy_from_slice(bytemuck::cast_slice(new_mesh.indices.as_slice()));
-            }
-        }
-        self.render_data = Some(GPUMeshRenderData {
-            vertex_length: vertex_buffer_size as u64,
-            index_count: new_mesh.indices.len() as u32,
-            index_format,
-        });
-    }
-    pub fn draw(&self, render_pass: &mut RenderPass<'_>) {
-        self.draw_instanced(render_pass, 1);
-    }
-    pub fn draw_instanced(&self, render_pass: &mut RenderPass<'_>, instances: u32) {
-        match (&self.buffer, &self.render_data) {
-            (Some(buffer), Some(render_data)) => {
-                render_pass.set_vertex_buffer(0, buffer.slice(..render_data.vertex_length));
-                render_pass.set_index_buffer(
-                    buffer.slice(render_data.vertex_length..),
-                    render_data.index_format,
-                );
-                render_pass.draw_indexed(0..render_data.index_count, 0, 0..instances);
-            }
-            _ => {}
-        }
-    }
-    pub fn bind_vertex_index(&self, render_pass: &mut RenderPass<'_>) -> Result<(), ()> {
-        match (&self.buffer, &self.render_data) {
-            (Some(buffer), Some(render_data)) => {
-                render_pass.set_vertex_buffer(0, buffer.slice(..render_data.vertex_length));
-                render_pass.set_index_buffer(
-                    buffer.slice(render_data.vertex_length..),
-                    render_data.index_format,
-                );
-                Ok(())
-            }
-            _ => Err(()),
-        }
-    }
-}
 pub trait MeshVertexConsumer {
     fn add_vertex(&mut self, vertex: MeshVertex) -> u32;
     fn add_index(&mut self, index: u32);
@@ -2028,26 +1199,6 @@ impl<T> Mesh<T> {
         self.vertices.append(&mut other_mesh.vertices);
         self.indices
             .extend(other_mesh.indices.into_iter().map(|i| i + vertex_count));
-    }
-    pub fn is_empty(&self) -> bool {
-        self.indices.is_empty() && self.vertices.is_empty()
-    }
-    pub fn get_data_size(&self) -> (usize, usize, IndexFormat) {
-        let index_format = if self.vertices.len() <= u16::MAX as usize {
-            IndexFormat::Uint16
-        } else {
-            IndexFormat::Uint32
-        };
-        let vertex_buffer_size = self.vertices.len() * std::mem::size_of::<T>();
-        (
-            vertex_buffer_size,
-            self.indices.len()
-                * match index_format {
-                    IndexFormat::Uint16 => 2,
-                    IndexFormat::Uint32 => 4,
-                },
-            index_format,
-        )
     }
 }
 impl<T> Default for Mesh<T> {
@@ -2319,154 +1470,5 @@ impl GUIMesh {
             color,
             width,
         );
-    }
-}
-
-pub struct GPUUniform<T: Pod + NoUninit> {
-    pub buffer: wgpu::Buffer,
-    pub bind_group_layout: BindGroupLayout,
-    pub bind_group: BindGroup,
-    _pd: PhantomData<T>,
-}
-impl<T: Pod + NoUninit> GPUUniform<T> {
-    pub fn new(device: &Device, storage: bool) -> GPUUniform<T> {
-        let buffer = device.create_buffer(&BufferDescriptor {
-            label: None,
-            mapped_at_creation: false,
-            size: std::mem::size_of::<T>() as u64,
-            usage: if storage {
-                wgpu::BufferUsages::STORAGE
-            } else {
-                wgpu::BufferUsages::UNIFORM
-            } | wgpu::BufferUsages::COPY_DST,
-        });
-        Self::new_with_buffer(device, storage, buffer)
-    }
-    pub fn new_with_buffer(device: &Device, storage: bool, buffer: Buffer) -> GPUUniform<T> {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: if storage {
-                        wgpu::BufferBindingType::Storage { read_only: true }
-                    } else {
-                        wgpu::BufferBindingType::Uniform
-                    },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-            label: None,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-            label: None,
-        });
-        GPUUniform {
-            buffer,
-            bind_group_layout,
-            bind_group,
-            _pd: PhantomData,
-        }
-    }
-    pub fn write(&self, queue: &Queue, data: &T) {
-        queue.write_buffer(
-            &self.buffer,
-            0,
-            bytemuck::cast_slice(std::slice::from_ref(data)),
-        );
-    }
-}
-pub struct GPURenderPipeline {
-    pub render_pipeline: wgpu::RenderPipeline,
-}
-impl GPURenderPipeline {
-    pub fn new<T: VertexDescription, I: VertexDescription>(
-        device: &Device,
-        shader: &str,
-        bind_group_layouts: &[Option<&BindGroupLayout>],
-        alpha_blending: Option<wgpu::BlendState>,
-        face_cull: Option<wgpu::Face>,
-        target_format: Option<wgpu::TextureFormat>,
-        depth_format: Option<wgpu::TextureFormat>,
-        immediate_size: u32,
-    ) -> GPURenderPipeline {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(shader),
-            source: wgpu::ShaderSource::Wgsl(load_shader_source(shader).into()),
-        });
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts,
-                immediate_size,
-            });
-        let targets = match target_format {
-            Some(target_format) => Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: alpha_blending,
-                write_mask: wgpu::ColorWrites::ALL,
-            }),
-            None => None,
-        };
-        let mut vertex_state = SmallVec::<[VertexBufferLayout<'static>; 2]>::new();
-        if let Some(vertex_desc) = T::vertex_description() {
-            vertex_state.push(vertex_desc);
-            if let Some(instance_desc) = I::vertex_description() {
-                vertex_state.push(instance_desc);
-            }
-        }
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(std::any::type_name::<T>()),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_state.as_slice(),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: match target_format {
-                    Some(_) => std::slice::from_ref(&targets),
-                    None => &[],
-                },
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: face_cull,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: match depth_format {
-                Some(depth_format) => Some(wgpu::DepthStencilState {
-                    format: depth_format,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                None => None,
-            },
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            cache: None,
-            multiview_mask: None,
-        });
-        GPURenderPipeline { render_pipeline }
     }
 }
